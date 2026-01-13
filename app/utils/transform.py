@@ -75,7 +75,7 @@ def inject_js(htmlsrc: str, *args: str) -> str:
     
     Args:
         htmlsrc: HTML source content as string
-        *args: JavaScript file paths to inject (e.g., "/static/viz-static/clear.js")
+        *args: JavaScript file paths to inject (e.g., "/static/powerflow/clear.js")
         
     Returns:
         Modified HTML with script tags appended to body

@@ -8,7 +8,7 @@ set -euo pipefail
 
 # Default environment variables (override with .env or export)
 export SERVER_HOST=${SERVER_HOST:-"127.0.0.1"}
-export SERVER_PORT=${SERVER_PORT:-8580}
+export SERVER_PORT=${SERVER_PORT:-8675}
 
 # PW_AUTHPATH default
 export PW_AUTHPATH=${PW_AUTHPATH:-"."}

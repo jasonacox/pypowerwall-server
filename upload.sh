@@ -5,7 +5,7 @@ echo "  If beta_number is not provided, auto-increments from last beta version"
 echo ""
 
 last_path=$(basename $PWD)
-if [ "$last_path" == "server" ]; then
+if [ "$last_path" == "pypowerwall-server" ]; then
   # Determine version
   SERVER_VERSION=`grep "SERVER_VERSION = " app/config.py | cut -d\" -f2`
   

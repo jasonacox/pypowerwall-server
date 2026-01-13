@@ -321,7 +321,7 @@ pypowerwall-server/
 │   └── static/
 │       ├── index.html          # Management console
 │       ├── example.html        # iFrame demo
-│       └── viz-static/         # Power flow UI assets
+│       └── powerflow/          # Power flow UI assets
 ├── tests/
 │   ├── conftest.py
 │   ├── test_api_aggregates.py

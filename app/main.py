@@ -66,6 +66,7 @@ from app.config import settings, SERVER_VERSION
 from app.api import legacy, gateways, aggregates, websockets
 from app.core.gateway_manager import gateway_manager
 from app.utils.transform import get_static, inject_js
+from app.utils.stats_tracker import stats_tracker
 
 # Configure logging based on PW_DEBUG setting
 log_level = logging.DEBUG if settings.debug else logging.INFO
@@ -126,6 +127,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# Add request tracking middleware
+@app.middleware("http")
+async def track_requests(request: Request, call_next):
+    """Track request statistics for /stats endpoint."""
+    try:
+        response = await call_next(request)
+        
+        # Record the request with status code
+        # URIs are only tracked for successful requests (200-399)
+        # This prevents memory exhaustion from DDOS attacks with random URLs
+        stats_tracker.record_request(request.method, request.url.path, response.status_code)
+        
+        # Record errors (4xx, 5xx status codes)
+        if response.status_code >= 400:
+            stats_tracker.record_error()
+        
+        return response
+    except Exception as e:
+        # Record error and re-raise
+        stats_tracker.record_error()
+        raise
+
+
 # Include API routers
 # NOTE: Order matters! More specific routers (gateways, aggregates) must be 
 # included BEFORE legacy router to prevent the legacy catch-all /api/{path:path}
@@ -156,8 +181,9 @@ async def favicon():
 @app.get("/", response_class=HTMLResponse, tags=["UI"])
 async def root(request: Request):
     """Serve the Power Flow animation (Tesla Powerwall interface)."""
-    # Use the proxy web directory
-    web_root = str(Path(__file__).parent.parent.parent.parent / "proxy" / "web")
+    # Use powerflow directory for Power Flow animation
+    web_root = str(Path(__file__).parent / "static" / "powerflow")
+    
     # Use clear.js for UI customization (jQuery loaded from local static files)
     style = "clear.js"
     
@@ -192,13 +218,13 @@ async def root(request: Request):
         api_base_url = f"{request.url.scheme}://{request.url.netloc}/api"
         
         # Set up asset prefix for static files
-        static_asset_prefix = "/static/viz-static/"
+        static_asset_prefix = "/static/powerflow/"
         content = content.replace("{STYLE}", static_asset_prefix + style)
         content = content.replace("{ASSET_PREFIX}", static_asset_prefix)
         content = content.replace("{API_BASE_URL}", api_base_url)
         
         # Inject JS transformation if style file exists
-        style_path = os.path.join(static_path, "viz-static", style)
+        style_path = os.path.join(static_path, "powerflow", style)
         if os.path.exists(style_path):
             content = inject_js(content, static_asset_prefix + style)
         
@@ -304,6 +330,16 @@ async def favicon(request: Request):
     if favicon_path.exists():
         return FileResponse(favicon_path)
     raise HTTPException(status_code=404, detail="Favicon not found")
+
+
+@app.get("/%5Bobject%20Object%5D", include_in_schema=False)
+@app.get("/[object Object]", include_in_schema=False)
+async def handle_malformed_object_url():
+    """Handle malformed [object Object] URLs from vendor.js bug.
+    
+    Returns empty object to prevent 404 errors in logs.
+    """
+    return {}
 
 
 @app.get("/health", tags=["Health"])

@@ -635,6 +635,30 @@
         ::-webkit-scrollbar-thumb:hover {
             background: var(--text-muted);
         }
+        
+        /* Mini Trend Charts */
+        .energy-item {
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .trend-chart {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0.15;
+            pointer-events: none;
+            z-index: 0;
+        }
+        
+        .energy-label,
+        .energy-value,
+        .energy-detail {
+            position: relative;
+            z-index: 1;
+        }
     </style>
 </head>
 <body>
@@ -683,6 +707,7 @@
                 </div>
                 <div class="energy-grid">
                     <div class="energy-item solar">
+                        <canvas id="solar-trend" class="trend-chart"></canvas>
                         <div class="energy-label">
                             <span class="icon">☀️</span>
                             Solar Generation
@@ -691,6 +716,7 @@
                     </div>
                     
                     <div class="energy-item battery">
+                        <canvas id="battery-trend" class="trend-chart"></canvas>
                         <div class="energy-label">
                             <span class="icon">🔋</span>
                             Battery
@@ -702,6 +728,7 @@
                     </div>
                     
                     <div class="energy-item home">
+                        <canvas id="home-trend" class="trend-chart"></canvas>
                         <div class="energy-label">
                             <span class="icon">🏠</span>
                             Home Usage
@@ -710,6 +737,7 @@
                     </div>
                     
                     <div class="energy-item grid">
+                        <canvas id="grid-trend" class="trend-chart"></canvas>
                         <div class="energy-label">
                             <span class="icon">⚡</span>
                             Grid
@@ -805,7 +833,89 @@
     <script>
         // WebSocket connection for real-time updates
         let ws = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 10;
+        const reconnectDelay = 3000;
         let lastUpdateTime = null;
+        
+        // Trend chart data (in-memory only, cleared on refresh)
+        const trendData = {
+            solar: [],
+            battery: [],
+            home: [],
+            grid: [],
+            maxPoints: 180  // 30 minutes at 10-second intervals
+        };
+        
+        function addTrendPoint(type, value) {
+            const data = trendData[type];
+            data.push(value);
+            // Keep only last maxPoints
+            if (data.length > trendData.maxPoints) {
+                data.shift();
+            }
+        }
+        
+        function drawTrendChart(canvasId, data, color, showZeroLine = false) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas || !data || data.length < 2) return;
+            
+            // Set canvas size to match parent container
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, width, height);
+            
+            // Find min/max for scaling (handle negative values)
+            const max = Math.max(...data, 0);
+            const min = Math.min(...data, 0);
+            const range = max - min || 1;
+            
+            // Create gradient for fill
+            const gradient = ctx.createLinearGradient(0, 0, 0, height);
+            gradient.addColorStop(0, color);
+            gradient.addColorStop(1, color.replace('rgb', 'rgba').replace(')', ', 0)'));
+            
+            // Draw filled area
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            
+            // Start from bottom left
+            const zeroY = showZeroLine && min < 0 ? height - ((0 - min) / range * height) : height;
+            ctx.moveTo(0, zeroY);
+            
+            // Draw the data line
+            data.forEach((value, i) => {
+                const x = (i / (data.length - 1)) * width;
+                const y = height - ((value - min) / range * height);
+                ctx.lineTo(x, y);
+            });
+            
+            // Close the path back to bottom
+            ctx.lineTo(width, zeroY);
+            ctx.lineTo(0, zeroY);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Draw zero line if needed
+            if (showZeroLine && min < 0) {
+                const zeroLineY = height - ((0 - min) / range * height);
+                ctx.strokeStyle = 'rgba(139, 148, 158, 0.3)';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath();
+                ctx.moveTo(0, zeroLineY);
+                ctx.lineTo(width, zeroLineY);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+        }
         
         function connectWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -887,6 +997,8 @@
             // Solar
             const solarKw = formatPower(data.total_solar_power || 0);
             document.getElementById('solar-power').textContent = `${solarKw} kW`;
+            addTrendPoint('solar', (data.total_solar_power || 0) / 1000);
+            drawTrendChart('solar-trend', trendData.solar, '#f0c000');
             
             // Battery
             const batteryData = formatPowerWithDirection(data.total_battery_power || 0, 'battery');
@@ -895,10 +1007,14 @@
             
             const batteryLevel = data.total_battery_percent ? data.total_battery_percent.toFixed(1) : '--';
             document.getElementById('battery-level').textContent = `${batteryLevel}%`;
+            addTrendPoint('battery', (data.total_battery_power || 0) / 1000);
+            drawTrendChart('battery-trend', trendData.battery, '#3fb950', true);
             
             // Home
             const homeKw = formatPower(data.total_load_power || 0);
             document.getElementById('home-power').textContent = `${homeKw} kW`;
+            addTrendPoint('home', (data.total_load_power || 0) / 1000);
+            drawTrendChart('home-trend', trendData.home, '#58a6ff');
             
             // Grid
             const gridData = formatPowerWithDirection(data.total_grid_power || 0, 'grid');
@@ -908,6 +1024,8 @@
             const gridStatus = (data.total_grid_power || 0) > 10 ? 'Importing' : 
                               (data.total_grid_power || 0) < -10 ? 'Exporting' : 'Idle';
             document.getElementById('grid-status').textContent = gridStatus;
+            addTrendPoint('grid', (data.total_grid_power || 0) / 1000);
+            drawTrendChart('grid-trend', trendData.grid, '#8b949e', true);
             
             // Gateway count
             document.getElementById('gateway-count').textContent = data.num_online || 0;
@@ -1014,9 +1132,13 @@
                 const stats = await response.json();
                 
                 document.getElementById('server-uptime').textContent = stats.uptime || '--';
-                document.getElementById('server-memory').textContent = stats.memory_mb ? `${stats.memory_mb.toFixed(1)} MB` : '--';
+                // Convert KB to MB (mem is in KB)
+                const memMB = stats.mem ? (stats.mem / 1024).toFixed(1) : null;
+                document.getElementById('server-memory').textContent = memMB ? `${memMB} MB` : '--';
                 document.getElementById('server-gateways').textContent = `${stats.gateways?.online || 0}/${stats.gateways?.total || 0}`;
-                document.getElementById('server-calls').textContent = stats.counts?.poll_success || '--';
+                // Total API calls = gets + posts
+                const totalCalls = (stats.gets || 0) + (stats.posts || 0);
+                document.getElementById('server-calls').textContent = totalCalls.toLocaleString();
                 
                 // Update version info
                 const serverVersion = stats.server_version || '--';

@@ -13,7 +13,7 @@ function injectScriptAndUse() {
     return new Promise((resolve, reject) => {
         var body = document.getElementsByTagName("body")[0];
         var script = document.createElement("script");
-        script.src = "/static/viz-static/jquery.min.js";
+        script.src = "/static/powerflow/jquery.min.js";
         script.onload = function () {
             resolve();
         };

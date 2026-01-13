@@ -50,6 +50,7 @@ from typing import Optional
 
 from app.core.gateway_manager import gateway_manager
 from app.config import settings, SERVER_VERSION
+from app.utils.stats_tracker import stats_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -787,20 +788,58 @@ async def get_stats():
     # Get process info
     process = psutil.Process(os.getpid())
     
+    # Get request stats from tracker
+    request_stats = stats_tracker.get_stats()
+    
     # Calculate uptime
     create_time = process.create_time()
     uptime_seconds = int(time.time() - create_time)
     uptime = str(timedelta(seconds=uptime_seconds))
     
-    # Count online/offline gateways
+    # Count online/offline gateways and detect modes
     total_gateways = len(gateway_manager.gateways)
     online_count = 0
     gateway_statuses = []
+    cloudmode = False
+    fleetapi = False
+    tedapi = False
+    pw3 = False
+    tedapi_mode = None
+    siteid = None
     
     for gateway_id, gw in gateway_manager.gateways.items():
         status = gateway_manager.get_gateway(gateway_id)
         if status and status.online:
             online_count += 1
+        
+        # Detect connection modes
+        if gw.fleetapi:
+            fleetapi = True
+        if gw.cloud_mode:
+            cloudmode = True
+        if gw.host:
+            tedapi = True
+        
+        # Get site ID if available
+        if gw.site_id:
+            siteid = gw.site_id
+        
+        # Detect PW3 and TEDAPI mode from connection
+        pw = gateway_manager.get_connection(gateway_id)
+        if pw:
+            # Check if PW3
+            try:
+                if hasattr(pw, 'pw3') and pw.pw3:
+                    pw3 = True
+            except:
+                pass
+            
+            # Get TEDAPI mode
+            try:
+                if hasattr(pw, 'tedapi_mode'):
+                    tedapi_mode = pw.tedapi_mode
+            except:
+                pass
         
         # Get backoff info from gateway_manager
         failures = gateway_manager._consecutive_failures.get(gateway_id, 0)
@@ -819,21 +858,86 @@ async def get_stats():
             "backoff_seconds": backoff_remaining if failures > 0 else 0
         })
     
-    # Build stats response
+    # Determine mode string
+    if fleetapi:
+        mode = "FleetAPI"
+    elif cloudmode:
+        mode = "Cloud"
+    else:
+        mode = "Local"
+    
+    # Build configuration section (sanitize sensitive data)
+    config = {
+        "PW_BIND_ADDRESS": settings.server_host,
+        "PW_PASSWORD": "**********" if settings.pw_password else None,
+        "PW_EMAIL": settings.pw_email or "",
+        "PW_HOST": settings.pw_host or "",
+        "PW_TIMEZONE": settings.pw_timezone,
+        "PW_DEBUG": settings.debug,
+        "PW_CACHE_EXPIRE": settings.cache_expire,
+        "PW_BROWSER_CACHE": settings.browser_cache,
+        "PW_TIMEOUT": settings.timeout,
+        "PW_POOL_MAXSIZE": settings.pool_maxsize,
+        "PW_HTTPS": "yes" if settings.https_mode else "no",
+        "PW_PORT": settings.server_port,
+        "PW_STYLE": settings.style,
+        "PW_SITEID": settings.siteid,
+        "PW_AUTH_PATH": settings.pw_authpath or "",
+        "PW_AUTH_MODE": settings.auth_mode,
+        "PW_CACHE_FILE": settings.cache_file,
+        "PW_CONTROL_SECRET": "**********" if settings.control_secret else None,
+        "PW_GW_PWD": "**********" if settings.pw_gw_pwd else None,
+        "PW_NEG_SOLAR": True,  # Always enabled in this implementation
+        "PW_SUPPRESS_NETWORK_ERRORS": settings.suppress_network_errors,
+        "PW_NETWORK_ERROR_RATE_LIMIT": settings.network_error_rate_limit,
+        "PW_FAIL_FAST": settings.fail_fast,
+        "PW_GRACEFUL_DEGRADATION": settings.graceful_degradation,
+        "PW_HEALTH_CHECK": settings.health_check,
+        "PW_CACHE_TTL": settings.cache_ttl
+    }
+    
+    # Build connection health section
+    total_failures = sum(gateway_manager._consecutive_failures.values())
+    connection_health = {
+        "consecutive_failures": gateway_manager._consecutive_failures.get("default", 0),
+        "total_failures": total_failures,
+        "total_successes": request_stats["gets"] + request_stats["posts"] - request_stats["errors"],
+        "is_degraded": any(f > 0 for f in gateway_manager._consecutive_failures.values()),
+        "last_success_time": time.time() if online_count > 0 else 0,
+        "cache_size": total_gateways
+    }
+    
+    # Build stats response (compatible with old proxy format)
     stats = {
+        "pypowerwall": f"{pypowerwall.__version__} Server {SERVER_VERSION}",
+        "pypowerwall_version": pypowerwall.__version__,  # Library version only
+        "server_version": SERVER_VERSION,  # Server version only
+        "mode": mode,
+        "gets": request_stats["gets"],
+        "posts": request_stats["posts"],
+        "errors": request_stats["errors"],
+        "timeout": request_stats["timeout"],
+        "uri": request_stats["uri"],
         "ts": int(time.time()),
+        "start": request_stats["start"],
+        "clear": request_stats["clear"],
         "uptime": uptime,
-        "mem": process.memory_info().rss,
-        "memory_mb": process.memory_info().rss / (1024 * 1024),
-        "server_version": SERVER_VERSION,
-        "pypowerwall_version": pypowerwall.__version__,
+        "mem": int(process.memory_info().rss / 1024),  # Convert to KB like old proxy
+        "cloudmode": cloudmode,
+        "fleetapi": fleetapi,
+        "tedapi": tedapi,
+        "pw3": pw3,
+        "tedapi_mode": tedapi_mode,
+        "siteid": siteid,
+        "counter": 0,  # Legacy field, not used
+        "cf": settings.cache_file,
+        "config": config,
+        "connection_health": connection_health,
         "gateways": {
             "total": total_gateways,
             "online": online_count,
             "offline": total_gateways - online_count
         },
-        "cloudmode": False,
-        "fleetapi": False,
         "gateway_statuses": gateway_statuses
     }
     
