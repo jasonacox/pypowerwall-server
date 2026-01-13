@@ -1,0 +1,65 @@
+# PyPowerwall Server - Gateway Configuration
+# This file configures multiple Powerwall gateways and server settings
+
+server:
+  host: 0.0.0.0
+  port: 8675
+  cors_origins:
+    - http://localhost:3000
+    - http://localhost:8675
+
+gateways:
+  # Example 1: Local TEDAPI connection (most common)
+  - id: home
+    name: Home System
+    host: 192.168.91.1
+    gw_pwd: your_gateway_password
+    timezone: America/Los_Angeles
+    
+  # Example 2: Local TEDAPI + Cloud control
+  - id: cabin
+    name: Cabin System
+    host: 192.168.91.1
+    gw_pwd: your_gateway_password
+    email: tesla@email.com
+    authpath: /auth
+    timezone: America/Denver
+    
+  # Example 3: Cloud mode only (remote access)
+  - id: remote-site
+    name: Remote Site
+    email: tesla@email.com
+    authpath: /auth
+    cloud_mode: true
+    timezone: America/New_York
+    
+  # Example 4: FleetAPI mode
+  - id: fleet-site
+    name: Fleet API Site
+    email: tesla@email.com
+    authpath: /auth
+    fleetapi: true
+    timezone: America/Chicago
+
+# Configuration Notes:
+#
+# Authentication Modes:
+#   - TEDAPI (local): Requires host + gw_pwd
+#   - Cloud Mode: Requires email + authpath, set cloud_mode: true
+#   - FleetAPI: Requires email + authpath, set fleetapi: true
+#
+# Authentication Setup:
+#   Run: python3 -m pypowerwall setup
+#   This generates .pypowerwall.auth and .pypowerwall.site files
+#   Specify the directory containing these files in authpath
+#
+# Gateway Parameters:
+#   id: Unique identifier (used in URLs)
+#   name: Display name
+#   host: IP address for TEDAPI (typically 192.168.91.1)
+#   gw_pwd: Gateway WiFi password
+#   email: Tesla account email
+#   authpath: Directory with auth files
+#   timezone: Local timezone (e.g., America/Los_Angeles)
+#   cloud_mode: true for cloud-only access
+#   fleetapi: true for FleetAPI access
