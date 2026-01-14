@@ -62,7 +62,7 @@ Environment Variables (Proxy Compatible):
     UI and Advanced:
         PW_STYLE             - UI style: clear/black/white/grafana/grafana-dark (default: "clear")
         PW_AUTH_MODE         - Auth mode: cookie/token (default: "cookie")
-        PW_CACHE_FILE        - Cache file path (default: ".powerwall")
+        PW_CACHE_FILE        - Cache file path (default: auto - uses PW_AUTH_PATH/.powerwall or /tmp/.powerwall)
         PW_SITEID            - Tesla site ID for multi-site accounts (default: none)
         PW_CONTROL_SECRET    - Enable control commands (default: none/disabled)
         PROXY_BASE_URL       - Base URL for reverse proxy (default: "/")
@@ -229,7 +229,7 @@ class Settings(BaseSettings):
     style: str = Field(default="clear", alias="PW_STYLE")
     pw_authpath: Optional[str] = Field(default=None, alias="PW_AUTH_PATH")
     auth_mode: str = Field(default="cookie", alias="PW_AUTH_MODE")
-    cache_file: str = Field(default=".powerwall", alias="PW_CACHE_FILE")
+    cache_file: Optional[str] = Field(default=None, alias="PW_CACHE_FILE")
     siteid: Optional[str] = Field(default=None, alias="PW_SITEID")
     control_secret: Optional[str] = Field(default=None, alias="PW_CONTROL_SECRET")
     proxy_base_url: str = Field(default="/", alias="PROXY_BASE_URL")
@@ -253,6 +253,14 @@ class Settings(BaseSettings):
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        # Set default cache_file based on auth path if not explicitly provided
+        if self.cache_file is None:
+            if self.pw_authpath:
+                # Use auth directory for cache file if it's set
+                self.cache_file = os.path.join(self.pw_authpath, ".powerwall")
+            else:
+                # Fall back to /tmp if no auth path
+                self.cache_file = "/tmp/.powerwall"
         self._initialize_gateways()
     
     def _initialize_gateways(self):

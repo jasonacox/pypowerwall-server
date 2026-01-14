@@ -179,13 +179,22 @@ async def favicon():
 
 
 @app.get("/", response_class=HTMLResponse, tags=["UI"])
-async def root(request: Request):
-    """Serve the Power Flow animation (Tesla Powerwall interface)."""
+async def root(request: Request, style: str = None):
+    """Serve the Power Flow animation (Tesla Powerwall interface).
+    
+    Args:
+        style: Optional style override (e.g., ?style=clear). If not provided,
+               uses PW_STYLE environment variable setting.
+    """
     # Use powerflow directory for Power Flow animation
     web_root = str(Path(__file__).parent / "static" / "powerflow")
     
-    # Use clear.js for UI customization (jQuery loaded from local static files)
-    style = "clear.js"
+    # Use style from query parameter or fall back to settings (PW_STYLE environment variable)
+    # Options: clear, grafana, grafana-dark, solar, white, black, dakboard
+    if style:
+        style_file = f"{style}.js"
+    else:
+        style_file = f"{settings.style}.js"
     
     # Get the index.html using get_static
     request_path = "/index.html"
@@ -219,14 +228,14 @@ async def root(request: Request):
         
         # Set up asset prefix for static files
         static_asset_prefix = "/static/powerflow/"
-        content = content.replace("{STYLE}", static_asset_prefix + style)
+        content = content.replace("{STYLE}", static_asset_prefix + style_file)
         content = content.replace("{ASSET_PREFIX}", static_asset_prefix)
         content = content.replace("{API_BASE_URL}", api_base_url)
         
         # Inject JS transformation if style file exists
-        style_path = os.path.join(static_path, "powerflow", style)
+        style_path = os.path.join(static_path, "powerflow", style_file)
         if os.path.exists(style_path):
-            content = inject_js(content, static_asset_prefix + style)
+            content = inject_js(content, static_asset_prefix + style_file)
         
         return HTMLResponse(content=content)
     
