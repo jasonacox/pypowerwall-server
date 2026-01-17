@@ -18,24 +18,33 @@
                     "hash": "{HASH}",
                     "deviceType": "teg",
                     "isSolarPowerwall": false,
-                    "bootstrapped": true
+                    "bootstrapped": true,
+                    "commissioned": true
                 },
                 "sitemaster": {
                     "running": true,
-                    "connectedToTesla": true
+                    "connectedToTesla": true,
+                    "power": 0
                 },
                 "system": {
                     "isFirmwareUpdating": false,
-                    "Version": ""
+                    "Version": "",
+                    "updating": false
                 },
                 "authentication": {
                     "loginType": "customer",
                     "selectedLoginType": "customer",
                     "username": "{EMAIL}",
                     "lastLoginAt": 1700501180000,
-                    "toggle_auth_supported": true
+                    "toggle_auth_supported": true,
+                    "authorized": true,
+                    "isLoggedIn": true,
+                    "token": "mock_token_bypass"
                 }
             }
+            // Set auth cookie to bypass login
+            document.cookie = "AuthCookie=mock_auth_token; path=/; max-age=86400";
+            document.cookie = "UserRecord={\"email\":\"{EMAIL}\",\"kind\":\"customer\"}; path=/; max-age=86400";
         </script>
         <link href="{ASSET_PREFIX}app.css" rel="stylesheet"/>
     </head>

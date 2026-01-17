@@ -52,6 +52,10 @@ function triggerOnMutation(cb) {
 }
 
 function formatPowerwallForGrafana() {
+    // Force hide carousel upgrade screen
+    $('.carousel-menu-container, .carousel-container').hide();
+    $('.carousel-menu-container').parent().hide();
+    
     // Hide elements.
     $('.overview-menu, #logout, .footer, .compact-btn-row, .toast-list, .power-flow-header, .btn').hide();
 

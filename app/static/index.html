@@ -1173,8 +1173,6 @@
                 if (!response.ok) throw new Error('Failed to load gateways');
                 const gateways = await response.json();
                 
-                console.log('Gateways API response:', JSON.stringify(gateways, null, 2));
-                
                 const container = document.getElementById('gateway-list');
                 
                 if (!gateways || Object.keys(gateways).length === 0) {

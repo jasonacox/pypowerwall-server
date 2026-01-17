@@ -51,6 +51,10 @@ function triggerOnMutation(cb) {
 }
 
 function formatPowerwallForClear() {
+    // Force hide carousel upgrade screen
+    $('.carousel-menu-container, .carousel-container').hide();
+    $('.carousel-menu-container').parent().hide();
+    
     // Hide elements.
     $('.overview-menu, #logout, .footer, .compact-btn-row, .toast-list, .power-flow-header, .btn').hide();
 
@@ -75,6 +79,15 @@ function formatPowerwallForClear() {
 
     $('.app').css({
         "overflow-y": "hidden",
+    });
+    
+    // Force hide carousel with CSS
+    $('.carousel-menu-container, .carousel-container').css({
+        "display": "none !important",
+        "visibility": "hidden",
+        "opacity": "0",
+        "height": "0",
+        "width": "0",
     });
 
     // Set colors

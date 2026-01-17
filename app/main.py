@@ -226,7 +226,7 @@ async def root(request: Request, style: str = None):
         # Build absolute API base URL from request
         api_base_url = f"{request.url.scheme}://{request.url.netloc}/api"
         
-        # Set up asset prefix for static files
+        # Set up asset prefix for static files - needs trailing slash for webpack chunk loading
         static_asset_prefix = "/static/powerflow/"
         content = content.replace("{STYLE}", static_asset_prefix + style_file)
         content = content.replace("{ASSET_PREFIX}", static_asset_prefix)
