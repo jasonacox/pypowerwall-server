@@ -1,63 +1,8 @@
-'use strict'
-
-// Grafana Dark Theme
-// Clear IndexedDB to prevent auth hangup in the proxied Powerwall web app.
-try {
-    window.indexedDB.databases().then((dbs) => {
-        dbs.forEach(db => { window.indexedDB.deleteDatabase(db.name) });
-    });
-} catch (error) {
-    document.write("Browser blocking indexedDB - Turn off incognito mode.");
-}
-
-function injectScriptAndUse() {
-    return new Promise((resolve, reject) => {
-        var body = document.getElementsByTagName("body")[0];
-        var script = document.createElement("script");
-        script.src = "//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js";
-        script.onload = function () {
-            resolve();
-        };
-        body.appendChild(script);
-    });
-}
-
-injectScriptAndUse().then(() => {
-    console.log("Applying Grafana customization");
-    triggerOnMutation(formatPowerwallForGrafana);
-});
-
-function triggerOnMutation(cb) {
-    // Create an observer instance
-    var observer = new MutationObserver(function (mutations) {
-        mutations.forEach(function (mutation) {
-            var newNodes = mutation.addedNodes; // DOM NodeList
-            if (newNodes !== null) { // If there are new nodes added
-                if (cb) cb();
-            }
-        });
-    });
-
-    // Configuration of the observer:
-    var config = {
-        attributes: true,
-        childList: true,
-        subtree: true,
-    };
-
-    var target = $("#root")[0];
-
-    // Pass in the target node, as well as the observer options
-    observer.observe(target, config);
-}
-
-function formatPowerwallForGrafana() {
-    // Force hide carousel upgrade screen
-    $('.carousel-menu-container, .carousel-container').hide();
-    $('.carousel-menu-container').parent().hide();
-    
-    // Hide elements.
-    $('.overview-menu, #logout, .footer, .compact-btn-row, .toast-list, .power-flow-header, .btn').hide();
+'use strict';
+// PyPowerwall Server - Grafana Dark Theme
+// Dark background optimized for Grafana dashboards
+window.pypowerwallTheme = 'grafana-dark';
+console.log('Grafana Dark theme loaded');
 
     // Set alignment
     $('.core-layout__viewport').css({
