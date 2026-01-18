@@ -231,29 +231,18 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Loop
     participant GM as GatewayManager
-    participant Exec as ThreadPoolExecutor
+    participant Exec as Executor
     participant PW as Powerwall
     participant Cache
     
-    loop Polling
-        Loop->>GM: _poll_gateways
-        GM->>GM: Check backoff time
-        alt Backoff expired
-            GM->>Exec: run_in_executor
-            Exec->>PW: poll aggregates
-            PW-->>Exec: aggregates data
-            Exec-->>GM: result
-            GM->>Exec: run_in_executor
-            PW-->>GM: SOE value
-            Note over GM: Fetch optional data
-            GM->>Cache: Update GatewayStatus
-            GM->>GM: Reset backoff counters
-        else Within backoff
-            Note over GM: Skip this gateway
-        end
-    end
+    GM->>GM: Start polling loop
+    GM->>Exec: run_in_executor
+    Exec->>PW: poll aggregates
+    PW-->>Exec: data
+    Exec-->>GM: result
+    GM->>Cache: Update status
+    Note over GM: Repeat every 5 seconds
 ```
 
 ### WebSocket Streaming Flow
@@ -261,27 +250,16 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant WS as WebSocket Handler
-    participant CM as ConnectionManager
+    participant WS as WebSocket
     participant GM as GatewayManager
     
-    C->>WS: Connect /ws/aggregate
-    WS->>CM: connect(websocket)
-    CM->>CM: Add to active_connections
-    WS-->>C: Connection Accepted
-    
-    loop Streaming
-        WS->>GM: get_aggregate_data()
-        GM-->>WS: AggregateData
-        WS->>C: send_json(data)
-    end
-    
-    alt Client Disconnects
-        C--xWS: Disconnect
-        WS->>CM: disconnect(websocket)
-    else Error
-        WS->>CM: disconnect(websocket)
-    end
+    C->>WS: Connect
+    WS-->>C: Accepted
+    WS->>GM: get_aggregate_data
+    GM-->>WS: AggregateData
+    WS->>C: send_json
+    Note over WS: Repeats every second
+    C--xWS: Disconnect
 ```
 
 ---
