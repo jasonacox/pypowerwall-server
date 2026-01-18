@@ -12,30 +12,47 @@ if [ "$last_path" == "pypowerwall-server" ]; then
   # Determine version
   SERVER_VERSION=`grep "SERVER_VERSION = " app/config.py | cut -d\" -f2`
   
-  # Handle beta numbering
-  BETA_FILE=".beta_version"
-  if [ -n "$1" ]; then
-    # Use provided beta number
-    BETA_NUM="$1"
-    echo "$BETA_NUM" > "$BETA_FILE"
-  else
-    # Auto-increment beta number
-    if [ -f "$BETA_FILE" ]; then
-      BETA_NUM=$(cat "$BETA_FILE")
-      BETA_NUM=$((BETA_NUM + 1))
-    else
-      BETA_NUM=1
-    fi
-    echo "$BETA_NUM" > "$BETA_FILE"
-  fi
+  # Ask if this is a beta release
+  echo "Release Type:"
+  echo "  1) Beta release (adds -betaX suffix)"
+  echo "  2) Production release (version ${SERVER_VERSION})"
+  echo ""
+  read -p "Select release type [1-2]: " RELEASE_TYPE
   
-  VER="${SERVER_VERSION}-beta${BETA_NUM}"
-  CONTAINER_NAME="jasonacox/pypowerwall-server:${VER}"
+  if [ "$RELEASE_TYPE" == "2" ]; then
+    # Production release - just use version number
+    VER="${SERVER_VERSION}"
+    CONTAINER_NAME="jasonacox/pypowerwall-server:${VER}"
+    echo ""
+    echo "Production release: ${CONTAINER_NAME}"
+  else
+    # Beta release - handle beta numbering
+    BETA_FILE=".beta_version"
+    if [ -n "$1" ]; then
+      # Use provided beta number
+      BETA_NUM="$1"
+      echo "$BETA_NUM" > "$BETA_FILE"
+    else
+      # Auto-increment beta number
+      if [ -f "$BETA_FILE" ]; then
+        BETA_NUM=$(cat "$BETA_FILE")
+        BETA_NUM=$((BETA_NUM + 1))
+      else
+        BETA_NUM=1
+      fi
+      echo "$BETA_NUM" > "$BETA_FILE"
+    fi
+    
+    VER="${SERVER_VERSION}-beta${BETA_NUM}"
+    CONTAINER_NAME="jasonacox/pypowerwall-server:${VER}"
+    echo ""
+    echo "Beta release: ${CONTAINER_NAME}"
+    echo "Beta version: ${BETA_NUM} (stored in ${BETA_FILE})"
+  fi
 
   # Check with user before proceeding
-  echo "Build and push ${CONTAINER_NAME} to Docker Hub?"
-  echo "Beta version: ${BETA_NUM} (stored in ${BETA_FILE})"
-  read -p "Press [Enter] to continue or Ctrl-C to cancel..."
+  echo ""
+  read -p "Build and push to Docker Hub? Press [Enter] to continue or Ctrl-C to cancel..."
   
   # Build jasonacox/pypowerwall-server:x.y.z
   echo "* BUILD ${CONTAINER_NAME}"
