@@ -848,19 +848,23 @@ async def get_api_site_info():
     gateway_id = get_default_gateway()
     status = gateway_manager.get_gateway(gateway_id)
 
-    site_name = "My Powerwall"
+    site_name = "Tesla Energy Gateway"
+    timezone = "America/Los_Angeles"
+    
+    # Get site_name from cached data
+    if status and status.data and status.data.site_name:
+        site_name = status.data.site_name
+    
     if status and status.gateway:
-        site_name = status.gateway.name or site_name
+        timezone = status.gateway.timezone or timezone
 
     return {
         "site_name": site_name,
-        "timezone": status.gateway.timezone
-        if status and status.gateway
-        else "America/Los_Angeles",
+        "timezone": timezone,
         "grid_code": {
-            "grid_code": "60Hz_240V_s_UL1741SA:2019_California",
-            "grid_voltage_setting": 240,
-            "grid_freq_setting": 60,
+            "grid_code": None,
+            "grid_voltage_setting": None,
+            "grid_freq_setting": None,
         },
     }
 
@@ -872,10 +876,16 @@ async def get_api_site_name():
     status = gateway_manager.get_gateway(gateway_id)
 
     site_name = "My Powerwall"
+    timezone = "America/Los_Angeles"
+    
+    # Get site_name from cached data
+    if status and status.data and status.data.site_name:
+        site_name = status.data.site_name
+    
     if status and status.gateway:
-        site_name = status.gateway.name or site_name
+        timezone = status.gateway.timezone or timezone
 
-    return {"site_name": site_name}
+    return {"site_name": site_name, "timezone": timezone}
 
 
 @router.get("/api/customer/registration")
@@ -1128,7 +1138,11 @@ async def get_stats():
         gateway_id = list(gateway_manager.gateways.keys())[0]
         status = gateway_manager.get_gateway(gateway_id)
         if status:
-            stats["site_name"] = status.gateway.name
+            # Use cached site_name from Powerwall, fallback to gateway name
+            if status.data and status.data.site_name:
+                stats["site_name"] = status.data.site_name
+            else:
+                stats["site_name"] = status.gateway.name
 
     return stats
 

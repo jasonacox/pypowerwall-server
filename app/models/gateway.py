@@ -128,6 +128,7 @@ class PowerwallData(BaseModel):
     version: Optional[str] = None
     status: Optional[str] = None  # Status string like "Running"
     device_type: Optional[str] = None
+    site_name: Optional[str] = None  # Site name from Powerwall
     timestamp: Optional[float] = None
 
 

@@ -364,16 +364,38 @@
         .string-list {
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 4px;
         }
         
         .string-item {
-            display: flex;
-            justify-content: space-between;
+            display: grid;
+            grid-template-columns: 24px 1fr minmax(50px, 70px) minmax(50px, 70px) minmax(50px, 70px);
             align-items: center;
-            padding: 12px;
+            gap: 8px;
+            padding: 8px 10px;
             background: var(--bg-secondary);
             border-radius: 6px;
+        }
+        
+        .string-icon {
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .string-icon svg {
+            width: 100%;
+            height: 100%;
+        }
+        
+        .string-icon.connected {
+            color: var(--solar-color);
+        }
+        
+        .string-icon.disconnected {
+            color: var(--text-muted);
         }
         
         .string-name {
@@ -381,25 +403,28 @@
             font-size: 0.9em;
         }
         
-        .string-values {
-            display: flex;
-            gap: 16px;
+        .string-value {
             font-size: 0.85em;
             font-variant-numeric: tabular-nums;
+            text-align: right;
         }
         
-        .string-power {
-            color: var(--solar);
+        .string-value.power {
+            color: var(--solar-color);
             font-weight: 600;
-            min-width: 60px;
         }
         
-        .string-voltage {
+        .string-value.voltage {
             color: var(--accent-blue);
         }
         
-        .string-current {
+        .string-value.current {
             color: var(--accent-green);
+        }
+        
+        .string-item.disconnected .string-value {
+            color: var(--text-muted);
+            opacity: 0.6;
         }
         
         .no-strings {
@@ -409,7 +434,7 @@
             font-size: 0.9em;
         }
         
-        /* Server Health Card */
+        /* System Health Card */
         .health-card {
             grid-column: span 4;
         }
@@ -438,6 +463,92 @@
             font-size: 1.1em;
             font-weight: 600;
             font-variant-numeric: tabular-nums;
+        }
+        
+        /* Powerwall Health Card */
+        .powerwall-card {
+            grid-column: span 12;
+        }
+        
+        .powerwall-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+        }
+        
+        .powerwall-table thead {
+            background: var(--bg-secondary);
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .powerwall-table th {
+            padding: 10px 12px;
+            text-align: left;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            font-size: 0.75em;
+            letter-spacing: 0.5px;
+        }
+        
+        .powerwall-table td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            font-variant-numeric: tabular-nums;
+        }
+        
+        .powerwall-table tbody tr:hover {
+            background: var(--bg-secondary);
+        }
+        
+        .powerwall-name {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .spec-good {
+            color: var(--accent-green);
+        }
+        
+        .spec-warning {
+            color: var(--accent-orange);
+        }
+        
+        .powerwall-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 2px solid var(--border-color);
+        }
+        
+        .powerwall-summary-item {
+            background: var(--bg-secondary);
+            padding: 16px;
+            border-radius: 8px;
+            border-left: 3px solid var(--accent-blue);
+        }
+        
+        .powerwall-summary-label {
+            font-size: 0.75em;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+        
+        .powerwall-summary-value {
+            font-size: 1.3em;
+            font-weight: 700;
+            color: var(--text-primary);
+            font-variant-numeric: tabular-nums;
+        }
+        
+        .powerwall-summary-detail {
+            font-size: 0.85em;
+            color: var(--text-secondary);
+            margin-top: 4px;
         }
         
         /* Gateways Card */
@@ -602,6 +713,9 @@
         }
         
         @media (max-width: 600px) {
+            .health-grid {
+                grid-template-columns: 1fr;
+            }
             .container {
                 padding: 12px;
             }
@@ -828,7 +942,7 @@
                 </div>
             </div>
             
-            <!-- Server Health -->
+            <!-- System Health -->
             <div class="card health-card">
                 <div class="card-header">
                     <div class="card-title">
@@ -839,26 +953,69 @@
                                 <path d="M22 11h-4M20 9v4" fill="none"/>
                             </svg>
                         </span>
-                        Server Health
+                        System Health
                     </div>
                 </div>
                 <div class="health-grid">
+                    <div class="health-item">
+                        <div class="health-label">Site Name</div>
+                        <div class="health-value" id="server-sitename">--</div>
+                    </div>
+                    <div class="health-item">
+                        <div class="health-label">Mode</div>
+                        <div class="health-value" id="server-mode">--</div>
+                    </div>
+                    <div class="health-item">
+                        <div class="health-label">Gateways</div>
+                        <div class="health-value" id="server-gateways">--</div>
+                    </div>
+                    <div class="health-item">
+                        <div class="health-label">Connection</div>
+                        <div class="health-value" id="server-connection">--</div>
+                    </div>
                     <div class="health-item">
                         <div class="health-label">Uptime</div>
                         <div class="health-value" id="server-uptime">--</div>
                     </div>
                     <div class="health-item">
-                        <div class="health-label">Memory</div>
-                        <div class="health-value" id="server-memory">--</div>
-                    </div>
-                    <div class="health-item">
-                        <div class="health-label">API Calls</div>
+                        <div class="health-label">Requests</div>
                         <div class="health-value" id="server-calls">--</div>
                     </div>
                     <div class="health-item">
                         <div class="health-label">Errors</div>
                         <div class="health-value" id="server-errors">--</div>
                     </div>
+                    <div class="health-item">
+                        <div class="health-label">Memory</div>
+                        <div class="health-value" id="server-memory">--</div>
+                    </div>
+                    <div class="health-item">
+                        <div class="health-label">Failures</div>
+                        <div class="health-value" id="server-failures">--</div>
+                    </div>
+                    <div class="health-item">
+                        <div class="health-label">Offline</div>
+                        <div class="health-value" id="server-offline">--</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Powerwall Status -->
+            <div class="card powerwall-card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <span class="icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="6" width="18" height="12" rx="2" fill="none"/>
+                                <line x1="3" y1="12" x2="21" y2="12"/>
+                                <line x1="12" y1="6" x2="12" y2="18"/>
+                            </svg>
+                        </span>
+                        Powerwall Status
+                    </div>
+                </div>
+                <div id="powerwall-content" class="powerwall-content">
+                    <div class="no-strings">Loading Powerwall data...</div>
                 </div>
             </div>
             
@@ -1130,9 +1287,15 @@
                 // Handle both array and object formats
                 const alertArray = Array.isArray(alerts) ? alerts : Object.entries(alerts).map(([k, v]) => `${k}: ${v}`);
                 
-                container.innerHTML = alertArray.slice(0, 10).map(alert => {
+                // Sort alerts by type priority (notice -> info -> warning)
+                const typePriority = { 'notice': 1, 'info': 2, 'warning': 3 };
+                const sortedAlerts = alertArray.map(alert => {
                     const alertText = typeof alert === 'string' ? alert : JSON.stringify(alert);
                     const { type, icon } = categorizeAlert(alertText);
+                    return { alertText, type, icon };
+                }).sort((a, b) => typePriority[a.type] - typePriority[b.type]);
+                
+                container.innerHTML = sortedAlerts.slice(0, 10).map(({ alertText, type, icon }) => {
                     return `
                         <div class="alert-item ${type}">
                             <span class="alert-icon">${icon}</span>
@@ -1165,37 +1328,52 @@
                     return;
                 }
                 
-                // Parse strings data - only show connected strings
+                // SVG icons for sun (connected) and moon (disconnected)
+                const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="5"/>
+                    <line x1="12" y1="1" x2="12" y2="3"/>
+                    <line x1="12" y1="21" x2="12" y2="23"/>
+                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+                    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                    <line x1="1" y1="12" x2="3" y2="12"/>
+                    <line x1="21" y1="12" x2="23" y2="12"/>
+                    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+                    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                </svg>`;
+                
+                const moonIcon = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                </svg>`;
+                
+                // Parse strings data - show all strings
                 let html = '';
-                let connectedCount = 0;
+                let totalCount = 0;
                 for (const [name, data] of Object.entries(strings)) {
                     if (typeof data === 'object' && data !== null) {
-                        // Only show strings that are connected
+                        totalCount++;
                         const connected = data.Connected || data.connected;
-                        if (!connected) {
-                            continue;
-                        }
-                        
-                        connectedCount++;
                         const voltage = data.Voltage || data.voltage || data.v || 0;
                         const current = data.Current || data.current || data.i || 0;
                         const power = data.Power || data.power || (voltage * current);
                         
+                        const icon = connected ? sunIcon : moonIcon;
+                        const iconClass = connected ? 'connected' : 'disconnected';
+                        const rowClass = connected ? '' : 'disconnected';
+                        
                         html += `
-                            <div class="string-item">
+                            <div class="string-item ${rowClass}">
+                                <div class="string-icon ${iconClass}">${icon}</div>
                                 <span class="string-name">${name}</span>
-                                <div class="string-values">
-                                    <span class="string-power">${typeof power === 'number' ? power.toFixed(0) : power}W</span>
-                                    <span class="string-voltage">${typeof voltage === 'number' ? voltage.toFixed(1) : voltage}V</span>
-                                    <span class="string-current">${typeof current === 'number' ? current.toFixed(2) : current}A</span>
-                                </div>
+                                <span class="string-value voltage">${typeof voltage === 'number' ? voltage.toFixed(1) : voltage}V</span>
+                                <span class="string-value current">${typeof current === 'number' ? current.toFixed(2) : current}A</span>
+                                <span class="string-value power">${typeof power === 'number' ? power.toFixed(0) : power}W</span>
                             </div>
                         `;
                     }
                 }
                 
-                if (connectedCount === 0) {
-                    container.innerHTML = `<div class="no-strings">No connected strings</div>`;
+                if (totalCount === 0) {
+                    container.innerHTML = `<div class="no-strings">No string data available</div>`;
                 } else {
                     container.innerHTML = html;
                 }
@@ -1212,16 +1390,66 @@
                 if (!response.ok) throw new Error('Failed to load stats');
                 const stats = await response.json();
                 
+                // Site Name
+                const siteName = stats.site_name || 'My Powerwall';
+                document.getElementById('server-sitename').textContent = siteName;
+                
+                // Mode
+                let mode = stats.mode || '--';
+                if (stats.fleetapi) mode = 'FleetAPI';
+                else if (stats.cloudmode) mode = 'Cloud';
+                else if (stats.tedapi) {
+                    const tedMode = stats.tedapi_mode || 'local';
+                    mode = tedMode === 'full' ? 'Local' : `Local (${tedMode})`;
+                }
+                document.getElementById('server-mode').textContent = mode;
+                
+                // Gateways
+                const gwOnline = stats.gateways?.online || 0;
+                const gwTotal = stats.gateways?.total || 0;
+                const gwText = `${gwOnline}/${gwTotal}`;
+                document.getElementById('server-gateways').textContent = gwText;
+                
+                // Connection Health
+                const connHealth = stats.connection_health;
+                let connStatus = '--';
+                if (connHealth) {
+                    if (connHealth.is_degraded) {
+                        connStatus = '⚠️ Degraded';
+                    } else if (connHealth.consecutive_failures > 0) {
+                        connStatus = `⚠️ ${connHealth.consecutive_failures} fails`;
+                    } else {
+                        connStatus = '✓ Healthy';
+                    }
+                }
+                document.getElementById('server-connection').textContent = connStatus;
+                
+                // Uptime
                 document.getElementById('server-uptime').textContent = stats.uptime || '--';
-                // Convert KB to MB (mem is in KB)
-                const memMB = stats.mem ? (stats.mem / 1024).toFixed(1) : null;
-                document.getElementById('server-memory').textContent = memMB ? `${memMB} MB` : '--';
-                // Show error count
-                const errorCount = stats.errors || 0;
-                document.getElementById('server-errors').textContent = errorCount;
-                // Total API calls = gets + posts
+                
+                // API Requests
                 const totalCalls = (stats.gets || 0) + (stats.posts || 0);
                 document.getElementById('server-calls').textContent = totalCalls.toLocaleString();
+                
+                // Errors + Timeouts
+                const errorCount = (stats.errors || 0) + (stats.timeout || 0);
+                let errorText = errorCount.toString();
+                if (stats.timeout > 0) {
+                    errorText += ` (${stats.timeout} TO)`;
+                }
+                document.getElementById('server-errors').textContent = errorText;
+                
+                // Memory
+                const memMB = stats.mem ? (stats.mem / 1024).toFixed(1) : null;
+                document.getElementById('server-memory').textContent = memMB ? `${memMB} MB` : '--';
+                
+                // Consecutive Failures
+                const consecFailures = connHealth?.consecutive_failures || 0;
+                document.getElementById('server-failures').textContent = consecFailures.toString();
+                
+                // Offline Gateways
+                const gwOffline = stats.gateways?.offline || 0;
+                document.getElementById('server-offline').textContent = gwOffline.toString();
                 
                 // Update version info
                 const serverVersion = stats.server_version || '--';
@@ -1231,6 +1459,131 @@
                     `Server: v${serverVersion} | PyPowerwall: v${libVersion}`;
             } catch (e) {
                 console.log('Stats not available:', e.message);
+            }
+        }
+        
+        // Fetch Powerwall pod data
+        async function loadPowerwalls() {
+            try {
+                const response = await fetch('/pod');
+                if (!response.ok) throw new Error('Failed to load pod data');
+                const pod = await response.json();
+                
+                const container = document.getElementById('powerwall-content');
+                
+                // Extract Powerwall data
+                const powerwalls = [];
+                const pwRegex = /^(PW\d+)_(POD_nom_full_pack_energy|v_out|p_out|f_out)$/;
+                const pwData = {};
+                
+                for (const [key, value] of Object.entries(pod)) {
+                    const match = key.match(pwRegex);
+                    if (match) {
+                        const pwName = match[1];
+                        const metric = match[2];
+                        if (!pwData[pwName]) pwData[pwName] = {};
+                        pwData[pwName][metric] = value;
+                    }
+                }
+                
+                // Convert to array and sort
+                const pwList = Object.entries(pwData).map(([name, data]) => ({ name, ...data }));
+                pwList.sort((a, b) => a.name.localeCompare(b.name));
+                
+                if (pwList.length === 0) {
+                    container.innerHTML = '<div class="no-strings">No Powerwall data available</div>';
+                    return;
+                }
+                
+                // Build table
+                let html = '<table class="powerwall-table"><thead><tr>';
+                html += '<th>Powerwall</th>';
+                html += '<th>Capacity</th>';
+                html += '<th>Voltage</th>';
+                html += '<th>Power</th>';
+                html += '<th>Frequency</th>';
+                html += '</tr></thead><tbody>';
+                
+                const SPEC_CAPACITY = 12.5; // kWh per Powerwall
+                
+                pwList.forEach(pw => {
+                    const capacity = pw.POD_nom_full_pack_energy ? (pw.POD_nom_full_pack_energy / 1000).toFixed(2) : '--';
+                    const capacityNum = pw.POD_nom_full_pack_energy ? pw.POD_nom_full_pack_energy / 1000 : 0;
+                    const capacityPct = capacityNum > 0 ? ((capacityNum / SPEC_CAPACITY) * 100).toFixed(1) : '--';
+                    const capacityClass = capacityNum >= SPEC_CAPACITY ? 'spec-good' : 'spec-warning';
+                    
+                    const voltage = pw.v_out ? pw.v_out.toFixed(1) : '--';
+                    const powerNum = pw.p_out || 0;
+                    const power = powerNum !== 0 ? Math.abs(powerNum).toFixed(2) : '--';
+                    const powerArrow = powerNum > 0 ? ' ↓' : powerNum < 0 ? ' ↑' : '';
+                    const powerArrowClass = powerNum > 0 ? 'arrow-down' : powerNum < 0 ? 'arrow-up' : '';
+                    const frequency = pw.f_out ? pw.f_out.toFixed(2) : '--';
+                    
+                    html += '<tr>';
+                    html += `<td class="powerwall-name">${pw.name}</td>`;
+                    html += `<td>${capacity} kWh <span class="${capacityClass}">(${capacityPct}%)</span></td>`;
+                    html += `<td>${voltage} V</td>`;
+                    html += `<td>${power} kW<span class="energy-arrow ${powerArrowClass}">${powerArrow}</span></td>`;
+                    html += `<td>${frequency} Hz</td>`;
+                    html += '</tr>';
+                });
+                
+                html += '</tbody></table>';
+                
+                // Add summary section
+                const totalCapacity = pod.nominal_full_pack_energy ? (pod.nominal_full_pack_energy / 1000).toFixed(2) : '--';
+                const totalCapacityNum = pod.nominal_full_pack_energy ? pod.nominal_full_pack_energy / 1000 : 0;
+                const totalSpec = SPEC_CAPACITY * pwList.length;
+                const totalCapacityPct = totalCapacityNum > 0 ? ((totalCapacityNum / totalSpec) * 100).toFixed(1) : '--';
+                const totalCapacityClass = totalCapacityNum >= totalSpec ? 'spec-good' : 'spec-warning';
+                
+                const currentCharge = pod.nominal_energy_remaining ? (pod.nominal_energy_remaining / 1000).toFixed(2) : '--';
+                const currentChargePct = (pod.nominal_energy_remaining && pod.nominal_full_pack_energy) 
+                    ? ((pod.nominal_energy_remaining / pod.nominal_full_pack_energy) * 100).toFixed(1) 
+                    : '--';
+                
+                // Calculate Tesla App percentage: (batterylevel / 0.95) - (5 / 0.95)
+                let teslaAppPct = '--';
+                if (currentChargePct !== '--') {
+                    const batteryLevel = parseFloat(currentChargePct);
+                    teslaAppPct = ((batteryLevel / 0.95) - (5 / 0.95)).toFixed(1);
+                }
+                
+                const timeRemaining = pod.time_remaining_hours ? pod.time_remaining_hours.toFixed(1) : '--';
+                const backupReserve = pod.backup_reserve_percent ? pod.backup_reserve_percent.toFixed(1) : '--';
+                
+                html += '<div class="powerwall-summary">';
+                
+                html += '<div class="powerwall-summary-item">';
+                html += '<div class="powerwall-summary-label">Total Capacity</div>';
+                html += `<div class="powerwall-summary-value">${totalCapacity} kWh</div>`;
+                html += `<div class="powerwall-summary-detail"><span class="${totalCapacityClass}">${totalCapacityPct}% of spec</span> (${totalSpec} kWh)</div>`;
+                html += '</div>';
+                
+                html += '<div class="powerwall-summary-item">';
+                html += '<div class="powerwall-summary-label">Current Charge</div>';
+                html += `<div class="powerwall-summary-value">${currentCharge} kWh</div>`;
+                html += `<div class="powerwall-summary-detail"><span class="spec-good">${teslaAppPct}% charged</span> (${currentChargePct}% actual)</div>`;
+                html += '</div>';
+                
+                html += '<div class="powerwall-summary-item">';
+                html += '<div class="powerwall-summary-label">Time Remaining</div>';
+                html += `<div class="powerwall-summary-value">${timeRemaining} hrs</div>`;
+                html += '<div class="powerwall-summary-detail">at current load</div>';
+                html += '</div>';
+                
+                html += '<div class="powerwall-summary-item">';
+                html += '<div class="powerwall-summary-label">Backup Reserve</div>';
+                html += `<div class="powerwall-summary-value">${backupReserve}%</div>`;
+                html += '<div class="powerwall-summary-detail">reserve setting</div>';
+                html += '</div>';
+                
+                html += '</div>';
+                
+                container.innerHTML = html;
+            } catch (e) {
+                console.log('Powerwall data not available:', e.message);
+                document.getElementById('powerwall-content').innerHTML = `<div class="no-strings">Powerwall data not available</div>`;
             }
         }
         
@@ -1301,6 +1654,7 @@
         loadAlerts();
         loadStrings();
         loadStats();
+        loadPowerwalls();
         loadGateways();
         
         // Refresh secondary data periodically
@@ -1308,6 +1662,7 @@
             loadAlerts();
             loadStrings();
             loadStats();
+            loadPowerwalls();
             loadGateways();
         }, 30000);
         

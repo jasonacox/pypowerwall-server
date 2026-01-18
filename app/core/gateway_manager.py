@@ -443,6 +443,14 @@ class GatewayManager:
             except (asyncio.TimeoutError, Exception) as e:
                 logger.debug(f"Temps not available for {gateway_id}: {e}")
 
+            # Try to get site name (for caching)
+            try:
+                data.site_name = await asyncio.wait_for(
+                    loop.run_in_executor(self._executor, pw.site_name), timeout=5.0
+                )
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.debug(f"Site name not available for {gateway_id}: {e}")
+
             # Try to get grid status (for caching)
             try:
                 data.grid_status = await asyncio.wait_for(

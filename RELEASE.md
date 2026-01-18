@@ -1,6 +1,27 @@
 # Release Notes
 
 ## Version History
+### [0.1.6] - 2026-01-17
+
+**Added:**
+- Enhanced console dashboard (`/console`) with comprehensive monitoring panels:
+  - Powerwall Status panel with individual Powerwall metrics (capacity, voltage, power, frequency)
+  - Power direction indicators (↑ charging, ↓ discharging) on Powerwall power values
+  - Total energy storage metrics: capacity, current charge, time remaining, backup reserve
+  - Tesla App percentage display alongside actual charge percentage
+  - Capacity comparison to spec (12.5 kWh per Powerwall) with color-coded indicators
+  - System Health panel with site name, mode, gateways, connection status, uptime, and resource metrics
+- Alert sorting by priority (notice → info → warning) in console dashboard
+
+**Fixed:**
+- Site name endpoints now return actual Powerwall site name instead of gateway configuration name
+  - `/api/site_info/site_name` now includes both site_name and timezone
+  - `/api/site_info` returns actual site name from Powerwall
+  - `/stats` includes actual site name in response
+  - Site name fetched during polling cycle for thread-safe cached access
+- Power values in Powerwall Status panel correctly converted to kW units
+
+---
 ### [0.1.5] - 2026-01-17
 
 **Fixed:**
