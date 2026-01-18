@@ -192,8 +192,10 @@ async def root(request: Request, style: str = None):
     # Use style from query parameter or fall back to settings (PW_STYLE environment variable)
     # Options: clear, grafana, grafana-dark, solar, white, black, dakboard
     if style:
+        style_name = style
         style_file = f"{style}.js"
     else:
+        style_name = settings.style
         style_file = f"{settings.style}.js"
     
     # Get the index.html using get_static
@@ -222,6 +224,7 @@ async def root(request: Request, style: str = None):
         content = content.replace("{VERSION}", status_data.get("version", ""))
         content = content.replace("{HASH}", status_data.get("git_hash", ""))
         content = content.replace("{EMAIL}", "")
+        content = content.replace("{THEME_CLASS}", f"pypowerwall-theme-{style_name}")
         
         # Build absolute API base URL from request
         api_base_url = f"{request.url.scheme}://{request.url.netloc}/api"
@@ -405,11 +408,143 @@ async def health_check():
     }
 
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        "app.main:app",
-        host=settings.server_host,
-        port=settings.server_port,
-        reload=True
+def cli():
+    """Command-line interface for pypowerwall-server.
+    
+    Supports environment variables and command-line arguments for configuration.
+    Command-line arguments override environment variables.
+    
+    Examples:
+        pypowerwall-server
+        pypowerwall-server --host 192.168.91.1 --gw-pwd mypassword
+        pypowerwall-server --port 8080 --debug
+        pypowerwall-server --config /path/to/config.json
+    """
+    import argparse
+    import sys
+    
+    parser = argparse.ArgumentParser(
+        description="PyPowerwall Server - Monitor and manage Tesla Powerwall systems",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Environment Variables:
+  PW_HOST            Powerwall gateway IP (default: 192.168.91.1)
+  PW_GW_PWD          Gateway Wi-Fi password (required for TEDAPI)
+  PW_EMAIL           Tesla account email (for Cloud/FleetAPI)
+  PW_PASSWORD        Tesla account password (deprecated, use setup)
+  PW_AUTHPATH        Path to store authentication files (default: .)
+  PW_STYLE           Theme style (default: clear)
+  PW_SITEID          Specific site ID (for multiple sites)
+  PW_CACHE_EXPIRE    Polling interval in seconds (default: 5)
+  PW_TIMEOUT         Request timeout in seconds (default: 5)
+  PW_DEBUG           Enable debug logging (default: false)
+  PW_PORT            Server port (default: 8675)
+  PW_BIND_ADDRESS    Server bind address (default: 0.0.0.0)
+  PW_CONFIG          Path to JSON configuration file
+  
+For more information, visit: https://github.com/jasonacox/pypowerwall-server
+        """
     )
+    
+    parser.add_argument("--version", action="version", version=f"pypowerwall-server {SERVER_VERSION}")
+    parser.add_argument("--setup", action="store_true", help="Run Tesla Cloud authentication setup")
+    parser.add_argument("--host", help="Powerwall gateway IP address")
+    parser.add_argument("--gw-pwd", dest="gw_pwd", help="Gateway Wi-Fi password")
+    parser.add_argument("--email", help="Tesla account email")
+    parser.add_argument("--password", help="Tesla account password (deprecated)")
+    parser.add_argument("--authpath", help="Path to authentication files")
+    parser.add_argument("--style", help="UI theme style")
+    parser.add_argument("--siteid", help="Specific site ID")
+    parser.add_argument("--cache-expire", type=int, help="Polling interval in seconds")
+    parser.add_argument("--timeout", type=int, help="Request timeout in seconds")
+    parser.add_argument("--port", type=int, help="Server port (default: 8675)")
+    parser.add_argument("--bind-address", dest="bind_address", help="Server bind address (default: 0.0.0.0)")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--config", help="Path to JSON configuration file")
+    parser.add_argument("--reload", action="store_true", help="Enable auto-reload for development")
+    
+    args = parser.parse_args()
+    
+    # Handle setup mode
+    if args.setup:
+        print(f"PyPowerwall Server v{SERVER_VERSION} - Cloud Authentication Setup")
+        print()
+        print("This will authenticate with Tesla Cloud and generate auth token files.")
+        print()
+        try:
+            import subprocess
+            # Call python -m pypowerwall setup
+            result = subprocess.run(
+                [sys.executable, "-m", "pypowerwall", "setup"],
+                check=True
+            )
+            print()
+            print("✓ Setup complete!")
+            print()
+            print("Auth files created. You can now use PW_EMAIL and PW_AUTHPATH")
+            print("to enable Cloud mode control operations.")
+            sys.exit(result.returncode)
+        except subprocess.CalledProcessError as e:
+            print()
+            print(f"✗ Setup failed with exit code {e.returncode}")
+            sys.exit(e.returncode)
+        except Exception as e:
+            print()
+            print(f"✗ Setup failed: {e}")
+            sys.exit(1)
+    
+    # Override environment variables with command-line arguments
+    if args.host:
+        os.environ["PW_HOST"] = args.host
+    if args.gw_pwd:
+        os.environ["PW_GW_PWD"] = args.gw_pwd
+    if args.email:
+        os.environ["PW_EMAIL"] = args.email
+    if args.password:
+        os.environ["PW_PASSWORD"] = args.password
+    if args.authpath:
+        os.environ["PW_AUTHPATH"] = args.authpath
+    if args.style:
+        os.environ["PW_STYLE"] = args.style
+    if args.siteid:
+        os.environ["PW_SITEID"] = args.siteid
+    if args.cache_expire:
+        os.environ["PW_CACHE_EXPIRE"] = str(args.cache_expire)
+    if args.timeout:
+        os.environ["PW_TIMEOUT"] = str(args.timeout)
+    if args.port:
+        os.environ["PW_PORT"] = str(args.port)
+    if args.bind_address:
+        os.environ["PW_BIND_ADDRESS"] = args.bind_address
+    if args.debug:
+        os.environ["PW_DEBUG"] = "true"
+    if args.config:
+        os.environ["PW_CONFIG"] = args.config
+    
+    # Reload settings to pick up CLI overrides
+    from app.config import settings
+    settings.__init__()
+    
+    # Start server
+    import uvicorn
+    
+    print(f"Starting PyPowerwall Server v{SERVER_VERSION}")
+    print(f"Server will listen on http://{settings.server_host}:{settings.server_port}")
+    print(f"Console UI: http://{settings.server_host}:{settings.server_port}/console")
+    print(f"API Docs: http://{settings.server_host}:{settings.server_port}/docs")
+    print()
+    
+    try:
+        uvicorn.run(
+            "app.main:app",
+            host=settings.server_host,
+            port=settings.server_port,
+            reload=args.reload
+        )
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    cli()

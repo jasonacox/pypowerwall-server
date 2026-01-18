@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PyPowerwall Console</title>
+    <title>PyPowerwall Server</title>
     <style>
         * {
             margin: 0;
@@ -196,7 +196,18 @@
         }
         
         .card-title .icon {
-            font-size: 1.2em;
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .card-title .icon svg {
+            width: 100%;
+            height: 100%;
+            fill: var(--text-secondary);
+            stroke: var(--text-secondary);
         }
         
         /* Power Flow Animation Card */
@@ -289,14 +300,17 @@
         /* Alerts Card */
         .alerts-card {
             grid-column: span 4;
+            display: flex;
+            flex-direction: column;
         }
         
         .alert-list {
             display: flex;
             flex-direction: column;
             gap: 8px;
-            max-height: 200px;
+            flex: 1;
             overflow-y: auto;
+            min-height: 0;
         }
         
         .alert-item {
@@ -307,6 +321,14 @@
             background: var(--bg-secondary);
             border-radius: 6px;
             font-size: 0.85em;
+        }
+        
+        .alert-item.notice {
+            border-left: 3px solid #10b981;
+        }
+        
+        .alert-item.info {
+            border-left: 3px solid #3b82f6;
         }
         
         .alert-item.warning {
@@ -666,7 +688,7 @@
         <header>
             <div class="logo">
                 <span class="logo-icon">⚡</span>
-                <h1>PyPowerwall Console</h1>
+                <h1>PyPowerwall Server</h1>
                 <span id="version-badge" class="version-badge">v--</span>
             </div>
             <div class="header-links">
@@ -688,7 +710,17 @@
             <div class="card power-flow-card">
                 <div class="card-header">
                     <div class="card-title">
-                        <span class="icon">🔄</span>
+                        <span class="icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M13 2 L3 14 h8 l-2 8 L19 10 h-8 l2-8 z" fill="currentColor" stroke="none"/>
+                                <path d="M23 12 A11 11 0 0 1 19 19" fill="none"/>
+                                <path d="M19 5 A11 11 0 0 1 23 12" fill="none"/>
+                                <path d="M1 12 A11 11 0 0 1 5 5" fill="none"/>
+                                <path d="M5 19 A11 11 0 0 1 1 12" fill="none"/>
+                                <polyline points="19,3 21,5 19,7" fill="none"/>
+                                <polyline points="5,17 3,19 5,21" fill="none"/>
+                            </svg>
+                        </span>
                         Power Flow
                     </div>
                 </div>
@@ -701,7 +733,12 @@
             <div class="card energy-card">
                 <div class="card-header">
                     <div class="card-title">
-                        <span class="icon">📊</span>
+                        <span class="icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M3 3v18h18" fill="none"/>
+                                <path d="M18 17 L13 9 L9 13 L3 7" fill="none"/>
+                            </svg>
+                        </span>
                         Energy Summary
                     </div>
                 </div>
@@ -752,13 +789,18 @@
             <div class="card alerts-card">
                 <div class="card-header">
                     <div class="card-title">
-                        <span class="icon">🚨</span>
+                        <span class="icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M10.29 3.86 L1.82 18 A2 2 0 0 0 3.55 21 h16.9 a2 2 0 0 0 1.73-3 L13.71 3.86 a2 2 0 0 0-3.42 0 z" fill="none"/>
+                                <line x1="12" y1="9" x2="12" y2="13"/>
+                                <line x1="12" y1="17" x2="12.01" y2="17"/>
+                            </svg>
+                        </span>
                         Alerts
                     </div>
                 </div>
                 <div id="alert-list" class="alert-list">
                     <div class="no-alerts">
-                        <span class="icon">✅</span>
                         No active alerts
                     </div>
                 </div>
@@ -768,7 +810,14 @@
             <div class="card strings-card">
                 <div class="card-header">
                     <div class="card-title">
-                        <span class="icon">🔌</span>
+                        <span class="icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="3" width="7" height="7" rx="1" fill="none"/>
+                                <rect x="14" y="3" width="7" height="7" rx="1" fill="none"/>
+                                <rect x="3" y="14" width="7" height="7" rx="1" fill="none"/>
+                                <rect x="14" y="14" width="7" height="7" rx="1" fill="none"/>
+                            </svg>
+                        </span>
                         Solar Strings
                     </div>
                 </div>
@@ -783,7 +832,13 @@
             <div class="card health-card">
                 <div class="card-header">
                     <div class="card-title">
-                        <span class="icon">🖥️</span>
+                        <span class="icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" fill="none"/>
+                                <circle cx="12" cy="7" r="4" fill="none"/>
+                                <path d="M22 11h-4M20 9v4" fill="none"/>
+                            </svg>
+                        </span>
                         Server Health
                     </div>
                 </div>
@@ -797,12 +852,12 @@
                         <div class="health-value" id="server-memory">--</div>
                     </div>
                     <div class="health-item">
-                        <div class="health-label">Gateways</div>
-                        <div class="health-value" id="server-gateways">--</div>
-                    </div>
-                    <div class="health-item">
                         <div class="health-label">API Calls</div>
                         <div class="health-value" id="server-calls">--</div>
+                    </div>
+                    <div class="health-item">
+                        <div class="health-label">Errors</div>
+                        <div class="health-value" id="server-errors">--</div>
                     </div>
                 </div>
             </div>
@@ -811,7 +866,12 @@
             <div class="card gateways-card">
                 <div class="card-header">
                     <div class="card-title">
-                        <span class="icon">🔗</span>
+                        <span class="icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="2" y="7" width="20" height="14" rx="2" fill="none"/>
+                                <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" fill="none"/>
+                            </svg>
+                        </span>
                         Connected Gateways
                     </div>
                 </div>
@@ -824,7 +884,7 @@
     
     <footer>
         <p>
-            <span id="footer-versions">Server: v-- | Library: v-- | Firmware: v--</span>
+            <span id="footer-versions">Server: v-- | PyPowerwall: v--</span>
             | <a href="/docs">API Documentation</a> 
             | <a href="https://github.com/jasonacox/pypowerwall-server" target="_blank">GitHub</a>
         </p>
@@ -1050,15 +1110,36 @@
                     return;
                 }
                 
+                // Define alert categories
+                const noticeAlerts = ['FWUpdateSucceeded', 'SystemConnectedToGrid', 'GridCodesWrite', 'PodCommissionTime'];
+                const infoAlerts = ['ScheduledIslandContactorOpen', 'SelfTest'];
+                
+                // Function to categorize alert
+                function categorizeAlert(alertText) {
+                    const alertName = alertText.split(':')[0].trim();
+                    
+                    if (noticeAlerts.some(notice => alertName.includes(notice))) {
+                        return { type: 'notice', icon: '✓' };
+                    }
+                    if (infoAlerts.some(info => alertName.includes(info))) {
+                        return { type: 'info', icon: 'ℹ' };
+                    }
+                    return { type: 'warning', icon: '⚠️' };
+                }
+                
                 // Handle both array and object formats
                 const alertArray = Array.isArray(alerts) ? alerts : Object.entries(alerts).map(([k, v]) => `${k}: ${v}`);
                 
-                container.innerHTML = alertArray.slice(0, 10).map(alert => `
-                    <div class="alert-item warning">
-                        <span class="alert-icon">⚠️</span>
-                        <span>${typeof alert === 'string' ? alert : JSON.stringify(alert)}</span>
-                    </div>
-                `).join('');
+                container.innerHTML = alertArray.slice(0, 10).map(alert => {
+                    const alertText = typeof alert === 'string' ? alert : JSON.stringify(alert);
+                    const { type, icon } = categorizeAlert(alertText);
+                    return `
+                        <div class="alert-item ${type}">
+                            <span class="alert-icon">${icon}</span>
+                            <span>${alertText}</span>
+                        </div>
+                    `;
+                }).join('');
             } catch (e) {
                 console.log('Alerts not available:', e.message);
                 document.getElementById('alert-list').innerHTML = `
@@ -1135,7 +1216,9 @@
                 // Convert KB to MB (mem is in KB)
                 const memMB = stats.mem ? (stats.mem / 1024).toFixed(1) : null;
                 document.getElementById('server-memory').textContent = memMB ? `${memMB} MB` : '--';
-                document.getElementById('server-gateways').textContent = `${stats.gateways?.online || 0}/${stats.gateways?.total || 0}`;
+                // Show error count
+                const errorCount = stats.errors || 0;
+                document.getElementById('server-errors').textContent = errorCount;
                 // Total API calls = gets + posts
                 const totalCalls = (stats.gets || 0) + (stats.posts || 0);
                 document.getElementById('server-calls').textContent = totalCalls.toLocaleString();
@@ -1144,23 +1227,8 @@
                 const serverVersion = stats.server_version || '--';
                 const libVersion = stats.pypowerwall_version || '--';
                 document.getElementById('version-badge').textContent = `v${serverVersion}`;
-                
-                // Fetch firmware version
-                try {
-                    const versionResponse = await fetch('/version');
-                    if (versionResponse.ok) {
-                        const versionData = await versionResponse.json();
-                        const firmware = versionData.version || '--';
-                        document.getElementById('footer-versions').textContent = 
-                            `Server: v${serverVersion} | Library: v${libVersion} | Firmware: ${firmware}`;
-                    } else {
-                        document.getElementById('footer-versions').textContent = 
-                            `Server: v${serverVersion} | Library: v${libVersion} | Firmware: --`;
-                    }
-                } catch (e) {
-                    document.getElementById('footer-versions').textContent = 
-                        `Server: v${serverVersion} | Library: v${libVersion} | Firmware: --`;
-                }
+                document.getElementById('footer-versions').textContent = 
+                    `Server: v${serverVersion} | PyPowerwall: v${libVersion}`;
             } catch (e) {
                 console.log('Stats not available:', e.message);
             }
@@ -1209,7 +1277,7 @@
                                 <div class="gateway-host">${hostInfo}</div>
                                 <div class="gateway-details">
                                     <span class="gateway-mode">${mode}</span>
-                                    ${isOnline ? `<span class="gateway-firmware">FW: ${firmwareVersion}</span>` : ''}
+                                    ${isOnline ? `<span class="gateway-firmware">Firmware: ${firmwareVersion}</span>` : ''}
                                 </div>
                                 ${status.error ? `<div class="gateway-error">${status.error}</div>` : ''}
                             </div>
@@ -1243,7 +1311,7 @@
             loadGateways();
         }, 30000);
         
-        console.log('PyPowerwall Console loaded');
+        console.log('PyPowerwall Server console loaded');
     </script>
 </body>
 </html>

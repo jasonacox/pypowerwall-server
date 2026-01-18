@@ -172,7 +172,7 @@ from pydantic_settings import BaseSettings
 logger = logging.getLogger(__name__)
 
 # Server version
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.1.3"
 
 
 class GatewayConfig(BaseSettings):

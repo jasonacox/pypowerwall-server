@@ -2,17 +2,7 @@
 
 A high-performance FastAPI-based server for monitoring and managing Tesla Powerwall systems. Designed as the next-generation evolution of the [pypowerwall proxy](https://github.com/jasonacox/pypowerwall/tree/main/proxy#pypowerwall-proxy-server) with multi-gateway support, real-time monitoring, and a beautiful modern UI.
 
-## Vision
-
-PyPowerwall Server provides a comprehensive monitoring and management solution for Tesla Powerwall installations with:
-
-- **Multiple Powerwall Support** - Monitor multiple homes/sites from a single server instance
-- **Modern Web UI** - Beautiful, responsive interface with real-time power flow visualization
-- **Full API Compatibility** - Maintains all existing proxy endpoints for backward compatibility
-- **High Performance** - Built on FastAPI for speed and scalability
-- **Container Ready** - Deploy via Docker or run standalone
-- **WebSocket Support** - Real-time data streaming to connected clients
-- **MQTT Integration** - Publish metrics to MQTT brokers for home automation and monitoring systems
+<img width="934" height="876" alt="image" src="https://github.com/user-attachments/assets/9fb8b909-1240-4b73-a11c-a23bda307d6b" />
 
 ## Features
 
@@ -29,12 +19,25 @@ PyPowerwall Server provides a comprehensive monitoring and management solution f
 ### Docker (Recommended)
 
 ```bash
+# TEDAPI Mode (Local Gateway) - requires host network to access gateway at 192.168.91.1
 docker run -d \
   --name pypowerwall-server \
-  -p 8675:8675 \
+  --network host \
   -e PW_HOST=192.168.91.1 \
   -e PW_GW_PWD=your_gateway_password \
   jasonacox/pypowerwall-server
+
+# Cloud Mode - connects via internet, includes persistent auth storage
+docker run -d \
+  --name pypowerwall-server \
+  -p 8675:8675 \
+  -v ~/.pypowerwall:/auth \
+  -e PW_EMAIL="your@email.com" \
+  -e PW_AUTHPATH=/auth \
+  jasonacox/pypowerwall-server
+
+# Complete Cloud Mode setup (one-time authentication)
+docker exec -it pypowerwall-server python -m pypowerwall setup
 ```
 
 Visit http://localhost:8675
@@ -42,12 +45,13 @@ Visit http://localhost:8675
 ### Multiple Powerwalls
 
 ```bash
+# Multiple local gateways - requires host network
 docker run -d \
   --name pypowerwall-server \
-  -p 8675:8675 \
+  --network host \
   -e PW_GATEWAYS='[
     {"id": "home", "name": "Home Gateway", "host": "192.168.91.1", "gw_pwd": "gateway_password_1"},
-    {"id": "cabin", "name": "Cabin Gateway", "host": "192.168.91.1", "gw_pwd": "gateway_password_2"}
+    {"id": "cabin", "name": "Cabin Gateway", "host": "192.168.91.2", "gw_pwd": "gateway_password_2"}
   ]' \
   jasonacox/pypowerwall-server
 ```
@@ -58,11 +62,15 @@ docker run -d \
 # Install
 pip install pypowerwall-server
 
-# Single Powerwall
+# TEDAPI Mode
 pypowerwall-server --host 192.168.91.1 --gw-pwd your_gateway_password
 
 # Multiple Powerwalls
 pypowerwall-server --config gateways.yaml
+
+# Cloud Mode
+pypowerwall-server --setup # one-time setup
+pypowerwall-server --email "your@email.com"
 ```
 
 ## Configuration
@@ -75,25 +83,14 @@ If you want to control your Powerwall (set reserve level, operating mode, etc.),
 
 **One-time setup:**
 ```bash
-python3 -m pypowerwall setup
+pip install pypowerwall-server
+pypowerwall-server --setup 
 ```
 
 This will:
 1. Open your browser to authenticate with Tesla
 2. Generate `.pypowerwall.auth` and `.pypowerwall.site` token files
 3. Store them in the default location or a specified directory
-
-**Then configure the server:**
-```bash
-PW_AUTHPATH=/path/to/auth/directory  # Directory containing the auth files
-```
-
-For Docker, mount the auth directory:
-```bash
-docker run -v /host/path/to/auth:/auth \
-  -e PW_AUTHPATH=/auth \
-  ...
-```
 
 ### Environment Variables
 
@@ -173,7 +170,7 @@ gateways:
 **Authentication:**
 - `gw_pwd`: For TEDAPI local gateway access
 - `email` + `authpath`: For Tesla Cloud API (control operations)
-  - Run `python3 -m pypowerwall setup` to authenticate and generate auth files
+  - Run `pypowerwall-server --setup` to authenticate and generate auth files
   - Specify directory containing `.pypowerwall.auth` and `.pypowerwall.site` files
 
 ## API Endpoints
@@ -226,7 +223,7 @@ The server supports **Tesla Cloud authentication** for control operations:
 
 **Cloud (Control)**: For control operations via Tesla API
 - Requires: `email` + `authpath`
-- Setup: Run `python3 -m pypowerwall setup` to authenticate
+- Setup: Run `pypowerwall-server --setup` to authenticate
 - Generates: `.pypowerwall.auth` and `.pypowerwall.site` token files
 - Used for: Setting reserve level, operating mode, etc.
 
@@ -343,9 +340,6 @@ pypowerwall-server/
 ### Setup
 
 ```bash
-# Navigate to server directory
-cd tools/server
-
 # Create virtual environment
 python -m venv venv
 source venv/bin/activate  # or `venv\Scripts\activate` on Windows
@@ -377,29 +371,6 @@ docker build -t pypowerwall-server .
 docker run -p 8675:8675 pypowerwall-server
 ```
 
-## Migration from Proxy
-
-PyPowerwall Server maintains full backward compatibility with the existing proxy:
-
-1. **Same API Endpoints** - All proxy routes work identically
-2. **Environment Variables** - Same configuration options
-3. **Drop-in Replacement** - Change container image, keep configs
-4. **Telegraf/Grafana** - No changes needed to integrations
-
-**Migration Steps:**
-```bash
-# Stop old proxy
-docker stop pypowerwall-proxy
-
-# Start new server (same port)
-docker run -d \
-  --name pypowerwall-server \
-  -p 8675:8675 \
-  -e PW_HOST=192.168.91.1 \
-  -e PW_GW_PWD=your_gateway_password \
-  jasonacox/pypowerwall-server
-```
-
 ## Performance
 
 The server is designed for efficiency with background polling and caching:
@@ -423,11 +394,11 @@ The server is designed for efficiency with background polling and caching:
 
 ## Contributing
 
-See [CONTRIBUTING.md](../../CONTRIBUTING.md) for development guidelines.
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-MIT License - See [LICENSE](../../LICENSE) for details.
+MIT License - See [LICENSE](LICENSE) for details.
 
 ## Support
 
@@ -435,6 +406,3 @@ MIT License - See [LICENSE](../../LICENSE) for details.
 - **Discussions:** https://github.com/jasonacox/pypowerwall-server/discussions
 - **Wiki:** https://github.com/jasonacox/pypowerwall-server/wiki
 
----
-
-**Note:** This project maintains the existing pypowerwall proxy unchanged. The proxy will continue to receive bug fixes and firmware updates while pypowerwall-server is developed as its modern replacement.

@@ -4,6 +4,9 @@ echo "Usage: $0 [beta_number]"
 echo "  If beta_number is not provided, auto-increments from last beta version"
 echo ""
 
+# Start timing
+BUILD_START=$(date +%s)
+
 last_path=$(basename $PWD)
 if [ "$last_path" == "pypowerwall-server" ]; then
   # Determine version
@@ -27,24 +30,74 @@ if [ "$last_path" == "pypowerwall-server" ]; then
   fi
   
   VER="${SERVER_VERSION}-beta${BETA_NUM}"
+  CONTAINER_NAME="jasonacox/pypowerwall-server:${VER}"
 
   # Check with user before proceeding
-  echo "Build and push jasonacox/pypowerwall-server:${VER} to Docker Hub?"
+  echo "Build and push ${CONTAINER_NAME} to Docker Hub?"
   echo "Beta version: ${BETA_NUM} (stored in ${BETA_FILE})"
   read -p "Press [Enter] to continue or Ctrl-C to cancel..."
   
   # Build jasonacox/pypowerwall-server:x.y.z
-  echo "* BUILD jasonacox/pypowerwall-server:${VER}"
-  docker buildx build -f Dockerfile --no-cache --platform linux/amd64,linux/arm64,linux/arm/v7 --push -t jasonacox/pypowerwall-server:${VER} .
+  echo "* BUILD ${CONTAINER_NAME}"
+  docker buildx build -f Dockerfile --no-cache --platform linux/amd64,linux/arm64,linux/arm/v7 --push -t ${CONTAINER_NAME} -t jasonacox/pypowerwall-server:latest .
   echo ""
 
   # Verify
-  echo "* VERIFY jasonacox/pypowerwall-server:${VER}"
-  docker buildx imagetools inspect jasonacox/pypowerwall-server:${VER} | grep Platform
+  echo "* VERIFY ${CONTAINER_NAME}"
+  docker buildx imagetools inspect ${CONTAINER_NAME} | grep Platform
   echo ""
   echo "* VERIFY jasonacox/pypowerwall-server:latest"
-  docker buildx imagetools inspect jasonacox/pypowerwall-server | grep Platform
+  docker buildx imagetools inspect jasonacox/pypowerwall-server:latest | grep Platform
   echo ""
+
+  # Calculate build time
+  BUILD_END=$(date +%s)
+  BUILD_TIME=$((BUILD_END - BUILD_START))
+  BUILD_MIN=$((BUILD_TIME / 60))
+  BUILD_SEC=$((BUILD_TIME % 60))
+
+  # Get container sizes for each architecture
+  echo "* Fetching container sizes..."
+  
+  # Get the digest for each platform
+  AMD64_DIGEST=$(docker buildx imagetools inspect ${CONTAINER_NAME} --raw 2>/dev/null | jq -r '.manifests[] | select(.platform.architecture=="amd64") | .digest' 2>/dev/null)
+  ARM64_DIGEST=$(docker buildx imagetools inspect ${CONTAINER_NAME} --raw 2>/dev/null | jq -r '.manifests[] | select(.platform.architecture=="arm64") | .digest' 2>/dev/null)
+  ARM_V7_DIGEST=$(docker buildx imagetools inspect ${CONTAINER_NAME} --raw 2>/dev/null | jq -r '.manifests[] | select(.platform.architecture=="arm" and .platform.variant=="v7") | .digest' 2>/dev/null)
+  
+  # Get actual image sizes by inspecting each platform's manifest
+  if [ -n "$AMD64_DIGEST" ]; then
+    SIZE_AMD64=$(docker buildx imagetools inspect ${CONTAINER_NAME}@${AMD64_DIGEST} --raw 2>/dev/null | jq '[.layers[].size] | add' 2>/dev/null)
+    SIZE_AMD64_MB=$((SIZE_AMD64 / 1024 / 1024))
+  else
+    SIZE_AMD64_MB="N/A"
+  fi
+  
+  if [ -n "$ARM64_DIGEST" ]; then
+    SIZE_ARM64=$(docker buildx imagetools inspect ${CONTAINER_NAME}@${ARM64_DIGEST} --raw 2>/dev/null | jq '[.layers[].size] | add' 2>/dev/null)
+    SIZE_ARM64_MB=$((SIZE_ARM64 / 1024 / 1024))
+  else
+    SIZE_ARM64_MB="N/A"
+  fi
+  
+  if [ -n "$ARM_V7_DIGEST" ]; then
+    SIZE_ARM_V7=$(docker buildx imagetools inspect ${CONTAINER_NAME}@${ARM_V7_DIGEST} --raw 2>/dev/null | jq '[.layers[].size] | add' 2>/dev/null)
+    SIZE_ARM_V7_MB=$((SIZE_ARM_V7 / 1024 / 1024))
+  else
+    SIZE_ARM_V7_MB="N/A"
+  fi
+
+  # Print summary
+  echo "=========================================="
+  echo "          BUILD SUMMARY"
+  echo "=========================================="
+  echo "Build Time:      ${BUILD_MIN}m ${BUILD_SEC}s"
+  echo "Container Sizes:"
+  echo "  - amd64:       ${SIZE_AMD64_MB} MB"
+  echo "  - arm64:       ${SIZE_ARM64_MB} MB"
+  echo "  - arm/v7:      ${SIZE_ARM_V7_MB} MB"
+  echo "Container Name:  ${CONTAINER_NAME}"
+  echo "Docker Hub:      https://hub.docker.com/r/jasonacox/pypowerwall-server"
+  echo "=========================================="
 
 else
   # Exit script if last_path is not "server"

@@ -28198,87 +28198,18 @@
         // Get theme from window.pypowerwallTheme (set by theme .js files)
         const theme = window.pypowerwallTheme || 'clear';
         
-        // Apply theme class to html and body elements
+        // Apply theme class to html and body elements (class already added by server, but ensure it's on body too)
         document.documentElement.classList.add('pypowerwall-theme-' + theme);
         document.body.classList.add('pypowerwall-theme-' + theme);
         
-        // Hide unwanted elements using CSS
+        // Add theme-specific features (backgrounds handled by critical CSS in HTML head)
         const style = document.createElement('style');
         style.textContent = `
-            /* Hide elements for all themes */
-            .overview-menu,
-            #logout,
-            .footer,
-            .compact-btn-row,
-            .toast-list,
-            .power-flow-header,
-            .btn:not(.button-continue) {
-                display: none !important;
-            }
-            
-            /* Base theme adjustments */
-            .core-layout__viewport {
-                padding: 0 !important;
-                margin: 0 !important;
-            }
-            
-            .power-flow-grid {
-                width: 100% !important;
-                left: 0 !important;
-                right: 0 !important;
-                margin: 0 !important;
-                padding-top: 0 !important;
-                position: fixed !important;
-            }
-            
-            .app {
-                overflow-y: hidden !important;
-            }
-            
-            /* Clear theme - transparent background */
-            .pypowerwall-theme-clear,
-            .pypowerwall-theme-clear html,
-            .pypowerwall-theme-clear body,
-            .pypowerwall-theme-clear .app,
-            .pypowerwall-theme-clear .core-layout,
-            .pypowerwall-theme-clear .core-layout__viewport,
-            .pypowerwall-theme-clear .power-flow-grid,
-            .pypowerwall-theme-clear .power-flow-grid.active {
-                background: transparent !important;
-                background-color: transparent !important;
-            }
-            
-            /* Grafana themes - dark background */
-            .pypowerwall-theme-grafana body,
-            .pypowerwall-theme-grafana-dark body,
-            .pypowerwall-theme-grafana .power-flow-grid.active,
-            .pypowerwall-theme-grafana-dark .power-flow-grid.active {
-                background-color: #1e1e1e !important;
-            }
-            
-            /* White theme */
-            .pypowerwall-theme-white body,
-            .pypowerwall-theme-white .power-flow-grid.active {
-                background-color: #ffffff !important;
-            }
-            
-            /* Black theme */
-            .pypowerwall-theme-black body,
-            .pypowerwall-theme-black .power-flow-grid.active {
-                background-color: #000000 !important;
-            }
-            
-            /* Solar theme - hide battery */
+            /* Solar theme - hide battery elements */
             .pypowerwall-theme-solar .powerwall-soe,
             .pypowerwall-theme-solar .soe-label,
             .pypowerwall-theme-solar [data-testid="b3372156-8a9e-4d17-9721-fcc5891d1074"] {
                 display: none !important;
-            }
-            
-            /* Dakboard theme */
-            .pypowerwall-theme-dakboard body,
-            .pypowerwall-theme-dakboard .power-flow-grid.active {
-                background-color: transparent !important;
             }
         `;
         document.head.appendChild(style);

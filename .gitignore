@@ -209,3 +209,5 @@ __marimo__/
 # Local
 .pypowerwall.*
 .beta_version
+.DS_Store
+sandbox/

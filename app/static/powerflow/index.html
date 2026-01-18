@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="{THEME_CLASS}">
     <head>
         <title>Tesla Energy - Setup</title>
         <link href="favicon-32x32.png" rel="icon" sizes="32x32" type="image/png"/>
@@ -10,14 +10,82 @@
             /* Critical CSS - apply immediately before JavaScript */
             html, body, .app, .core-layout, .core-layout__viewport, 
             .power-flow-grid, .power-flow-grid.active {
-                background: transparent !important;
-                background-color: transparent !important;
                 overflow: hidden !important;
             }
             
             body {
                 margin: 0 !important;
                 padding: 0 !important;
+            }
+            
+            /* Theme backgrounds - must be here for Safari */
+            .pypowerwall-theme-clear,
+            .pypowerwall-theme-clear body,
+            .pypowerwall-theme-clear .app,
+            .pypowerwall-theme-clear .core-layout,
+            .pypowerwall-theme-clear .core-layout__viewport,
+            .pypowerwall-theme-clear .power-flow-grid,
+            .pypowerwall-theme-clear .power-flow-grid.active {
+                background: transparent !important;
+                background-color: transparent !important;
+            }
+            
+            .pypowerwall-theme-grafana,
+            .pypowerwall-theme-grafana body,
+            .pypowerwall-theme-grafana .app,
+            .pypowerwall-theme-grafana .core-layout,
+            .pypowerwall-theme-grafana .core-layout__viewport,
+            .pypowerwall-theme-grafana .power-flow-grid,
+            .pypowerwall-theme-grafana .power-flow-grid.active,
+            .pypowerwall-theme-grafana-dark,
+            .pypowerwall-theme-grafana-dark body,
+            .pypowerwall-theme-grafana-dark .app,
+            .pypowerwall-theme-grafana-dark .core-layout,
+            .pypowerwall-theme-grafana-dark .core-layout__viewport,
+            .pypowerwall-theme-grafana-dark .power-flow-grid,
+            .pypowerwall-theme-grafana-dark .power-flow-grid.active {
+                background: #111217 !important;
+                background-color: #111217 !important;
+            }
+            
+            .pypowerwall-theme-white,
+            .pypowerwall-theme-white body,
+            .pypowerwall-theme-white .app,
+            .pypowerwall-theme-white .core-layout,
+            .pypowerwall-theme-white .core-layout__viewport,
+            .pypowerwall-theme-white .power-flow-grid,
+            .pypowerwall-theme-white .power-flow-grid.active,
+            .pypowerwall-theme-solar,
+            .pypowerwall-theme-solar body,
+            .pypowerwall-theme-solar .app,
+            .pypowerwall-theme-solar .core-layout,
+            .pypowerwall-theme-solar .core-layout__viewport,
+            .pypowerwall-theme-solar .power-flow-grid,
+            .pypowerwall-theme-solar .power-flow-grid.active {
+                background: #ffffff !important;
+                background-color: #ffffff !important;
+            }
+            
+            .pypowerwall-theme-black,
+            .pypowerwall-theme-black body,
+            .pypowerwall-theme-black .app,
+            .pypowerwall-theme-black .core-layout,
+            .pypowerwall-theme-black .core-layout__viewport,
+            .pypowerwall-theme-black .power-flow-grid,
+            .pypowerwall-theme-black .power-flow-grid.active {
+                background: #000000 !important;
+                background-color: #000000 !important;
+            }
+            
+            .pypowerwall-theme-dakboard,
+            .pypowerwall-theme-dakboard body,
+            .pypowerwall-theme-dakboard .app,
+            .pypowerwall-theme-dakboard .core-layout,
+            .pypowerwall-theme-dakboard .core-layout__viewport,
+            .pypowerwall-theme-dakboard .power-flow-grid,
+            .pypowerwall-theme-dakboard .power-flow-grid.active {
+                background: transparent !important;
+                background-color: transparent !important;
             }
             
             /* Hide unwanted elements */

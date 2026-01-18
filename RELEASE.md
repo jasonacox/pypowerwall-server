@@ -1,28 +1,41 @@
 # Release Notes
 
-This document tracks all notable changes to PyPowerwall Server.
+## Version History
 
-## Version Format
+### [0.1.3] - 2026-01-17
 
-This project follows [Semantic Versioning](https://semver.org/):
-- **MAJOR** version for incompatible API changes
-- **MINOR** version for new functionality in a backward compatible manner
-- **PATCH** version for backward compatible bug fixes
+**Added:**
+- Color-coded alert categorization in console UI
+  - Notice alerts (green ✓): FWUpdateSucceeded, SystemConnectedToGrid, GridCodesWrite, PodCommissionTime
+  - Info alerts (blue ℹ): ScheduledIslandContactorOpen, SelfTest
+  - Warning alerts (yellow ⚠️): All other alerts
+- Improved alert panel scrolling to fill available height
 
-## [Unreleased]
-
-### Added
-- None yet
-
-### Changed
-- None yet
-
-### Fixed
-- None yet
+**Fixed:**
+- Alert list scroll area now properly fills the panel height
 
 ---
 
-## Version History
+### [0.1.2] - 2026-01-17
+
+**Fixed:**
+- Alerts panel scroll behavior corrected to use full card height
+
+---
+
+### [0.1.1] - 2026-01-17
+
+**Added:**
+- PyPI package support with `pip install pypowerwall-server`
+- CLI command `pypowerwall-server` with full argument support
+- `--setup` flag for Tesla Cloud authentication setup
+- Static files now included in Python package distribution
+
+**Fixed:**
+- Package structure to include app/static/* files in distribution
+- Authentication setup now uses subprocess to call pypowerwall correctly
+
+---
 
 ### [0.1.0] - Initial Release
 
