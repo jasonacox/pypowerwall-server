@@ -231,33 +231,27 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Loop as Polling Loop
+    participant Loop
     participant GM as GatewayManager
     participant Exec as ThreadPoolExecutor
-    participant PW as pypowerwall.Powerwall
-    participant Cache as Cache Dict
+    participant PW as Powerwall
+    participant Cache
     
     loop Polling
-        Loop->>GM: _poll_gateways()
-        
-        par For each gateway
-            GM->>GM: Check backoff time
-            alt Backoff expired
-                GM->>Exec: run_in_executor(pw.poll)
-                Exec->>PW: poll("/api/meters/aggregates")
-                PW-->>Exec: aggregates data
-                Exec-->>GM: aggregates result
-                
-                GM->>Exec: run_in_executor(pw.level)
-                PW-->>GM: SOE value
-                
-                Note over GM: Fetch vitals, strings,<br/>alerts, temps... (optional)
-                
-                GM->>Cache: Update GatewayStatus
-                GM->>GM: Reset backoff counters
-            else Within backoff
-                Note over GM: Skip this gateway
-            end
+        Loop->>GM: _poll_gateways
+        GM->>GM: Check backoff time
+        alt Backoff expired
+            GM->>Exec: run_in_executor
+            Exec->>PW: poll aggregates
+            PW-->>Exec: aggregates data
+            Exec-->>GM: result
+            GM->>Exec: run_in_executor
+            PW-->>GM: SOE value
+            Note over GM: Fetch optional data
+            GM->>Cache: Update GatewayStatus
+            GM->>GM: Reset backoff counters
+        else Within backoff
+            Note over GM: Skip this gateway
         end
     end
 ```
