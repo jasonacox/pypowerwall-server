@@ -1395,13 +1395,32 @@
                 document.getElementById('server-sitename').textContent = siteName;
                 
                 // Mode
-                let mode = stats.mode || '--';
-                if (stats.fleetapi) mode = 'FleetAPI';
-                else if (stats.cloudmode) mode = 'Cloud';
-                else if (stats.tedapi) {
-                    const tedMode = stats.tedapi_mode || 'local';
-                    mode = tedMode === 'full' ? 'Local' : `Local (${tedMode})`;
+                let mode = '--';
+                let qualifiers = [];
+                
+                // Determine base mode
+                if (stats.fleetapi || stats.cloudmode) {
+                    mode = 'Cloud';
+                    if (stats.fleetapi) {
+                        qualifiers.push('FleetAPI');
+                    }
+                } else {
+                    mode = 'Local';
+                    if (stats.tedapi) {
+                        qualifiers.push('TEDAPI');
+                    }
                 }
+                
+                // Add PW3 if applicable
+                if (stats.pw3) {
+                    qualifiers.push('PW3');
+                }
+                
+                // Build final mode string
+                if (qualifiers.length > 0) {
+                    mode += ' (' + qualifiers.join(' ') + ')';
+                }
+                
                 document.getElementById('server-mode').textContent = mode;
                 
                 // Gateways

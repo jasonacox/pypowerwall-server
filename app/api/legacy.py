@@ -1008,22 +1008,13 @@ async def get_stats():
         if gw.site_id:
             siteid = gw.site_id
 
-        # Detect PW3 and TEDAPI mode from connection
-        pw = gateway_manager.get_connection(gateway_id)
-        if pw:
-            # Check if PW3
-            try:
-                if hasattr(pw, "pw3") and pw.pw3:
-                    pw3 = True
-            except:
-                pass
-
-            # Get TEDAPI mode
-            try:
-                if hasattr(pw, "tedapi_mode"):
-                    tedapi_mode = pw.tedapi_mode
-            except:
-                pass
+        # Detect PW3 and TEDAPI mode from cached data
+        status = gateway_manager.get_gateway(gateway_id)
+        if status and status.data:
+            if status.data.pw3:
+                pw3 = True
+            if status.data.tedapi_mode:
+                tedapi_mode = status.data.tedapi_mode
 
         # Get backoff info from gateway_manager
         failures = gateway_manager._consecutive_failures.get(gateway_id, 0)

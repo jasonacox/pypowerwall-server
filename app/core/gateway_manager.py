@@ -451,6 +451,18 @@ class GatewayManager:
             except (asyncio.TimeoutError, Exception) as e:
                 logger.debug(f"Site name not available for {gateway_id}: {e}")
 
+            # Detect PW3 status from pypowerwall TEDAPI connection
+            try:
+                if hasattr(pw, "tedapi") and pw.tedapi:
+                    pw3_status = getattr(pw.tedapi, "pw3", None)
+                    if pw3_status is not None:
+                        data.pw3 = bool(pw3_status)
+                    # Also cache tedapi_mode
+                    if hasattr(pw, "tedapi_mode"):
+                        data.tedapi_mode = pw.tedapi_mode
+            except Exception:
+                pass
+
             # Try to get grid status (for caching)
             try:
                 data.grid_status = await asyncio.wait_for(

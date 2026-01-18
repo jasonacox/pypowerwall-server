@@ -1,6 +1,28 @@
 # Release Notes
 
 ## Version History
+### [0.1.7] - 2026-01-18
+
+**Added:**
+- Powerwall 3 (PW3) detection support:
+  - Cached `pw3` status from pypowerwall TEDAPI connection during polling cycle
+  - `/stats` endpoint now correctly reports `pw3: true` for Powerwall 3 systems
+  - Console dashboard mode display now indicates PW3 hardware (e.g., "Local (TEDAPI PW3)")
+- TEDAPI mode caching for improved performance:
+  - `tedapi_mode` cached during polling cycle alongside other gateway metrics
+  - Eliminates redundant connection object access in API endpoints
+
+**Fixed:**
+- PW3 detection now correctly accesses `pw.tedapi.pw3` attribute (was incorrectly checking `pw.pw3`)
+- Console dashboard mode display restructured to show clear connection types:
+  - Local, Local (TEDAPI), Local (TEDAPI PW3)
+  - Cloud, Cloud (PW3), Cloud (FleetAPI), Cloud (FleetAPI PW3)
+
+**Changed:**
+- `sync.sh` deployment script now uses `--copy-links` flag to copy symlink contents instead of just the link
+- Updated pypowerwall dependency to newer version with PW3 power reporting bug fix
+
+---
 ### [0.1.6] - 2026-01-17
 
 **Added:**

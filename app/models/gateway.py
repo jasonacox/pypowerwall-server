@@ -129,6 +129,8 @@ class PowerwallData(BaseModel):
     status: Optional[str] = None  # Status string like "Running"
     device_type: Optional[str] = None
     site_name: Optional[str] = None  # Site name from Powerwall
+    pw3: Optional[bool] = None  # True if Powerwall 3 system
+    tedapi_mode: Optional[str] = None  # TEDAPI mode (e.g., "FleetAPI")
     timestamp: Optional[float] = None
 
 
