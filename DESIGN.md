@@ -237,7 +237,7 @@ sequenceDiagram
     participant PW as pypowerwall.Powerwall
     participant Cache as Cache Dict
     
-    loop Every 5s
+    loop Polling
         Loop->>GM: _poll_gateways()
         
         par For each gateway
@@ -276,7 +276,7 @@ sequenceDiagram
     CM->>CM: Add to active_connections
     WS-->>C: Connection Accepted
     
-    loop Every 1s
+    loop Streaming
         WS->>GM: get_aggregate_data()
         GM-->>WS: AggregateData
         WS->>C: send_json(data)
