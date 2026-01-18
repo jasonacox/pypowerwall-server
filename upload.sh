@@ -54,9 +54,20 @@ if [ "$last_path" == "pypowerwall-server" ]; then
   echo ""
   read -p "Build and push to Docker Hub? Press [Enter] to continue or Ctrl-C to cancel..."
   
+  # Ask if no-cache build is desired
+  echo ""
+  read -p "Use --no-cache for build? [y/N]: " NO_CACHE_RESPONSE
+  NO_CACHE_FLAG=""
+  if [ "$NO_CACHE_RESPONSE" == "y" ] || [ "$NO_CACHE_RESPONSE" == "Y" ]; then
+    NO_CACHE_FLAG="--no-cache"
+    echo "Building with --no-cache"
+  else
+    echo "Building with cache"
+  fi
+  
   # Build jasonacox/pypowerwall-server:x.y.z
   echo "* BUILD ${CONTAINER_NAME}"
-  docker buildx build -f Dockerfile --no-cache --platform linux/amd64,linux/arm64,linux/arm/v7 --push -t ${CONTAINER_NAME} -t jasonacox/pypowerwall-server:latest .
+  docker buildx build -f Dockerfile ${NO_CACHE_FLAG} --platform linux/amd64,linux/arm64,linux/arm/v7 --push -t ${CONTAINER_NAME} -t jasonacox/pypowerwall-server:latest .
   echo ""
 
   # Verify
