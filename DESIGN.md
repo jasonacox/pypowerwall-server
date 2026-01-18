@@ -50,7 +50,7 @@ graph TB
             EXEC[ThreadPoolExecutor<br/>Blocking pypowerwall calls]
         end
         
-        CACHE[(In-Memory Cache<br/>Dict[gateway_id, GatewayStatus])]
+        CACHE[(In-Memory Cache<br/>Dict: gateway_id to GatewayStatus)]
     end
     
     subgraph "External Systems"
@@ -237,7 +237,8 @@ sequenceDiagram
     participant PW as pypowerwall.Powerwall
     participant Cache as Cache Dict
     
-    loop Every 5 seconds
+    Note over Loop,Cache: Polling runs every 5 seconds
+    loop Polling Cycle
         Loop->>GM: _poll_gateways()
         
         par For each gateway
@@ -276,7 +277,8 @@ sequenceDiagram
     CM->>CM: Add to active_connections
     WS-->>C: Connection Accepted
     
-    loop Every 1 second
+    Note over WS,GM: Data pushed every 1 second
+    loop Streaming
         WS->>GM: get_aggregate_data()
         GM-->>WS: AggregateData
         WS->>C: send_json(data)
