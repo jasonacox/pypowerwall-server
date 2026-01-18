@@ -178,13 +178,62 @@ gateways:
 ### Legacy Proxy Compatibility
 
 All existing proxy endpoints work unchanged:
-- `GET /vitals` - Device vitals
-- `GET /aggregates` - Power aggregates
-- `GET /soe` - State of energy
-- `GET /freq` - Frequency data
-- `GET /pod` - Battery pod data
-- `POST /control/reserve` - Set battery reserve
-- ... and all others
+
+**Core Data Endpoints:**
+- `GET /vitals` - Detailed system vitals
+- `GET /aggregates` - Power meter aggregates
+- `GET /soe` - State of energy (battery %)
+- `GET /freq` - Grid frequency data
+- `GET /pod` - Battery pod details
+- `GET /strings` - Solar string data
+- `GET /battery` - Battery information
+
+**Temperature & Environment:**
+- `GET /temps` - All temperature sensors
+- `GET /temps/pw` - Powerwall temperatures only
+
+**Alerts & Status:**
+- `GET /alerts` - System alerts
+- `GET /alerts/pw` - Powerwall alerts only
+
+**Fan Information:**
+- `GET /fans` - All fan status
+- `GET /fans/pw` - Powerwall fans only
+
+**Data Export:**
+- `GET /csv` - CSV format for Telegraf/InfluxDB
+- `GET /csv/v2` - Enhanced CSV format
+
+**TEDAPI Raw Access:**
+- `GET /tedapi` - TEDAPI endpoint list
+- `GET /tedapi/config` - Gateway configuration
+- `GET /tedapi/status` - System status
+- `GET /tedapi/components` - Component details
+- `GET /tedapi/battery` - Battery information
+- `GET /tedapi/controller` - Controller data
+
+**Tesla API Endpoints:**
+- `GET /api/system_status/soe` - State of energy
+- `GET /api/system_status/grid_status` - Grid connection status
+- `GET /api/system_status/grid_faults` - Grid fault log
+- `GET /api/sitemaster` - Sitemaster information
+- `GET /api/meters/aggregates` - Power meters
+- `GET /api/status` - System status
+- `GET /api/site_info` - Site information
+- `GET /api/site_info/site_name` - Site name
+- `GET /api/customer/registration` - Customer registration info
+- `GET /api/troubleshooting/problems` - Problem list
+- `GET /api/auth/toggle/supported` - Auth toggle support
+- `GET /api/networks` - Network configuration
+- `GET /api/system/networks` - System networks
+- `GET /api/powerwalls` - Powerwall device list
+
+**Server Status:**
+- `GET /version` - Server and firmware versions
+- `GET /stats` - Server statistics (uptime, requests, errors)
+
+**Control Operations (requires authentication):**
+- `POST /control/{path}` - Control operations (reserve, mode, etc.)
 
 ### Multi-Gateway Endpoints
 
