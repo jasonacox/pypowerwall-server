@@ -52,6 +52,16 @@ def mock_pypowerwall():
             "POD_nom_energy_remaining": 12000,
             "POD_nom_energy_to_be_charged": 1500,
             "POD_nom_full_pack_energy": 13500
+        },
+        "TEPINV--1234": {
+            "PINV_Fout": 60.0,
+            "PINV_VSplit1": 120.0,
+            "PINV_VSplit2": 120.0
+        },
+        "TESYNC--1234": {
+            "ISLAND_FreqL1_Load": 60.0,
+            "ISLAND_VL1N_Main": 120.0,
+            "METER_X_CTA_I": 10.5
         }
     }
     mock.strings.return_value = {
@@ -146,6 +156,8 @@ def connected_gateway(mock_gateway_manager, mock_pypowerwall):
         version=mock_pypowerwall.version.return_value,
         vitals=mock_pypowerwall.vitals.return_value,
         strings=mock_pypowerwall.strings.return_value,
+        system_status=mock_pypowerwall.system_status.return_value,
+        grid_status=mock_pypowerwall.grid_status.return_value,
         timestamp=1234567890.0
     )
     

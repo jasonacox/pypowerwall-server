@@ -110,8 +110,31 @@ def test_freq_endpoint(client, connected_gateway):
     response = client.get("/freq")
     assert response.status_code == 200
     data = response.json()
-    assert "freq" in data
-    assert data["freq"] == 60.0
+    
+    # Check that we get a comprehensive dictionary, not just a single freq value
+    assert "PW1_name" in data
+    assert "PW1_PINV_Fout" in data
+    assert "PW1_PackagePartNumber" in data
+    assert "PW1_f_out" in data
+    assert "grid_status" in data
+    
+    # Verify values from system_status battery_blocks
+    assert data["PW1_f_out"] == 60.0
+    assert data["PW1_PackagePartNumber"] == "1234567-00-A"
+    assert data["PW1_PackageSerialNumber"] == "TG1234567890AB"
+    
+    # Verify values from vitals TEPINV
+    assert data["PW1_name"] == "TEPINV--1234"
+    assert data["PW1_PINV_Fout"] == 60.0
+    assert data["PW1_PINV_VSplit1"] == 120.0
+    assert data["PW1_PINV_VSplit2"] == 120.0
+    
+    # Verify ISLAND/METER metrics from TESYNC
+    assert "ISLAND_FreqL1_Load" in data
+    assert data["ISLAND_FreqL1_Load"] == 60.0
+    
+    # Verify grid status (numeric: 1 = UP, 0 = DOWN)
+    assert data["grid_status"] == 1
 
 
 def test_pod_endpoint(client, connected_gateway):

@@ -1,6 +1,32 @@
 # Release Notes
 
 ## Version History
+### [0.1.5] - 2026-01-17
+
+**Fixed:**
+- `/freq` endpoint now returns comprehensive frequency, current, voltage, and grid status data
+  - Returns detailed device data from `system_status` (battery_blocks) and `vitals` (TEPINV, TESYNC, TEMSA)
+  - Includes PW device names, frequencies, voltages, package part/serial numbers
+  - Includes power output metrics (p_out, q_out, v_out, f_out, i_out)
+  - Includes ISLAND and METER metrics from Backup Gateway/Switch
+  - Grid status now returns numeric format (1 = UP, 0 = DOWN) matching old proxy behavior
+  - Fallback to simple freq value when detailed data unavailable (e.g., Cloud Mode)
+  - Note: Full device data requires Local/TEDAPI mode; Cloud Mode has limited data
+
+---
+### [0.1.5] - 2026-01-17
+
+**Fixed:**
+- `/freq` endpoint now returns comprehensive frequency, current, voltage, and grid status data
+  - Returns detailed device data from `system_status` (battery_blocks) and `vitals` (TEPINV, TESYNC, TEMSA)
+  - Includes PW device names, frequencies, voltages, package part/serial numbers
+  - Includes power output metrics (p_out, q_out, v_out, f_out, i_out)
+  - Includes ISLAND and METER metrics from Backup Gateway/Switch
+  - Grid status now returns numeric format (1 = UP, 0 = DOWN) matching old proxy behavior
+  - Fallback to simple freq value when detailed data unavailable (e.g., Cloud Mode)
+  - Note: Full device data requires Local/TEDAPI mode; Cloud Mode has limited data
+
+---
 
 ### [0.1.4] - 2026-01-17
 

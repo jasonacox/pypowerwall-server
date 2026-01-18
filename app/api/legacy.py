@@ -174,18 +174,75 @@ async def get_soe():
 
 @router.get("/freq")
 async def get_freq():
-    """Get grid frequency (legacy proxy endpoint).
+    """Get frequency, current, voltage and grid status data (legacy proxy endpoint).
+
+    Returns comprehensive data including:
+    - PW device names, frequencies, voltages
+    - Package part/serial numbers
+    - Power output metrics
+    - ISLAND and METER metrics
+    - Grid status
+
+    Note: Cloud mode may not support all fields. Local/TEDAPI mode provides most data.
 
     Uses graceful degradation: returns cached data even if gateway is temporarily offline.
-    Returns null freq if no data available yet.
     """
     gateway_id = get_default_gateway()
     status = gateway_manager.get_gateway(gateway_id)
 
-    if not status or not status.data or status.data.freq is None:
+    if not status or not status.data:
         return {"freq": None}
 
-    return {"freq": status.data.freq}
+    fcv = {}
+    idx = 1
+
+    # Pull freq, current, voltage of each Powerwall via system_status
+    system_status = status.data.system_status or {}
+    if "battery_blocks" in system_status:
+        for block in system_status["battery_blocks"]:
+            fcv[f"PW{idx}_name"] = None  # Placeholder for vitals
+            fcv[f"PW{idx}_PINV_Fout"] = block.get("f_out")
+            fcv[f"PW{idx}_PINV_VSplit1"] = None  # Placeholder for vitals
+            fcv[f"PW{idx}_PINV_VSplit2"] = None  # Placeholder for vitals
+            fcv[f"PW{idx}_PackagePartNumber"] = block.get("PackagePartNumber")
+            fcv[f"PW{idx}_PackageSerialNumber"] = block.get("PackageSerialNumber")
+            fcv[f"PW{idx}_p_out"] = block.get("p_out")
+            fcv[f"PW{idx}_q_out"] = block.get("q_out")
+            fcv[f"PW{idx}_v_out"] = block.get("v_out")
+            fcv[f"PW{idx}_f_out"] = block.get("f_out")
+            fcv[f"PW{idx}_i_out"] = block.get("i_out")
+            idx += 1
+
+    # Pull freq, current, voltage of each Powerwall via vitals if available
+    vitals = status.data.vitals or {}
+    idx = 1
+    for device, d in vitals.items():
+        if device.startswith("TEPINV"):
+            # PW freq
+            fcv[f"PW{idx}_name"] = device
+            fcv[f"PW{idx}_PINV_Fout"] = d.get("PINV_Fout")
+            fcv[f"PW{idx}_PINV_VSplit1"] = d.get("PINV_VSplit1")
+            fcv[f"PW{idx}_PINV_VSplit2"] = d.get("PINV_VSplit2")
+            idx += 1
+        if device.startswith("TESYNC") or device.startswith("TEMSA"):
+            # Island and Meter Metrics from Backup Gateway or Backup Switch
+            for i, value in d.items():
+                if i.startswith("ISLAND") or i.startswith("METER"):
+                    fcv[i] = value
+
+    # Fallback: if we have freq data but no device-specific data, include it
+    if status.data.freq is not None and not any(k.startswith("PW") for k in fcv.keys()):
+        fcv["freq"] = status.data.freq
+
+    # Add grid status (numeric: 1 = UP, 0 = DOWN)
+    if status.data.grid_status == "UP":
+        fcv["grid_status"] = 1
+    elif status.data.grid_status == "DOWN":
+        fcv["grid_status"] = 0
+    else:
+        fcv["grid_status"] = 0
+
+    return fcv
 
 
 @router.get("/csv")
