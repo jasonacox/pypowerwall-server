@@ -71,8 +71,7 @@ from app.utils.stats_tracker import stats_tracker
 # Configure logging based on PW_DEBUG setting
 log_level = logging.DEBUG if settings.debug else logging.INFO
 logging.basicConfig(
-    level=log_level,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=log_level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -86,11 +85,13 @@ async def lifespan(app: FastAPI):
     logger.info(f"Polling interval (PW_CACHE_EXPIRE): {settings.cache_expire}s")
     logger.info(f"Timeout (PW_TIMEOUT): {settings.timeout}s")
     logger.info(f"Server listening on {settings.server_host}:{settings.server_port}")
-    
+
     # Initialize gateway manager
-    await gateway_manager.initialize(settings.gateways, poll_interval=settings.cache_expire)
+    await gateway_manager.initialize(
+        settings.gateways, poll_interval=settings.cache_expire
+    )
     logger.info(f"Initialized {len(gateway_manager.gateways)} gateway(s)")
-    
+
     for gateway_id, gateway in gateway_manager.gateways.items():
         # Show appropriate connection info based on mode
         if gateway.fleetapi:
@@ -100,9 +101,9 @@ async def lifespan(app: FastAPI):
         else:
             mode_info = gateway.host or "TEDAPI"
         logger.info(f"  - {gateway_id}: {gateway.name} ({mode_info})")
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down PyPowerwall Server...")
     await gateway_manager.shutdown()
@@ -115,7 +116,7 @@ app = FastAPI(
     version=SERVER_VERSION,
     docs_url="/docs",
     redoc_url="/redoc",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Configure CORS
@@ -134,16 +135,18 @@ async def track_requests(request: Request, call_next):
     """Track request statistics for /stats endpoint."""
     try:
         response = await call_next(request)
-        
+
         # Record the request with status code
         # URIs are only tracked for successful requests (200-399)
         # This prevents memory exhaustion from DDOS attacks with random URLs
-        stats_tracker.record_request(request.method, request.url.path, response.status_code)
-        
+        stats_tracker.record_request(
+            request.method, request.url.path, response.status_code
+        )
+
         # Record errors (4xx, 5xx status codes)
         if response.status_code >= 400:
             stats_tracker.record_error()
-        
+
         return response
     except Exception as e:
         # Record error and re-raise
@@ -152,7 +155,7 @@ async def track_requests(request: Request, call_next):
 
 
 # Include API routers
-# NOTE: Order matters! More specific routers (gateways, aggregates) must be 
+# NOTE: Order matters! More specific routers (gateways, aggregates) must be
 # included BEFORE legacy router to prevent the legacy catch-all /api/{path:path}
 # from intercepting requests meant for other routers.
 app.include_router(gateways.router, prefix="/api/gateways", tags=["Gateways"])
@@ -181,14 +184,14 @@ async def favicon():
 @app.get("/", response_class=HTMLResponse, tags=["UI"])
 async def root(request: Request, style: str = None):
     """Serve the Power Flow animation (Tesla Powerwall interface).
-    
+
     Args:
         style: Optional style override (e.g., ?style=clear). If not provided,
                uses PW_STYLE environment variable setting.
     """
     # Use powerflow directory for Power Flow animation
     web_root = str(Path(__file__).parent / "static" / "powerflow")
-    
+
     # Use style from query parameter or fall back to settings (PW_STYLE environment variable)
     # Options: clear, grafana, grafana-dark, solar, white, black, dakboard
     if style:
@@ -197,17 +200,17 @@ async def root(request: Request, style: str = None):
     else:
         style_name = settings.style
         style_file = f"{settings.style}.js"
-    
+
     # Get the index.html using get_static
     request_path = "/index.html"
     fcontent, ftype = get_static(web_root, request_path)
-    
+
     if fcontent:
         # Get gateway status for variable replacement
         gateway_id = None
         if gateway_manager.gateways:
             gateway_id = list(gateway_manager.gateways.keys())[0]
-        
+
         status_data = {"version": "", "git_hash": ""}
         if gateway_id:
             status = gateway_manager.get_gateway(gateway_id)
@@ -216,34 +219,35 @@ async def root(request: Request, style: str = None):
                     "version": status.data.version or "",
                     "git_hash": "",
                 }
-        
+
         # Convert fcontent to string for replacements
         content = fcontent.decode("utf-8")
-        
+
         # Replace template variables
         content = content.replace("{VERSION}", status_data.get("version", ""))
         content = content.replace("{HASH}", status_data.get("git_hash", ""))
         content = content.replace("{EMAIL}", "")
         content = content.replace("{THEME_CLASS}", f"pypowerwall-theme-{style_name}")
-        
+
         # Build absolute API base URL from request
         api_base_url = f"{request.url.scheme}://{request.url.netloc}/api"
-        
+
         # Set up asset prefix for static files - needs trailing slash for webpack chunk loading
         static_asset_prefix = "/static/powerflow/"
         content = content.replace("{STYLE}", static_asset_prefix + style_file)
         content = content.replace("{ASSET_PREFIX}", static_asset_prefix)
         content = content.replace("{API_BASE_URL}", api_base_url)
-        
+
         # Inject JS transformation if style file exists
         style_path = os.path.join(static_path, "powerflow", style_file)
         if os.path.exists(style_path):
             content = inject_js(content, static_asset_prefix + style_file)
-        
+
         return HTMLResponse(content=content)
-    
+
     # Fallback if proxy web files not found
-    return HTMLResponse(content="""
+    return HTMLResponse(
+        content="""
         <!DOCTYPE html>
         <html>
         <head>
@@ -271,7 +275,8 @@ async def root(request: Request, style: str = None):
             </ul>
         </body>
         </html>
-    """)
+    """
+    )
 
 
 @app.get("/console", response_class=HTMLResponse, tags=["UI"])
@@ -280,7 +285,8 @@ async def console():
     index_path = Path(__file__).parent / "static" / "index.html"
     if index_path.exists():
         return HTMLResponse(content=index_path.read_text())
-    return HTMLResponse(content="""
+    return HTMLResponse(
+        content="""
         <!DOCTYPE html>
         <html>
         <head>
@@ -311,7 +317,8 @@ async def console():
             <p><a href="/">← Back to Power Flow</a></p>
         </body>
         </html>
-    """)
+    """
+    )
 
 
 @app.get("/example", response_class=HTMLResponse, tags=["UI"])
@@ -321,7 +328,8 @@ async def example():
     example_path = Path(__file__).parent / "static" / "example.html"
     if example_path.exists():
         return HTMLResponse(content=example_path.read_text())
-    return HTMLResponse(content="""
+    return HTMLResponse(
+        content="""
         <!DOCTYPE html>
         <html>
         <head><title>Example Not Found</title></head>
@@ -330,7 +338,8 @@ async def example():
             <p><a href="/">← Back to Power Flow</a></p>
         </body>
         </html>
-    """)
+    """
+    )
 
 
 @app.get("/favicon-32x32.png", tags=["Static"])
@@ -348,7 +357,7 @@ async def favicon(request: Request):
 @app.get("/[object Object]", include_in_schema=False)
 async def handle_malformed_object_url():
     """Handle malformed [object Object] URLs from vendor.js bug.
-    
+
     Returns empty object to prevent 404 errors in logs.
     """
     return {}
@@ -357,38 +366,40 @@ async def handle_malformed_object_url():
 @app.get("/health", tags=["Health"])
 async def health_check():
     """Health check endpoint with actual gateway status.
-    
+
     Returns:
         - healthy: All gateways online
         - degraded: Some gateways online, some offline
         - unhealthy: All gateways offline
     """
     total = len(gateway_manager.gateways)
-    
+
     if total == 0:
         return {
             "status": "no_gateways",
             "version": SERVER_VERSION,
             "gateways": 0,
-            "gateway_ids": []
+            "gateway_ids": [],
         }
-    
+
     # Count online gateways
     online_count = 0
     gateway_details = []
-    
+
     for gateway_id in gateway_manager.gateways.keys():
         status = gateway_manager.get_gateway(gateway_id)
         is_online = status.online if status else False
         if is_online:
             online_count += 1
-        
-        gateway_details.append({
-            "id": gateway_id,
-            "online": is_online,
-            "error": status.error if status and status.error else None
-        })
-    
+
+        gateway_details.append(
+            {
+                "id": gateway_id,
+                "online": is_online,
+                "error": status.error if status and status.error else None,
+            }
+        )
+
     # Determine overall health
     if online_count == total:
         health_status = "healthy"
@@ -396,7 +407,7 @@ async def health_check():
         health_status = "degraded"
     else:
         health_status = "unhealthy"
-    
+
     return {
         "status": health_status,
         "version": SERVER_VERSION,
@@ -404,16 +415,16 @@ async def health_check():
         "gateways_online": online_count,
         "gateways_offline": total - online_count,
         "gateway_ids": list(gateway_manager.gateways.keys()),
-        "gateway_details": gateway_details
+        "gateway_details": gateway_details,
     }
 
 
 def cli():
     """Command-line interface for pypowerwall-server.
-    
+
     Supports environment variables and command-line arguments for configuration.
     Command-line arguments override environment variables.
-    
+
     Examples:
         pypowerwall-server
         pypowerwall-server --host 192.168.91.1 --gw-pwd mypassword
@@ -422,7 +433,7 @@ def cli():
     """
     import argparse
     import sys
-    
+
     parser = argparse.ArgumentParser(
         description="PyPowerwall Server - Monitor and manage Tesla Powerwall systems",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -443,11 +454,15 @@ Environment Variables:
   PW_CONFIG          Path to JSON configuration file
   
 For more information, visit: https://github.com/jasonacox/pypowerwall-server
-        """
+        """,
     )
-    
-    parser.add_argument("--version", action="version", version=f"pypowerwall-server {SERVER_VERSION}")
-    parser.add_argument("--setup", action="store_true", help="Run Tesla Cloud authentication setup")
+
+    parser.add_argument(
+        "--version", action="version", version=f"pypowerwall-server {SERVER_VERSION}"
+    )
+    parser.add_argument(
+        "--setup", action="store_true", help="Run Tesla Cloud authentication setup"
+    )
     parser.add_argument("--host", help="Powerwall gateway IP address")
     parser.add_argument("--gw-pwd", dest="gw_pwd", help="Gateway Wi-Fi password")
     parser.add_argument("--email", help="Tesla account email")
@@ -458,13 +473,19 @@ For more information, visit: https://github.com/jasonacox/pypowerwall-server
     parser.add_argument("--cache-expire", type=int, help="Polling interval in seconds")
     parser.add_argument("--timeout", type=int, help="Request timeout in seconds")
     parser.add_argument("--port", type=int, help="Server port (default: 8675)")
-    parser.add_argument("--bind-address", dest="bind_address", help="Server bind address (default: 0.0.0.0)")
+    parser.add_argument(
+        "--bind-address",
+        dest="bind_address",
+        help="Server bind address (default: 0.0.0.0)",
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--config", help="Path to JSON configuration file")
-    parser.add_argument("--reload", action="store_true", help="Enable auto-reload for development")
-    
+    parser.add_argument(
+        "--reload", action="store_true", help="Enable auto-reload for development"
+    )
+
     args = parser.parse_args()
-    
+
     # Handle setup mode
     if args.setup:
         print(f"PyPowerwall Server v{SERVER_VERSION} - Cloud Authentication Setup")
@@ -473,10 +494,10 @@ For more information, visit: https://github.com/jasonacox/pypowerwall-server
         print()
         try:
             import subprocess
+
             # Call python -m pypowerwall setup
             result = subprocess.run(
-                [sys.executable, "-m", "pypowerwall", "setup"],
-                check=True
+                [sys.executable, "-m", "pypowerwall", "setup"], check=True
             )
             print()
             print("✓ Setup complete!")
@@ -492,7 +513,7 @@ For more information, visit: https://github.com/jasonacox/pypowerwall-server
             print()
             print(f"✗ Setup failed: {e}")
             sys.exit(1)
-    
+
     # Override environment variables with command-line arguments
     if args.host:
         os.environ["PW_HOST"] = args.host
@@ -520,26 +541,27 @@ For more information, visit: https://github.com/jasonacox/pypowerwall-server
         os.environ["PW_DEBUG"] = "true"
     if args.config:
         os.environ["PW_CONFIG"] = args.config
-    
+
     # Reload settings to pick up CLI overrides
     from app.config import settings
+
     settings.__init__()
-    
+
     # Start server
     import uvicorn
-    
+
     print(f"Starting PyPowerwall Server v{SERVER_VERSION}")
     print(f"Server will listen on http://{settings.server_host}:{settings.server_port}")
     print(f"Console UI: http://{settings.server_host}:{settings.server_port}/console")
     print(f"API Docs: http://{settings.server_host}:{settings.server_port}/docs")
     print()
-    
+
     try:
         uvicorn.run(
             "app.main:app",
             host=settings.server_host,
             port=settings.server_port,
-            reload=args.reload
+            reload=args.reload,
         )
     except KeyboardInterrupt:
         print("\nShutting down...")

@@ -13,14 +13,14 @@ from bs4 import BeautifulSoup
 
 def get_static(web_root: str, fpath: str) -> Tuple[Optional[bytes], Optional[str]]:
     """Get static file content and MIME type.
-    
+
     Args:
         web_root: Root directory for static files
         fpath: Request path (e.g., "/index.html" or "/")
-        
+
     Returns:
         Tuple of (file_content, mime_type) or (None, None) if not found
-        
+
     Example:
         content, mime = get_static("/var/www", "/index.html")
         if content:
@@ -30,9 +30,9 @@ def get_static(web_root: str, fpath: str) -> Tuple[Optional[bytes], Optional[str
         fpath = "index.html"
     if fpath.startswith("/"):
         fpath = fpath[1:]
-    
+
     freq = os.path.join(web_root, fpath)
-    
+
     if os.path.exists(freq):
         # Determine content type
         if freq.lower().endswith(".js"):
@@ -61,34 +61,34 @@ def get_static(web_root: str, fpath: str) -> Tuple[Optional[bytes], Optional[str
             ftype = "application/xml"
         else:
             ftype = "text/plain"
-        
+
         with open(freq, "rb") as f:
             return f.read(), ftype
-    
+
     return None, None
 
 
 def inject_js(htmlsrc: str, *args: str) -> str:
     """Inject JavaScript files into HTML content.
-    
+
     Appends <script> tags to the HTML body for each provided JavaScript path.
-    
+
     Args:
         htmlsrc: HTML source content as string
         *args: JavaScript file paths to inject (e.g., "/static/powerflow/clear.js")
-        
+
     Returns:
         Modified HTML with script tags appended to body
-        
+
     Example:
         html = inject_js(html_content, "/static/app.js", "/static/utils.js")
     """
     soup = BeautifulSoup(htmlsrc, "html.parser")
-    
+
     for fpath in args:
         script = soup.new_tag("script")
         script["type"] = "text/javascript"
         script["src"] = fpath
         soup.body.append(script)
-    
+
     return str(soup)

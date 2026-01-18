@@ -2,7 +2,7 @@
 
 A high-performance FastAPI-based server for monitoring and managing Tesla Powerwall systems. Designed as the next-generation evolution of the [pypowerwall proxy](https://github.com/jasonacox/pypowerwall/tree/main/proxy#pypowerwall-proxy-server) with multi-gateway support, real-time monitoring, and a beautiful modern UI.
 
-<img width="934" height="876" alt="image" src="https://github.com/user-attachments/assets/9fb8b909-1240-4b73-a11c-a23bda307d6b" />
+<img alt="PyPowerwall Server Console" src="https://github.com/user-attachments/assets/9fb8b909-1240-4b73-a11c-a23bda307d6b" />
 
 ## Features
 
@@ -187,6 +187,7 @@ All existing proxy endpoints work unchanged:
 - `GET /pod` - Battery pod details
 - `GET /strings` - Solar string data
 - `GET /battery` - Battery information
+- `GET /json` - Combined metrics and status (JSON)
 
 **Temperature & Environment:**
 - `GET /temps` - All temperature sensors

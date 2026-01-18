@@ -2,6 +2,22 @@
 
 ## Version History
 
+### [0.1.4] - 2026-01-17
+
+**Added:**
+- Comprehensive DESIGN.md documentation with Mermaid architecture diagrams
+- `/json` endpoint for combined metrics (grid, home, solar, battery, soe, grid_status, reserve, time_remaining, energy data, strings)
+- `PW_NEG_SOLAR` environment variable support for negative solar correction
+
+**Improved:**
+- Centralized negative solar correction at fetch time in gateway_manager
+  - Eliminates duplicate code across `/aggregates`, `/csv`, `/csv/v2`, `/json` endpoints
+  - Removes unnecessary `deepcopy` on every request
+  - All endpoints now automatically get consistent corrected data
+- Moved inline `import json` statements to module-level imports in gateway_manager
+
+---
+
 ### [0.1.3] - 2026-01-17
 
 **Added:**

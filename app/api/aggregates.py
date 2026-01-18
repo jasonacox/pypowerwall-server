@@ -41,10 +41,10 @@ router = APIRouter()
 async def get_aggregate():
     """
     Get complete aggregated data from all gateways.
-    
+
     Returns all combined metrics including battery levels, power flows,
     and capacity information from all online gateways.
-    
+
     Response includes:
         - total_battery_percent: Average battery level (%)
         - total_battery_capacity: Combined capacity (Wh)
@@ -63,10 +63,10 @@ async def get_aggregate():
 async def get_aggregate_power():
     """
     Get aggregated power flows from all gateways.
-    
+
     Returns simplified power flow data suitable for real-time monitoring
     and graphing. All values in watts (W).
-    
+
     Response includes:
         - site: Total site power (grid interaction)
         - battery: Total battery power (+ charging, - discharging)
@@ -82,7 +82,7 @@ async def get_aggregate_power():
         "load": data.total_load_power,
         "solar": data.total_solar_power,
         "grid": data.total_grid_power,
-        "timestamp": data.timestamp
+        "timestamp": data.timestamp,
     }
 
 
@@ -90,22 +90,22 @@ async def get_aggregate_power():
 async def get_aggregate_soe():
     """
     Get average state of energy (battery level) across all gateways.
-    
+
     Returns simplified battery status useful for quick status checks
     and alerting systems.
-    
+
     Response includes:
         - percentage: Average battery level across all online gateways (0-100%)
         - num_gateways: Number of online gateways contributing to average
         - timestamp: Data timestamp
-    
+
     Note: Offline gateways are excluded from the percentage calculation.
     """
     data = gateway_manager.get_aggregate_data()
     return {
         "percentage": data.total_battery_percent,
         "num_gateways": data.num_online,
-        "timestamp": data.timestamp
+        "timestamp": data.timestamp,
     }
 
 
@@ -113,10 +113,10 @@ async def get_aggregate_soe():
 async def get_aggregate_battery():
     """
     Get aggregated battery capacity and charge information.
-    
+
     Returns battery-specific metrics useful for capacity planning
     and charge state monitoring.
-    
+
     Response includes:
         - total_capacity: Combined battery capacity in Wh
         - battery_percent: Average state of charge (0-100%)
@@ -132,5 +132,5 @@ async def get_aggregate_battery():
         "battery_power": data.total_battery_power,
         "num_gateways": data.num_gateways,
         "num_online": data.num_online,
-        "timestamp": data.timestamp
+        "timestamp": data.timestamp,
     }

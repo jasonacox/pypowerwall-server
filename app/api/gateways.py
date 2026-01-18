@@ -42,95 +42,103 @@ async def get_gateway(gateway_id: str):
 @router.get("/{gateway_id}/vitals")
 async def get_gateway_vitals(gateway_id: str):
     """Get vitals for a specific gateway.
-    
+
     Uses graceful degradation: returns cached data even if gateway is temporarily offline.
     """
     status = gateway_manager.get_gateway(gateway_id)
     if not status:
         raise HTTPException(status_code=404, detail=f"Gateway {gateway_id} not found")
-    
+
     if not status.data:
         return {}
-    
+
     return status.data.vitals or {}
 
 
 @router.get("/{gateway_id}/strings")
 async def get_gateway_strings(gateway_id: str):
     """Get strings for a specific gateway.
-    
+
     Uses graceful degradation: returns cached data even if gateway is temporarily offline.
     """
     status = gateway_manager.get_gateway(gateway_id)
     if not status:
         raise HTTPException(status_code=404, detail=f"Gateway {gateway_id} not found")
-    
+
     if not status.data:
         return {}
-    
+
     return status.data.strings or {}
 
 
 @router.get("/{gateway_id}/aggregates")
 async def get_gateway_aggregates(gateway_id: str):
     """Get aggregates for a specific gateway.
-    
+
     Uses graceful degradation: returns cached data even if gateway is temporarily offline.
     """
     status = gateway_manager.get_gateway(gateway_id)
     if not status:
         raise HTTPException(status_code=404, detail=f"Gateway {gateway_id} not found")
-    
+
     if not status.data:
         return {}
-    
+
     return status.data.aggregates or {}
 
 
 @router.get("/{gateway_id}/api/{path:path}")
 async def proxy_gateway_api(gateway_id: str, path: str):
     """Proxy API calls to a specific gateway.
-    
+
     Args:
         gateway_id: Gateway identifier
         path: API path to proxy (e.g., "meters/aggregates")
-        
+
     Returns:
         JSON response from the gateway API
-        
+
     Raises:
         HTTPException 404: Gateway not found
         HTTPException 503: API call failed or gateway offline
     """
     if gateway_id not in gateway_manager.gateways:
         raise HTTPException(status_code=404, detail=f"Gateway {gateway_id} not found")
-    
-    result = await gateway_manager.call_api(gateway_id, 'poll', f"/api/{path}", timeout=10.0)
+
+    result = await gateway_manager.call_api(
+        gateway_id, "poll", f"/api/{path}", timeout=10.0
+    )
     if result is None:
-        raise HTTPException(status_code=503, detail="API call failed or gateway offline")
+        raise HTTPException(
+            status_code=503, detail="API call failed or gateway offline"
+        )
     return result
 
 
 @router.post("/{gateway_id}/api/{path:path}")
 async def proxy_gateway_api_post(gateway_id: str, path: str, data: dict):
     """Proxy POST requests to a specific gateway.
-    
+
     Args:
         gateway_id: Gateway identifier
         path: API path to proxy
         data: JSON payload to send
-        
+
     Returns:
         JSON response from the gateway API
-        
+
     Raises:
         HTTPException 404: Gateway not found
         HTTPException 503: API call failed or gateway offline
     """
     if gateway_id not in gateway_manager.gateways:
         raise HTTPException(status_code=404, detail=f"Gateway {gateway_id} not found")
-    
-    result = await gateway_manager.call_api(gateway_id, 'post', f"/api/{path}", data, timeout=10.0)
+
+    result = await gateway_manager.call_api(
+        gateway_id, "post", f"/api/{path}", data, timeout=10.0
+    )
     if result is None:
-        raise HTTPException(status_code=503, detail="API call failed or gateway offline")
+        raise HTTPException(
+            status_code=503, detail="API call failed or gateway offline"
+        )
     return result

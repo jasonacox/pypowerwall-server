@@ -54,30 +54,30 @@ logger = logging.getLogger(__name__)
 class ConnectionManager:
     """
     Manages WebSocket connections for broadcasting data.
-    
+
     Maintains a list of active WebSocket connections and provides methods
     for connecting, disconnecting, and broadcasting messages to all clients.
-    
+
     Automatically cleans up dead connections during broadcast to prevent
     memory leaks from clients that disconnect without proper close handshake.
     """
-    
+
     def __init__(self):
         self.active_connections: list[WebSocket] = []
-    
+
     async def connect(self, websocket: WebSocket):
         """Accept and register a new WebSocket connection."""
         await websocket.accept()
         self.active_connections.append(websocket)
-    
+
     def disconnect(self, websocket: WebSocket):
         """Remove a WebSocket connection from active list."""
         self.active_connections.remove(websocket)
-    
+
     async def broadcast(self, message: dict):
         """
         Broadcast message to all connected clients.
-        
+
         Automatically detects and removes dead connections that fail to
         receive data. This handles cases where clients disconnect without
         sending a proper WebSocket close frame.
@@ -89,7 +89,7 @@ class ConnectionManager:
             except Exception as e:
                 logger.error(f"Error sending to websocket: {e}")
                 dead_connections.append(connection)
-        
+
         # Clean up dead connections
         for connection in dead_connections:
             if connection in self.active_connections:
@@ -103,13 +103,13 @@ manager = ConnectionManager()
 async def websocket_aggregate(websocket: WebSocket):
     """
     Stream aggregated data from all gateways to client.
-    
+
     WebSocket endpoint: /ws/aggregate
-    
+
     Pushes combined battery, power, and energy data from all configured
     gateways every second. Useful for dashboard displays showing total
     system capacity and performance.
-    
+
     Data includes:
         - total_battery_percent: Combined battery level
         - total_battery_capacity: Total kWh capacity
@@ -135,16 +135,16 @@ async def websocket_aggregate(websocket: WebSocket):
 async def websocket_gateway(websocket: WebSocket, gateway_id: str):
     """
     Stream data for a specific gateway to client.
-    
+
     WebSocket endpoint: /ws/gateway/{gateway_id}
-    
+
     Pushes complete gateway status including vitals, aggregates, battery
     level, and online status every second. Use this for monitoring a
     specific Powerwall system in detail.
-    
+
     Args:
         gateway_id: Gateway identifier (e.g., "default", "home", "cabin")
-        
+
     Returns error message if gateway_id is not found or goes offline.
     """
     await manager.connect(websocket)

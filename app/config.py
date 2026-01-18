@@ -65,6 +65,7 @@ Environment Variables (Proxy Compatible):
         PW_CACHE_FILE        - Cache file path (default: auto - uses PW_AUTH_PATH/.powerwall or /tmp/.powerwall)
         PW_SITEID            - Tesla site ID for multi-site accounts (default: none)
         PW_CONTROL_SECRET    - Enable control commands (default: none/disabled)
+        PW_NEG_SOLAR         - Allow negative solar values "yes"/"no" (default: "no")
         PROXY_BASE_URL       - Base URL for reverse proxy (default: "/")
 
 Connection Modes:
@@ -172,59 +173,76 @@ from pydantic_settings import BaseSettings
 logger = logging.getLogger(__name__)
 
 # Server version
-SERVER_VERSION = "0.1.3"
+SERVER_VERSION = "0.1.4"
 
 
 class GatewayConfig(BaseSettings):
     """Configuration for a single Powerwall gateway.
-    
+
     Auth modes:
     - TEDAPI: host + gw_pwd (local gateway access via 192.168.91.1)
     - Cloud: email + authpath (uses .pypowerwall.auth and .pypowerwall.site files)
     """
+
     id: str
     name: str
     host: Optional[str] = None
     gw_pwd: Optional[str] = None  # Gateway Wi-Fi password for TEDAPI mode
     email: Optional[str] = None
-    authpath: Optional[str] = None  # Path to .pypowerwall.auth and .pypowerwall.site files
+    authpath: Optional[
+        str
+    ] = None  # Path to .pypowerwall.auth and .pypowerwall.site files
     timezone: str = "America/Los_Angeles"
     cloud_mode: bool = False
     fleetapi: bool = False
-    
+
     model_config = {"env_prefix": ""}
 
 
 class Settings(BaseSettings):
     """Application settings - Compatible with pypowerwall proxy environment variables."""
-    
+
     # Server configuration (maps to proxy settings)
     server_host: str = Field(default="0.0.0.0", alias="PW_BIND_ADDRESS")
     server_port: int = Field(default=8675, alias="PW_PORT")
     debug: bool = Field(default=False, alias="PW_DEBUG")
-    
+
     # Powerwall connection settings
     pw_host: Optional[str] = Field(default=None, alias="PW_HOST")
     pw_gw_pwd: Optional[str] = Field(default=None, alias="PW_GW_PWD")
-    pw_password: Optional[str] = Field(default=None, alias="PW_PASSWORD")  # Legacy PW2 local access
+    pw_password: Optional[str] = Field(
+        default=None, alias="PW_PASSWORD"
+    )  # Legacy PW2 local access
     pw_email: Optional[str] = Field(default=None, alias="PW_EMAIL")
     pw_timezone: str = Field(default="America/Los_Angeles", alias="PW_TIMEZONE")
-    
+
     # Proxy settings
-    cache_expire: int = Field(default=5, alias="PW_CACHE_EXPIRE")  # Polling frequency in seconds
-    browser_cache: int = Field(default=0, alias="PW_BROWSER_CACHE")  # Browser cache time in seconds
-    timeout: int = Field(default=10, alias="PW_TIMEOUT")  # Pypowerwall timeout in seconds
-    pool_maxsize: int = Field(default=15, alias="PW_POOL_MAXSIZE")  # Connection pool size
+    cache_expire: int = Field(
+        default=5, alias="PW_CACHE_EXPIRE"
+    )  # Polling frequency in seconds
+    browser_cache: int = Field(
+        default=0, alias="PW_BROWSER_CACHE"
+    )  # Browser cache time in seconds
+    timeout: int = Field(
+        default=10, alias="PW_TIMEOUT"
+    )  # Pypowerwall timeout in seconds
+    pool_maxsize: int = Field(
+        default=15, alias="PW_POOL_MAXSIZE"
+    )  # Connection pool size
     https_mode: bool = Field(default=False, alias="PW_HTTPS")
-    
+
     # Network robustness settings
-    suppress_network_errors: bool = Field(default=False, alias="PW_SUPPRESS_NETWORK_ERRORS")
-    network_error_rate_limit: int = Field(default=5, alias="PW_NETWORK_ERROR_RATE_LIMIT")
+    suppress_network_errors: bool = Field(
+        default=False, alias="PW_SUPPRESS_NETWORK_ERRORS"
+    )
+    network_error_rate_limit: int = Field(
+        default=5, alias="PW_NETWORK_ERROR_RATE_LIMIT"
+    )
     fail_fast: bool = Field(default=False, alias="PW_FAIL_FAST")
     graceful_degradation: bool = Field(default=True, alias="PW_GRACEFUL_DEGRADATION")
     health_check: bool = Field(default=True, alias="PW_HEALTH_CHECK")
     cache_ttl: int = Field(default=30, alias="PW_CACHE_TTL")  # Max age for cached data
-    
+
     # UI and advanced settings
     style: str = Field(default="clear", alias="PW_STYLE")
     pw_authpath: Optional[str] = Field(default=None, alias="PW_AUTH_PATH")
@@ -233,24 +251,24 @@ class Settings(BaseSettings):
     siteid: Optional[str] = Field(default=None, alias="PW_SITEID")
     control_secret: Optional[str] = Field(default=None, alias="PW_CONTROL_SECRET")
     proxy_base_url: str = Field(default="/", alias="PROXY_BASE_URL")
-    
+    neg_solar: bool = Field(
+        default=False, alias="PW_NEG_SOLAR"
+    )  # Allow negative solar values (default: no)
+
     # CORS configuration
     cors_origins: List[str] = Field(default=["*"], alias="CORS_ORIGINS")
-    
+
     # Gateway configuration
     gateways: List[GatewayConfig] = Field(default_factory=list)
-    
+
     # Computed properties
     @property
     def control_enabled(self) -> bool:
         """Control features enabled if PW_CONTROL_SECRET is set."""
         return bool(self.control_secret)
-    
-    model_config = {
-        "env_prefix": "",
-        "case_sensitive": False
-    }
-    
+
+    model_config = {"env_prefix": "", "case_sensitive": False}
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Set default cache_file based on auth path if not explicitly provided
@@ -262,7 +280,7 @@ class Settings(BaseSettings):
                 # Fall back to /tmp if no auth path
                 self.cache_file = "/tmp/.powerwall"
         self._initialize_gateways()
-    
+
     def _initialize_gateways(self):
         """Initialize gateway configurations from environment variables."""
         # Try to load from PW_GATEWAYS JSON
@@ -274,7 +292,7 @@ class Settings(BaseSettings):
                 return
             except Exception as e:
                 logger.error(f"Error parsing PW_GATEWAYS: {e}")
-        
+
         # Fall back to single gateway mode (legacy compatibility)
         if self.pw_host or self.pw_email:
             self.gateways = [
@@ -286,7 +304,7 @@ class Settings(BaseSettings):
                     email=self.pw_email,
                     authpath=self.pw_authpath,
                     timezone=self.pw_timezone,
-                    cloud_mode=bool(self.pw_email and not self.pw_host)
+                    cloud_mode=bool(self.pw_email and not self.pw_host),
                 )
             ]
 
