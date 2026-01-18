@@ -1,5 +1,10 @@
 # PyPowerwall Server
 
+[![License](https://img.shields.io/github/license/jasonacox/pypowerwall-server)](https://img.shields.io/github/license/jasonacox/pypowerwall-server)
+[![PyPI version](https://badge.fury.io/py/pypowerwall-server.svg)](https://badge.fury.io/py/pypowerwall-server)
+[![Python Version](https://img.shields.io/pypi/pyversions/pypowerwall-server)](https://img.shields.io/pypi/pyversions/pypowerwall-server)
+[![PyPI Downloads](https://static.pepy.tech/badge/pypowerwall-server/month)](https://static.pepy.tech/badge/pypowerwall-server/month)
+
 A high-performance FastAPI-based server for monitoring and managing Tesla Powerwall systems. Designed as the next-generation evolution of the [pypowerwall proxy](https://github.com/jasonacox/pypowerwall/tree/main/proxy#pypowerwall-proxy-server) with multi-gateway support, real-time monitoring, and a beautiful modern UI.
 
 <img alt="PyPowerwall Server Console" src="https://github.com/user-attachments/assets/3f68b9a1-be45-4cad-9349-20ee3a835c5a" />
