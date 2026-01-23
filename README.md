@@ -21,6 +21,13 @@ A high-performance FastAPI-based server for monitoring and managing Tesla Powerw
 
 ## Quick Start
 
+### Requirments
+
+* You need the Powerwall/Gateway Password (typically found on the QR sticker - behind front panel of PW3 - see [picture](https://github.com/user-attachments/assets/6cf11830-fa70-4ebb-9be7-7d0a5e2db4dc))
+* Your computer must be connected to the Powerwall WiFi Access point (it will be IP address 192.168.91.1)
+
+For instructions on setting up a Raspberry Pi with Powerwall WiFi + LAN, see: https://github.com/jasonacox/Powerwall-Dashboard/discussions/607.
+
 ### Docker (Recommended)
 
 ```bash
