@@ -1,6 +1,32 @@
 # Release Notes
 
 ## Version History
+### [0.1.8] - 2026-01-22
+
+**Fixed:**
+- Battery percentage scaling now consistently uses Tesla App formula across all endpoints:
+  - `/api/system_status/soe` now applies Tesla scaling: `(raw / 0.95) - (5 / 0.95)` instead of old proxy's `raw * 0.95`
+  - Console dashboard battery charge and backup reserve displays use Tesla scaling
+  - Scaling properly reserves bottom 5%: raw 5% → 0% displayed, raw 100% → 100% displayed
+  - All battery percentage displays now match Tesla App behavior
+- Grid status display on console dashboard:
+  - Shows "Grid Down" with orange X (✕) when grid is down
+  - Grid status checked from cached `grid_status` field before power-based fallback
+  - Real-time grid status updates via background polling
+- Legacy API endpoint compatibility improvements:
+  - `/api/status` returns all required fields (din, git_hash, commission_count, device_type, teg_type, sync_type, cellular_disabled, can_reboot)
+  - `/api/site_info` includes complete grid_code structure and energy/power capacity fields
+  - `/api/site_info/site_name` returns null instead of fake default
+  - `/api/operation` added with direct API call to return raw (unscaled) backup_reserve_percent
+  - `/pod` endpoint properly matches TEPOD vitals to battery blocks by serial number
+  - `/api/system_status/grid_status` serves from cached grid_status_detail with full API response
+
+**Changed:**
+- Background polling now calls `pw.get_reserve(scale=False)` to store raw reserve percentage
+- Reserve percentage from API remains unscaled (0-100), only display values are scaled
+- Grid status polling enhanced to capture both simplified status and detailed API response
+
+---
 ### [0.1.7] - 2026-01-18
 
 **Added:**

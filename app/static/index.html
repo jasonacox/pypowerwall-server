@@ -296,6 +296,7 @@
         
         .arrow-up { color: var(--accent-green); }
         .arrow-down { color: var(--accent-orange); }
+        .grid-down { color: var(--accent-orange); font-weight: bold; }
         
         /* Alerts Card */
         .alerts-card {
@@ -1222,7 +1223,12 @@
             const batteryEl = document.getElementById('battery-power');
             batteryEl.innerHTML = `${batteryData.value}<span class="energy-arrow ${batteryData.arrowClass}">${batteryData.arrow}</span>`;
             
-            const batteryLevel = data.total_battery_percent ? data.total_battery_percent.toFixed(1) : '--';
+            // Scale battery level using Tesla App formula: (level / 0.95) - (5 / 0.95)
+            let batteryLevel = '--';
+            if (data.total_battery_percent != null) {
+                const rawLevel = data.total_battery_percent;
+                batteryLevel = ((rawLevel / 0.95) - (5 / 0.95)).toFixed(1);
+            }
             document.getElementById('battery-level').textContent = `${batteryLevel}%`;
             addTrendPoint('battery', (data.total_battery_power || 0) / 1000);
             drawTrendChart('battery-trend', trendData.battery, '#3fb950', true);
@@ -1236,10 +1242,23 @@
             // Grid
             const gridData = formatPowerWithDirection(data.total_grid_power || 0, 'grid');
             const gridEl = document.getElementById('grid-power');
-            gridEl.innerHTML = `${gridData.value}<span class="energy-arrow ${gridData.arrowClass}">${gridData.arrow}</span>`;
             
-            const gridStatus = (data.total_grid_power || 0) > 10 ? 'Importing' : 
-                              (data.total_grid_power || 0) < -10 ? 'Exporting' : 'Idle';
+            // Show red X when grid is down, otherwise show power with arrows
+            if (data.grid_status === 'DOWN') {
+                gridEl.innerHTML = `${gridData.value}<span class="energy-arrow grid-down"> ✕</span>`;
+            } else {
+                gridEl.innerHTML = `${gridData.value}<span class="energy-arrow ${gridData.arrowClass}">${gridData.arrow}</span>`;
+            }
+            
+            // Check actual grid status first, then fallback to power-based status
+            let gridStatus = 'Idle';
+            if (data.grid_status === 'DOWN') {
+                gridStatus = 'Grid Down';
+            } else if ((data.total_grid_power || 0) > 10) {
+                gridStatus = 'Importing';
+            } else if ((data.total_grid_power || 0) < -10) {
+                gridStatus = 'Exporting';
+            }
             document.getElementById('grid-status').textContent = gridStatus;
             addTrendPoint('grid', (data.total_grid_power || 0) / 1000);
             drawTrendChart('grid-trend', trendData.grid, '#8b949e', true);
@@ -1569,7 +1588,12 @@
                 }
                 
                 const timeRemaining = pod.time_remaining_hours ? pod.time_remaining_hours.toFixed(1) : '--';
-                const backupReserve = pod.backup_reserve_percent ? pod.backup_reserve_percent.toFixed(1) : '--';
+                // Scale backup reserve using Tesla App formula: (reserve / 0.95) - (5 / 0.95)
+                let backupReserve = '--';
+                if (pod.backup_reserve_percent != null) {
+                    const rawReserve = parseFloat(pod.backup_reserve_percent);
+                    backupReserve = ((rawReserve / 0.95) - (5 / 0.95)).toFixed(1);
+                }
                 
                 html += '<div class="powerwall-summary">';
                 

@@ -471,10 +471,25 @@ class GatewayManager:
             except (asyncio.TimeoutError, Exception) as e:
                 logger.debug(f"Grid status not available for {gateway_id}: {e}")
 
+            # Try to get detailed grid status from API (for /api/system_status/grid_status endpoint)
+            try:
+                grid_status_response = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        self._executor, pw.poll, "/api/system_status/grid_status"
+                    ),
+                    timeout=5.0,
+                )
+                if isinstance(grid_status_response, str):
+                    data.grid_status_detail = json.loads(grid_status_response)
+                else:
+                    data.grid_status_detail = grid_status_response
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.debug(f"Grid status detail not available for {gateway_id}: {e}")
+
             # Try to get reserve and time remaining (for caching)
             try:
                 data.reserve = await asyncio.wait_for(
-                    loop.run_in_executor(self._executor, pw.get_reserve), timeout=5.0
+                    loop.run_in_executor(self._executor, lambda: pw.get_reserve(scale=False)), timeout=5.0
                 )
                 data.time_remaining = await asyncio.wait_for(
                     loop.run_in_executor(self._executor, pw.get_time_remaining),
@@ -887,6 +902,11 @@ class GatewayManager:
         # Grid power is the site power (positive = importing, negative = exporting)
         # The "site" meter in aggregates measures grid interaction directly
         aggregate.total_grid_power = aggregate.total_site_power
+
+        # Get grid status from default gateway if available
+        default_gateway = self.cache.get("default")
+        if default_gateway and default_gateway.data:
+            aggregate.grid_status = default_gateway.data.grid_status
 
         return aggregate
 

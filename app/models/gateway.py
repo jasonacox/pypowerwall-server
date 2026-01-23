@@ -113,6 +113,7 @@ class PowerwallData(BaseModel):
     alerts: Optional[List[str]] = None  # Active alert codes
     temps: Optional[Dict[str, Any]] = None  # Temperature readings
     grid_status: Optional[str] = None  # "UP", "DOWN", etc.
+    grid_status_detail: Optional[Dict[str, Any]] = None  # Full /api/system_status/grid_status response
     reserve: Optional[float] = None  # Backup reserve percentage
     time_remaining: Optional[float] = None  # Hours of backup remaining
     system_status: Optional[Dict[str, Any]] = None  # Full system status for /pod
@@ -233,6 +234,7 @@ class AggregateData(BaseModel):
     total_load_power: float = 0.0
     total_solar_power: float = 0.0
     total_grid_power: float = 0.0
+    grid_status: Optional[str] = None  # "UP", "DOWN", etc. from primary gateway
     num_gateways: int = 0
     num_online: int = 0
     gateways: Dict[str, GatewayStatus] = Field(default_factory=dict)

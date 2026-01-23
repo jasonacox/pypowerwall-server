@@ -602,45 +602,43 @@ async def get_pod():
             pod[f"PW{idx}_version"] = block.get("version")
             idx += 1
 
-    # Augment with Vitals Data if available
+    # Augment with Vitals Data if available - match POD data to battery blocks by serial number
     if status.data.vitals:
         vitals = status.data.vitals
-        idx = 1
+        
+        # Build a map of serial numbers to vitals data
+        tepod_map = {}
         for device in vitals:
-            v = vitals[device]
             if device.startswith("TEPOD"):
-                pod[f"PW{idx}_name"] = device
-                pod[f"PW{idx}_POD_ActiveHeating"] = int(v.get("POD_ActiveHeating") or 0)
-                pod[f"PW{idx}_POD_ChargeComplete"] = int(
-                    v.get("POD_ChargeComplete") or 0
-                )
-                pod[f"PW{idx}_POD_ChargeRequest"] = int(v.get("POD_ChargeRequest") or 0)
-                pod[f"PW{idx}_POD_DischargeComplete"] = int(
-                    v.get("POD_DischargeComplete") or 0
-                )
-                pod[f"PW{idx}_POD_PermanentlyFaulted"] = int(
-                    v.get("POD_PermanentlyFaulted") or 0
-                )
-                pod[f"PW{idx}_POD_PersistentlyFaulted"] = int(
-                    v.get("POD_PersistentlyFaulted") or 0
-                )
-                pod[f"PW{idx}_POD_enable_line"] = int(v.get("POD_enable_line") or 0)
-                pod[f"PW{idx}_POD_available_charge_power"] = v.get(
-                    "POD_available_charge_power"
-                )
-                pod[f"PW{idx}_POD_available_dischg_power"] = v.get(
-                    "POD_available_dischg_power"
-                )
-                pod[f"PW{idx}_POD_nom_energy_remaining"] = v.get(
-                    "POD_nom_energy_remaining"
-                )
-                pod[f"PW{idx}_POD_nom_energy_to_be_charged"] = v.get(
-                    "POD_nom_energy_to_be_charged"
-                )
-                pod[f"PW{idx}_POD_nom_full_pack_energy"] = v.get(
-                    "POD_nom_full_pack_energy"
-                )
-                idx += 1
+                v = vitals[device]
+                serial = v.get("serialNumber")
+                if serial:
+                    tepod_map[serial] = (device, v)
+        
+        # Match TEPOD vitals to battery blocks by serial number
+        if system_status and "battery_blocks" in system_status:
+            for idx, block in enumerate(system_status["battery_blocks"], 1):
+                serial = block.get("PackageSerialNumber")
+                if serial and serial in tepod_map:
+                    device_name, v = tepod_map[serial]
+                    # Populate POD vitals fields from TEPOD entry
+                    pod[f"PW{idx}_name"] = device_name
+                    pod[f"PW{idx}_POD_ActiveHeating"] = int(v.get("POD_ActiveHeating", 0))
+                    pod[f"PW{idx}_POD_ChargeComplete"] = int(v.get("POD_ChargeComplete", 0))
+                    pod[f"PW{idx}_POD_ChargeRequest"] = int(v.get("POD_ChargeRequest", 0))
+                    pod[f"PW{idx}_POD_DischargeComplete"] = int(v.get("POD_DischargeComplete", 0))
+                    pod[f"PW{idx}_POD_PermanentlyFaulted"] = int(v.get("POD_PermanentlyFaulted", 0))
+                    pod[f"PW{idx}_POD_PersistentlyFaulted"] = int(v.get("POD_PersistentlyFaulted", 0))
+                    pod[f"PW{idx}_POD_enable_line"] = int(v.get("POD_enable_line", 0))
+                    pod[f"PW{idx}_POD_available_charge_power"] = v.get("POD_available_charge_power")
+                    pod[f"PW{idx}_POD_available_dischg_power"] = v.get("POD_available_dischg_power")
+                    # Energy values from vitals (may override system_status values)
+                    if v.get("POD_nom_energy_remaining") is not None:
+                        pod[f"PW{idx}_POD_nom_energy_remaining"] = v.get("POD_nom_energy_remaining")
+                    if v.get("POD_nom_energy_to_be_charged") is not None:
+                        pod[f"PW{idx}_POD_nom_energy_to_be_charged"] = v.get("POD_nom_energy_to_be_charged")
+                    if v.get("POD_nom_full_pack_energy") is not None:
+                        pod[f"PW{idx}_POD_nom_full_pack_energy"] = v.get("POD_nom_full_pack_energy")
 
     # Aggregate data from cached system_status
     if system_status:
@@ -760,8 +758,8 @@ async def get_api_soe():
 
     level = status.data.soe
     if level is not None:
-        # Scale to 95% like the original proxy
-        level = level * 0.95
+        # Scale using Tesla App formula: reserves bottom 5%, maps 5%->0% and 100%->100%
+        level = (level / 0.95) - (5 / 0.95)
 
     return {"percentage": level}
 
@@ -770,19 +768,32 @@ async def get_api_soe():
 async def get_api_grid_status():
     """Get grid status - API format (legacy proxy endpoint).
 
+    Returns the full grid status response from the Powerwall API including
+    grid_status and grid_services_active fields.
+
     Uses graceful degradation: returns cached data even if gateway is temporarily offline.
     """
     gateway_id = get_default_gateway()
     status = gateway_manager.get_gateway(gateway_id)
 
     if not status or not status.data:
-        return {"grid_status": "Unknown"}
+        return {"grid_status": "Unknown", "grid_services_active": None}
 
-    # Try to get grid status from vitals or aggregates
-    vitals = status.data.vitals or {}
-    grid_status = vitals.get("grid_status", "SystemGridConnected")
+    # Return cached grid_status_detail if available
+    if status.data.grid_status_detail:
+        return status.data.grid_status_detail
 
-    return {"grid_status": grid_status}
+    # Fallback to simplified grid_status if detailed version not available
+    if status.data.grid_status:
+        # Map simplified status to API format
+        grid_status_map = {
+            "UP": "SystemGridConnected",
+            "DOWN": "SystemIslandedActive"
+        }
+        api_status = grid_status_map.get(status.data.grid_status, status.data.grid_status)
+        return {"grid_status": api_status, "grid_services_active": None}
+
+    return {"grid_status": "Unknown", "grid_services_active": None}
 
 
 @router.get("/api/sitemaster")
@@ -827,18 +838,49 @@ async def get_api_status():
     status = gateway_manager.get_gateway(gateway_id)
 
     if status and status.data:
+        # Get DIN from status data
+        din = None
+        if status.data.status and isinstance(status.data.status, dict):
+            din = status.data.status.get("din")
+        
+        # Format start_time as ISO datetime string if available
+        start_time = None
+        if status.data.status and isinstance(status.data.status, dict):
+            start_time = status.data.status.get("start_time")
+        
+        # Get uptime as seconds or null
+        up_time_seconds = None
+        if status.data.status and isinstance(status.data.status, dict):
+            up_time_seconds = status.data.status.get("up_time_seconds")
+        
         return {
-            "start_time": status.data.timestamp or 0,
-            "up_time_seconds": status.data.uptime or "0s",
+            "din": din or status.gateway.din if status.gateway else None,
+            "start_time": start_time,
+            "up_time_seconds": up_time_seconds,
             "is_new": False,
             "version": status.data.version or "Unknown",
+            "git_hash": status.data.status.get("git_hash") if status.data.status and isinstance(status.data.status, dict) else None,
+            "commission_count": status.data.status.get("commission_count", 0) if status.data.status and isinstance(status.data.status, dict) else 0,
+            "device_type": status.data.device_type,
+            "teg_type": status.data.status.get("teg_type", "unknown") if status.data.status and isinstance(status.data.status, dict) else "unknown",
+            "sync_type": status.data.status.get("sync_type", "unknown") if status.data.status and isinstance(status.data.status, dict) else "unknown",
+            "cellular_disabled": status.data.status.get("cellular_disabled", False) if status.data.status and isinstance(status.data.status, dict) else False,
+            "can_reboot": status.data.status.get("can_reboot", True) if status.data.status and isinstance(status.data.status, dict) else True,
         }
 
     return {
-        "start_time": 0,
-        "up_time_seconds": "0s",
+        "din": None,
+        "start_time": None,
+        "up_time_seconds": None,
         "is_new": False,
         "version": "Unknown",
+        "git_hash": None,
+        "commission_count": 0,
+        "device_type": None,
+        "teg_type": "unknown",
+        "sync_type": "unknown",
+        "cellular_disabled": False,
+        "can_reboot": True,
     }
 
 
@@ -848,23 +890,39 @@ async def get_api_site_info():
     gateway_id = get_default_gateway()
     status = gateway_manager.get_gateway(gateway_id)
 
-    site_name = "Tesla Energy Gateway"
-    timezone = "America/Los_Angeles"
+    site_name = None
+    timezone = None
     
     # Get site_name from cached data
     if status and status.data and status.data.site_name:
         site_name = status.data.site_name
     
     if status and status.gateway:
-        timezone = status.gateway.timezone or timezone
+        timezone = status.gateway.timezone
+
+    # Get system status for energy/power capacity info
+    system_status = None
+    if status and status.data:
+        system_status = status.data.system_status or {}
 
     return {
+        "max_system_energy_kWh": system_status.get("max_system_energy_kWh") if system_status else None,
+        "max_system_power_kW": system_status.get("max_system_power_kW") if system_status else None,
         "site_name": site_name,
         "timezone": timezone,
+        "max_site_meter_power_kW": system_status.get("max_site_meter_power_kW") if system_status else None,
+        "min_site_meter_power_kW": system_status.get("min_site_meter_power_kW") if system_status else None,
+        "nominal_system_energy_kWh": system_status.get("nominal_system_energy_kWh") if system_status else None,
+        "nominal_system_power_kW": system_status.get("nominal_system_power_kW") if system_status else None,
+        "panel_max_current": system_status.get("panel_max_current") if system_status else None,
         "grid_code": {
             "grid_code": None,
             "grid_voltage_setting": None,
             "grid_freq_setting": None,
+            "grid_phase_setting": None,
+            "country": None,
+            "state": None,
+            "utility": None,
         },
     }
 
@@ -875,17 +933,46 @@ async def get_api_site_name():
     gateway_id = get_default_gateway()
     status = gateway_manager.get_gateway(gateway_id)
 
-    site_name = "My Powerwall"
-    timezone = "America/Los_Angeles"
+    site_name = None
+    timezone = None
     
     # Get site_name from cached data
     if status and status.data and status.data.site_name:
         site_name = status.data.site_name
     
     if status and status.gateway:
-        timezone = status.gateway.timezone or timezone
+        timezone = status.gateway.timezone
 
     return {"site_name": site_name, "timezone": timezone}
+
+
+@router.get("/api/operation")
+async def get_api_operation():
+    """Get operation mode and backup reserve - API format (legacy proxy endpoint).
+    
+    Uses graceful degradation: returns cached data even if gateway is temporarily offline.
+    """
+    gateway_id = get_default_gateway()
+    status = gateway_manager.get_gateway(gateway_id)
+
+    real_mode = "self_consumption"  # Default mode
+    backup_reserve_percent = 0.0
+    
+    # Get reserve from cached data
+    if status and status.data:
+        if status.data.reserve is not None:
+            backup_reserve_percent = status.data.reserve
+        
+        # Try to get operation mode from system_status if available
+        if status.data.system_status and isinstance(status.data.system_status, dict):
+            mode = status.data.system_status.get("default_real_mode")
+            if mode:
+                real_mode = mode
+    
+    return {
+        "real_mode": real_mode,
+        "backup_reserve_percent": backup_reserve_percent,
+    }
 
 
 @router.get("/api/customer/registration")

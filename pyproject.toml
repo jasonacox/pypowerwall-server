@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pypowerwall-server"
-version = "0.1.7"
+version = "0.1.8"  # Also defined in app/config.py as SERVER_VERSION
 description = "A high-performance FastAPI-based server for monitoring and managing Tesla Powerwall systems"
 readme = "README.md"
 authors = [
@@ -53,3 +53,8 @@ include = ["app*"]
 
 [tool.setuptools.package-data]
 app = ["static/**/*"]
+
+[tool.pylint.messages_control]
+disable = [
+    "logging-fstring-interpolation",  # Allow f-strings and format() in logging
+]
