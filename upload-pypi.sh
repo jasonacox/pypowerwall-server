@@ -3,8 +3,8 @@
 # Build package and upload to PyPI
 #
 
-# Extract version from pyproject.toml
-REPO_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+# Extract version from pyproject.toml (strip inline comments)
+REPO_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\([^"]*\)".*/\1/')
 
 echo "Cleaning up..."
 rm -rf build dist *.egg-info
