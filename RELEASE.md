@@ -1,6 +1,24 @@
 # Release Notes
 
 ## Version History
+### [0.1.9] - 2026-01-23
+
+**Fixed:**
+- **Critical:** Grid down error in TEDAPI mode when grid breakers are turned off
+  - Fixed `compute_LL_voltage()` function in pypowerwall TEDAPI module
+  - Error: "TypeError: unsupported operand type(s) for +: 'float' and 'NoneType'"
+  - When no active voltages (all below 100V threshold), function now safely handles None values: `(v1n or 0) + (v2n or 0) + (v3n or 0)`
+  - Powerwall API returns None for voltage readings when grid breakers are off
+  - Fix allows `/api/meters/aggregates` and other endpoints to work correctly during grid outages
+- Pydantic serialization warning for gateway status field
+  - Changed `status` field type from `Optional[str]` to `Optional[Union[str, Dict[str, Any]]]` in GatewayData model
+  - Allows storing full status dict from `pw.status()` API call without type validation warnings
+
+**Changed:**
+- Updated pypowerwall dependency from 0.14.8 to 0.14.9 (includes grid down fix)
+- None values from Powerwall API now preserved to indicate missing/unavailable data
+
+---
 ### [0.1.8] - 2026-01-22
 
 **Fixed:**
