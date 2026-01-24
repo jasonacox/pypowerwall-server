@@ -127,7 +127,7 @@ class PowerwallData(BaseModel):
     ] = None  # Device Identification Number (str or dict)
     uptime: Optional[str] = None
     version: Optional[str] = None
-    status: Optional[str] = None  # Status string like "Running"
+    status: Optional[Union[str, Dict[str, Any]]] = None  # Status string or full status dict
     device_type: Optional[str] = None
     site_name: Optional[str] = None  # Site name from Powerwall
     pw3: Optional[bool] = None  # True if Powerwall 3 system
