@@ -1,5 +1,7 @@
 # PyPowerwall Server
 
+[![Build](https://github.com/jasonacox/pypowerwall-server/actions/workflows/pytest.yml/badge.svg)](https://github.com/jasonacox/pypowerwall-server/actions/workflows/pytest.yml)
+[![Sim Test](https://github.com/jasonacox/pypowerwall-server/actions/workflows/simtest.yml/badge.svg)](https://github.com/jasonacox/pypowerwall-server/actions/workflows/simtest.yml)
 [![License](https://img.shields.io/github/license/jasonacox/pypowerwall-server)](https://img.shields.io/github/license/jasonacox/pypowerwall-server)
 [![PyPI version](https://badge.fury.io/py/pypowerwall-server.svg)](https://badge.fury.io/py/pypowerwall-server)
 [![Python Version](https://img.shields.io/pypi/pyversions/pypowerwall-server)](https://img.shields.io/pypi/pyversions/pypowerwall-server)
