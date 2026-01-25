@@ -1,0 +1,111 @@
+name: simulator
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  determine-image:
+    name: "Determine Image"
+    runs-on: ubuntu-latest
+    outputs:
+      image-owner: ${{ steps.set-owner.outputs.owner }}
+    steps:
+      - name: Determine image owner
+        id: set-owner
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: repo } = await github.rest.repos.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+
+            let imageOwner = context.repo.owner;
+            if (repo.fork && repo.parent) {
+              imageOwner = repo.parent.owner.login;
+            }
+
+            core.setOutput('owner', imageOwner);
+            console.log(`Image owner: ${imageOwner}`);
+  tests:
+    name: "Python ${{ matrix.python-version }}"
+    needs: determine-image
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+
+    services:
+      simulator:
+        image: ${{ needs.determine-image.outputs.image-owner }}/pwsimulator
+        ports:
+           - 443:443
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Show environment
+        run: |
+          set -xe
+          python -VV
+          python -m site
+          python -m pip --version
+
+      - name: "Install dependencies"
+        run: |
+          set -xe
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          pip install requests
+
+      - name: Wait for simulator
+        run: |
+          for i in {1..10}; do
+            if RESP=$(curl -sk https://localhost/test); then
+              echo "Simulator ready"
+              echo "$RESP"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Simulator never became healthy" >&2
+          docker ps -a
+          exit 1
+
+      - name: "Run integration test with simulator"
+        run: python tests/test_with_simulator.py
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          mkdir -p logs
+          docker ps -a > logs/docker-ps.txt
+          docker logs "$(docker ps -aq --filter 'publish=443')" > logs/simulator.log 2>&1 || true
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-logs-${{ matrix.python-version }}
+          path: logs/
