@@ -288,6 +288,109 @@
             font-size: 0.8em;
             color: var(--text-muted);
         }
+
+        /* Summary item layout - left text, right graphic */
+        .powerwall-summary-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        /* Segmented vertical LED-style battery */
+        .battery-graphic {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .battery-segments {
+            width: 34px;
+            height: 110px;
+            display: flex;
+            flex-direction: column-reverse;
+            justify-content: flex-start;
+            padding: 6px;
+            gap: 4px;
+            border: 2px solid var(--border-color);
+            border-radius: 6px;
+            background: linear-gradient(180deg, rgba(0,0,0,0.04), rgba(255,255,255,0.02));
+            box-sizing: border-box;
+        }
+
+        .battery-segment {
+            flex: 1;
+            border-radius: 2px;
+            background: rgba(255,255,255,0.03);
+            transition: background 300ms ease, transform 200ms ease;
+        }
+
+        .battery-segment.active {
+            background: linear-gradient(180deg, var(--battery-color), #2f8e45);
+            box-shadow: 0 0 6px rgba(63,185,80,0.25) inset;
+            transform: scaleY(1.02);
+        }
+
+        /* Blue segments for Total Capacity */
+        .battery-segments.total .battery-segment.active {
+            background: linear-gradient(180deg, var(--accent-blue), #2f7fe0);
+            box-shadow: 0 0 6px rgba(88,166,255,0.18) inset;
+        }
+
+        /* Gray segments for Backup Reserve */
+        .battery-segments.reserve .battery-segment.active {
+            background: linear-gradient(180deg, #9ca3af, #6b7280);
+            box-shadow: none;
+        }
+
+        /* Small clock graphic for Time Remaining */
+        .clock-graphic {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 84px;
+            height: 84px;
+        }
+
+        .mini-clock {
+            width: 76px;
+            height: 76px;
+        }
+
+        .mini-clock .clock-face {
+            fill: none;
+            stroke: var(--border-color);
+            stroke-width: 4;
+        }
+
+        .mini-clock .hand {
+            stroke: var(--accent-blue);
+            stroke-width: 3;
+            stroke-linecap: round;
+            transition: transform 600ms ease;
+        }
+
+        .mini-clock .hand.minute {
+            stroke-width: 2;
+            stroke: var(--text-secondary);
+        }
+
+        /* Pie fill for time-remaining clock */
+        .mini-clock .clock-bg {
+            fill: none;
+            stroke: var(--border-color);
+            stroke-width: 3;
+        }
+
+        .mini-clock .pie-fill {
+            fill: var(--accent-blue);
+        }
+
+        .battery-percent-label {
+            font-size: 0.85em;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
         
         .energy-arrow {
             font-weight: 600;
@@ -1588,37 +1691,144 @@
                 }
                 
                 const timeRemaining = pod.time_remaining_hours ? pod.time_remaining_hours.toFixed(1) : '--';
-                // Scale backup reserve using Tesla App formula: (reserve / 0.95) - (5 / 0.95)
+                // Backup reserve provided by server is already Tesla-scaled; display directly
                 let backupReserve = '--';
                 if (pod.backup_reserve_percent != null) {
-                    const rawReserve = parseFloat(pod.backup_reserve_percent);
-                    backupReserve = ((rawReserve / 0.95) - (5 / 0.95)).toFixed(1);
+                    const reserveVal = parseFloat(pod.backup_reserve_percent);
+                    backupReserve = reserveVal.toFixed(1);
                 }
                 
                 html += '<div class="powerwall-summary">';
                 
+                // Compute battery graphic fill percentage (clip at 100%)
+                let totalFillPct = '--';
+                if (totalCapacityPct !== '--') {
+                    totalFillPct = Math.min(parseFloat(totalCapacityPct), 100);
+                }
+
+                // Build segmented battery HTML (10 segments)
+                let segmentsHtml = '<div class="battery-graphic">';
+                segmentsHtml += '<div class="battery-segments total">';
+                const litSegments = totalFillPct === '--' ? 0 : Math.round(totalFillPct / 10);
+                for (let i = 0; i < 10; i++) {
+                    segmentsHtml += `<div class="battery-segment${i < litSegments ? ' active' : ''}"></div>`;
+                }
+                segmentsHtml += '</div>';
+                
+                segmentsHtml += '</div>';
+
                 html += '<div class="powerwall-summary-item">';
+                html += '<div style="display:flex;flex-direction:column;gap:6px;">';
                 html += '<div class="powerwall-summary-label">Total Capacity</div>';
                 html += `<div class="powerwall-summary-value">${totalCapacity} kWh</div>`;
                 html += `<div class="powerwall-summary-detail"><span class="${totalCapacityClass}">${totalCapacityPct}% of spec</span> (${totalSpec} kWh)</div>`;
                 html += '</div>';
+                html += segmentsHtml;
+                html += '</div>';
                 
+                // Current Charge with segmented battery graphic (10 segments)
+                let currentFillPct = '--';
+                if (currentChargePct !== '--') {
+                    currentFillPct = Math.min(parseFloat(currentChargePct), 100);
+                }
+
+                let currentSegments = '<div class="battery-graphic">';
+                currentSegments += '<div class="battery-segments">';
+                const currentLit = currentFillPct === '--' ? 0 : Math.round(currentFillPct / 10);
+                for (let s = 0; s < 10; s++) {
+                    currentSegments += `<div class="battery-segment${s < currentLit ? ' active' : ''}"></div>`;
+                }
+                currentSegments += '</div>';
+                
+                currentSegments += '</div>';
+
                 html += '<div class="powerwall-summary-item">';
+                html += '<div style="display:flex;flex-direction:column;gap:6px;">';
                 html += '<div class="powerwall-summary-label">Current Charge</div>';
                 html += `<div class="powerwall-summary-value">${currentCharge} kWh</div>`;
                 html += `<div class="powerwall-summary-detail"><span class="spec-good">${teslaAppPct}% charged</span> (${currentChargePct}% actual)</div>`;
                 html += '</div>';
+                html += currentSegments;
+                html += '</div>';
                 
+                // Time Remaining with clock infographic
+                // timeRemaining is a string like '12.3' or '--'
+                let trHours = timeRemaining === '--' ? '--' : parseFloat(timeRemaining);
+                // (previous hour-hand calculation removed) use pie-scaling logic below
+
+                // Build pie-style clock: compute totalScale (12, 24, 48...) until it fits
+                let tr = trHours === '--' ? '--' : trHours;
+                let totalScale = 12;
+                if (tr !== '--') {
+                    while (tr > totalScale) totalScale *= 2;
+                }
+                const fraction = tr === '--' ? 0 : Math.min(tr / totalScale, 1);
+
+                // Build SVG pie sector for fraction of the circle (start at top -90deg)
+                function makePiePath(cx, cy, r, frac) {
+                    if (frac <= 0) return '';
+                    if (frac >= 1) return `<circle cx="${cx}" cy="${cy}" r="${r}" class="pie-fill"/>`;
+                    const startAng = -90;
+                    const endAng = startAng + frac * 360;
+                    const rad = Math.PI / 180;
+                    const x1 = cx + r * Math.cos(startAng * rad);
+                    const y1 = cy + r * Math.sin(startAng * rad);
+                    const x2 = cx + r * Math.cos(endAng * rad);
+                    const y2 = cy + r * Math.sin(endAng * rad);
+                    const largeArc = frac > 0.5 ? 1 : 0;
+                    return `M ${cx} ${cy} L ${x1.toFixed(3)} ${y1.toFixed(3)} A ${r} ${r} 0 ${largeArc} 1 ${x2.toFixed(3)} ${y2.toFixed(3)} Z`;
+                }
+
+                let clockHtml = '<div class="clock-graphic">';
+                clockHtml += `<svg class="mini-clock" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">`;
+                // outer outline circle (slightly larger)
+                clockHtml += `<circle cx="50" cy="50" r="44" class="clock-bg"/>`;
+                // draw pie slightly inside the outline so the border remains visible
+                const piePath = makePiePath(50, 50, 38, fraction);
+                if (piePath) {
+                    if (fraction >= 1) {
+                        // full circle already returned as circle element string
+                        clockHtml += piePath;
+                    } else {
+                        clockHtml += `<path d="${piePath}" class="pie-fill"/>`;
+                    }
+                }
+                // no center cap
+                clockHtml += `</svg>`;
+                clockHtml += '</div>';
+
                 html += '<div class="powerwall-summary-item">';
+                html += '<div style="display:flex;flex-direction:column;gap:6px;">';
                 html += '<div class="powerwall-summary-label">Time Remaining</div>';
                 html += `<div class="powerwall-summary-value">${timeRemaining} hrs</div>`;
                 html += '<div class="powerwall-summary-detail">at current load</div>';
                 html += '</div>';
+                html += clockHtml;
+                html += '</div>';
                 
+                
+                // Backup Reserve with segmented gray battery graphic (10 segments)
+                let reservePct = '--';
+                if (pod.backup_reserve_percent != null) {
+                    reservePct = Math.min(parseFloat(pod.backup_reserve_percent), 100);
+                }
+
+                let reserveSegments = '<div class="battery-graphic">';
+                reserveSegments += '<div class="battery-segments reserve">';
+                const reserveLit = reservePct === '--' ? 0 : Math.round(reservePct / 10);
+                for (let r = 0; r < 10; r++) {
+                    reserveSegments += `<div class="battery-segment${r < reserveLit ? ' active' : ''}"></div>`;
+                }
+                reserveSegments += '</div>';
+                reserveSegments += '</div>';
+
                 html += '<div class="powerwall-summary-item">';
+                html += '<div style="display:flex;flex-direction:column;gap:6px;">';
                 html += '<div class="powerwall-summary-label">Backup Reserve</div>';
                 html += `<div class="powerwall-summary-value">${backupReserve}%</div>`;
                 html += '<div class="powerwall-summary-detail">reserve setting</div>';
+                html += '</div>';
+                html += reserveSegments;
                 html += '</div>';
                 
                 html += '</div>';
