@@ -488,8 +488,9 @@ class GatewayManager:
 
             # Try to get reserve and time remaining (for caching)
             try:
+                # Request the Tesla App scaled reserve setting (scale=True)
                 data.reserve = await asyncio.wait_for(
-                    loop.run_in_executor(self._executor, lambda: pw.get_reserve(scale=False)), timeout=5.0
+                    loop.run_in_executor(self._executor, lambda: pw.get_reserve(scale=True)), timeout=5.0
                 )
                 data.time_remaining = await asyncio.wait_for(
                     loop.run_in_executor(self._executor, pw.get_time_remaining),

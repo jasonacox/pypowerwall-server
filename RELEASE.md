@@ -1,6 +1,21 @@
 # Release Notes
 
 ## Version History
+### [0.1.10] - 2026-01-24
+
+**Fixed:**
+- Corrected Backup Reserve display on the console by removing duplicate frontend scaling. The server now returns the Tesla-scaled reserve and the console displays it directly.
+
+**Added:**
+- Segmented vertical battery graphic for **Total Capacity** (blue) and **Current Charge** (green) on the `/console` dashboard.
+- Gray segmented indicator for **Backup Reserve** in the backup panel.
+- Time Remaining clock infographic: an SVG pie-sector that scales its total (12 → 24 → 48…) until the remaining hours fit, with a thicker outline and inset fill.
+
+**Changed:**
+- Bumped package version to 0.1.10 and synchronized `SERVER_VERSION` in configuration.
+- Removed redundant percent label elements from the console UI and removed the center clock dot for a cleaner look.
+
+
 ### [0.1.9] - 2026-01-23
 
 **Fixed:**
