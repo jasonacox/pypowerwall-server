@@ -33,6 +33,26 @@ def wait_for_url(url, timeout=60, verify=True):
         time.sleep(1)
     raise TimeoutError(f"Timeout waiting for {url}")
 
+def wait_for_healthy(url, timeout=60):
+    """Wait for server health endpoint to report healthy status."""
+    end_time = time.time() + timeout
+    print(f"Waiting for server to be healthy at {url}...")
+    while time.time() < end_time:
+        try:
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                status = data.get('status')
+                if status in ('healthy', 'degraded'):
+                    print(f"✓ Server is {status}")
+                    return response
+                else:
+                    print(f"  Server status: {status}, waiting...")
+        except Exception as e:
+            pass
+        time.sleep(2)
+    raise TimeoutError(f"Timeout waiting for server to be healthy at {url}")
+
 def main():
     # Step 1: Wait for simulator to be healthy
     print("Waiting for pwsimulator at https://localhost/test...")
@@ -68,21 +88,10 @@ def main():
     )
     
     try:
-        # Step 4: Wait for server to be ready and give it time to poll the simulator
-        print("Waiting for server at http://127.0.0.1:8675/health...")
-        health_response = wait_for_url("http://127.0.0.1:8675/health", timeout=60)
+        # Step 4: Wait for server to be ready and healthy
+        health_response = wait_for_healthy("http://127.0.0.1:8675/health", timeout=60)
         health_data = health_response.json()
-        print(f"✓ Server health: {health_data.get('status')}")
         print(f"✓ Server version: {health_data.get('version')}")
-        
-        # Give server time to complete initial polling cycle
-        print("Waiting for initial polling cycle (10 seconds)...")
-        time.sleep(10)
-        
-        # Check health again after polling
-        health_response = requests.get("http://127.0.0.1:8675/health", timeout=10)
-        health_data = health_response.json()
-        print(f"✓ Server health after polling: {health_data.get('status')}")
         print(f"  Gateways: {health_data.get('gateways', 0)}")
         print(f"  Online: {health_data.get('gateways_online', 0)}")
         
@@ -121,7 +130,10 @@ def main():
         gateways_response = requests.get("http://127.0.0.1:8675/api/gateways", timeout=10)
         if gateways_response.status_code == 200:
             gateways_data = gateways_response.json()
-            print(f"✓ /api/gateways returned {len(gateways_data.get('gateways', []))} gateway(s)")
+            gateway_count = len(gateways_data) if isinstance(gateways_data, list) else len(gateways_data.get('gateways', []))
+            print(f"✓ /api/gateways returned {gateway_count} gateway(s)")
+            if gateway_count > 0:
+                print(f"  Gateway IDs: {list(gateways_data.keys()) if isinstance(gateways_data, dict) else [g.get('id') for g in gateways_data]}")
         else:
             print(f"⚠ /api/gateways returned status {gateways_response.status_code}")
         
