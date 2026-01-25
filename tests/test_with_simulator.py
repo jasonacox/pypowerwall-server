@@ -47,9 +47,13 @@ def main():
         "PW_HTTPS": "yes",
         "PW_BIND_ADDRESS": "127.0.0.1",
         "PW_PORT": "8675",
-        "PW_CACHE_EXPIRE": "2",
+        "PW_CACHE_EXPIRE": "5",
         "PW_TIMEOUT": "10",
-        "PW_DEBUG": "no",
+        "PW_DEBUG": "yes",
+        # Disable SSL verification for simulator's self-signed cert
+        "PYTHONHTTPSVERIFY": "0",
+        "CURL_CA_BUNDLE": "",
+        "REQUESTS_CA_BUNDLE": "",
     })
     
     # Step 3: Start pypowerwall-server
@@ -64,12 +68,23 @@ def main():
     )
     
     try:
-        # Step 4: Wait for server to be ready
+        # Step 4: Wait for server to be ready and give it time to poll the simulator
         print("Waiting for server at http://127.0.0.1:8675/health...")
         health_response = wait_for_url("http://127.0.0.1:8675/health", timeout=60)
         health_data = health_response.json()
         print(f"✓ Server health: {health_data.get('status')}")
         print(f"✓ Server version: {health_data.get('version')}")
+        
+        # Give server time to complete initial polling cycle
+        print("Waiting for initial polling cycle (10 seconds)...")
+        time.sleep(10)
+        
+        # Check health again after polling
+        health_response = requests.get("http://127.0.0.1:8675/health", timeout=10)
+        health_data = health_response.json()
+        print(f"✓ Server health after polling: {health_data.get('status')}")
+        print(f"  Gateways: {health_data.get('gateways', 0)}")
+        print(f"  Online: {health_data.get('gateways_online', 0)}")
         
         # Step 5: Test key endpoints
         print("\nTesting endpoints...")
@@ -115,13 +130,18 @@ def main():
         
     except Exception as e:
         print(f"\n❌ Test failed: {e}")
+        import traceback
+        traceback.print_exc()
         # Print server logs on failure
-        if server_process.poll() is not None:
-            stdout, stderr = server_process.communicate(timeout=1)
-            print("\nServer stdout:")
-            print(stdout[-2000:] if len(stdout) > 2000 else stdout)
-            print("\nServer stderr:")
-            print(stderr[-2000:] if len(stderr) > 2000 else stderr)
+        try:
+            server_process.terminate()
+            stdout, stderr = server_process.communicate(timeout=2)
+            print("\n=== Server stdout (last 3000 chars) ===")
+            print(stdout[-3000:] if len(stdout) > 3000 else stdout)
+            print("\n=== Server stderr (last 3000 chars) ===")
+            print(stderr[-3000:] if len(stderr) > 3000 else stderr)
+        except Exception:
+            pass
         return 1
         
     finally:
