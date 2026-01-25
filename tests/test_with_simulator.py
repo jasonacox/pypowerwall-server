@@ -58,12 +58,11 @@ def main():
     print("Waiting for pwsimulator at https://localhost/test...")
     wait_for_url("https://localhost/test", verify=False)
     
-    # Step 2: Configure environment for pypowerwall-server
+    # Step 2: Configure environment for pypowerwall-server in TEDAPI mode
     env = os.environ.copy()
     env.update({
         "PW_HOST": "localhost",
-        "PW_PASSWORD": "password",
-        "PW_EMAIL": "email@example.com",
+        "PW_GW_PWD": "ABCDEFGHIJ",  # Simulator gateway password
         "PW_HTTPS": "yes",
         "PW_BIND_ADDRESS": "127.0.0.1",
         "PW_PORT": "8675",
