@@ -17,21 +17,21 @@ A high-performance FastAPI-based server for monitoring and managing Tesla Powerw
 - **Connection Modes** - TEDAPI (local), Cloud Mode (remote), and FleetAPI support with automatic failover and graceful degradation
 - **Real-Time Updates** - WebSocket streaming with 1-second updates and background polling with intelligent caching
 - **Complete API** - Full backward compatibility with pypowerwall proxy plus new multi-gateway and aggregate endpoints
-- **Modern Web UI** - Tesla Power Flow animation, management console, and auto-generated API documentation at /docs
-- **Container Ready** - Docker and docker-compose support with configurable deployment via environment variables or YAML
+- **Console Web UI** - Tesla Power Flow animation, management console, and auto-generated API documentation at /docs
 - **Planned: MQTT Integration** - Publish metrics to MQTT brokers for Home Assistant and other automation systems
 
 ## Quick Start
 
 ### Requirements
 
-* You need the Powerwall/Gateway Password (typically found on the QR sticker - behind front panel of PW3 - see [picture](https://github.com/user-attachments/assets/6cf11830-fa70-4ebb-9be7-7d0a5e2db4dc))
-* Your computer must be connected to the Powerwall WiFi Access point (it will be IP address 192.168.91.1)
+* TEDAPI Mode: For extended metrics you will need the Powerwall/Gateway Password (typically found on the QR sticker - behind front panel of PW3 - see [picture](https://github.com/user-attachments/assets/6cf11830-fa70-4ebb-9be7-7d0a5e2db4dc)). And you computer must be connected to the Powerwall WiFi Access point (it will be IP address 192.168.91.1)
+* Cloud Mode: For basic metrics, you will need your Tesla customer login credentials (email) and will need to run the cloud mode one-time setup below.
+
 
 ### Docker (Recommended)
 
 ```bash
-# TEDAPI Mode (Local Gateway) - requires host network to access gateway at 192.168.91.1
+# TEDAPI Mode (Local Access) - requires host network to access gateway at 192.168.91.1
 docker run -d \
   --name pypowerwall-server \
   --network host \
@@ -39,7 +39,7 @@ docker run -d \
   -e PW_GW_PWD=your_gateway_password \
   jasonacox/pypowerwall-server
 
-# Cloud Mode - connects via internet, includes persistent auth storage
+# Cloud Mode - requires one-time setup using Tesla login step below
 docker run -d \
   --name pypowerwall-server \
   -p 8675:8675 \
@@ -48,13 +48,12 @@ docker run -d \
   -e PW_AUTHPATH=/auth \
   jasonacox/pypowerwall-server
 
-# Complete Cloud Mode setup (one-time authentication)
 docker exec -it pypowerwall-server python -m pypowerwall setup
 ```
 
-Visit http://localhost:8675
+The PyPowerwall Server will be running at: http://localhost:8675 (if not running local, replace "localhost" with the IP of the host running the container).
 
-### Multiple Powerwalls
+### Option: Multiple Powerwalls
 
 ```bash
 # Multiple local gateways - requires host network
@@ -68,7 +67,7 @@ docker run -d \
   jasonacox/pypowerwall-server
 ```
 
-### Command Line
+### Option: Command Line Test
 
 ```bash
 # Install
@@ -271,7 +270,7 @@ All existing proxy endpoints work unchanged:
 - ReDoc: http://localhost:8675/redoc
 - OpenAPI JSON: http://localhost:8675/openapi.json
 
-## Design Decisions
+## Design
 
 ### Cloud Authentication with Auth Tokens
 
@@ -303,7 +302,7 @@ PW_AUTHPATH=/path/to/auth  # Directory with .pypowerwall.auth/.site files
 ```
 
 ### Async + Sync Library Integration
-FastAPI is async, but pypowerwall is synchronous. This is handled using `asyncio.run_in_executor()` to run blocking pypowerwall calls in thread pools, preventing event loop blocking. This is the standard pattern for integrating sync libraries with async frameworks and works perfectly.
+FastAPI is async, but pypowerwall is synchronous. This is handled using `asyncio.run_in_executor()` to run blocking pypowerwall calls in thread pools, preventing event loop blocking.
 
 ### Stateless Server Architecture
 The server maintains no persistent state or historical data. All historical data for graphs is stored in **browser localStorage**, allowing:
@@ -325,14 +324,11 @@ When control is enabled:
 - All control operations require authentication via token
 - Token must be sent in `Authorization` header
 - Legacy POST endpoints are disabled (redirect to `/control` endpoint)
-- UI requires authentication for control features
-
-Similar to the proxy server's auth model but token-based for better security.
 
 ### Data Aggregation Strategy
 Multi-gateway aggregation uses **smart aggregation** that will evolve over time:
 
-Current implementation (v0.1.0):
+Current implementation (v0.1.x):
 - Battery %: Simple average (TODO: weighted by capacity)
 - Power flows: Simple sum (works for independent systems)
 - Grid power: Calculated as site - solar
@@ -347,7 +343,7 @@ Future considerations documented in code:
 This area is expected to need tuning as real-world multi-gateway deployments provide feedback.
 
 ### Performance & Caching
-- **Polling interval**: 5 seconds (configurable later if needed)
+- **Polling interval**: 5 seconds (configurable)
 - **WebSocket updates**: Real-time to UI (1-second interval)
 - **No server-side caching**: Fresh data on every request
 - **Browser caching**: Historical data in localStorage
@@ -404,13 +400,20 @@ pypowerwall-server/
 ```bash
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # or `venv\Scripts\activate` on Windows
+source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements-dev.txt
 
 # Run development server with auto-reload
-uvicorn app.main:app --reload --port 8675
+#
+#   Local TEDAPI Mode
+PW_GW_PWD=ABCDEFGHIJ ./run.sh uvicorn app.main:app --reload --port 8675
+#
+#   Cloud Mode
+pypowerwall-server --setup # create .pypowerwall.auth
+PW_EMAIL="your@emal.com" PW_HOST= uvicorn app.main:app --reload --port 8675
+
 ```
 
 ### Running Tests
@@ -466,5 +469,3 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 - **Issues:** https://github.com/jasonacox/pypowerwall-server/issues
 - **Discussions:** https://github.com/jasonacox/pypowerwall-server/discussions
-- **Wiki:** https://github.com/jasonacox/pypowerwall-server/wiki
-
