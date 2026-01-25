@@ -59,6 +59,7 @@ def main():
     wait_for_url("https://localhost/test", verify=False)
     
     # Step 2: Configure environment for pypowerwall-server in TEDAPI mode
+    # Simulator now properly supports TEDAPI protobuf endpoints
     env = os.environ.copy()
     env.update({
         "PW_HOST": "localhost",
@@ -77,14 +78,16 @@ def main():
     
     # Step 3: Start pypowerwall-server
     print("\nStarting pypowerwall-server...")
+    print("=" * 80)
     server_process = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", 
          "--host", "127.0.0.1", "--port", "8675"],
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=None,  # Let output go to terminal for debugging
+        stderr=None,
         text=True,
     )
+    print("=" * 80)
     
     try:
         # Step 4: Wait for server to be ready and healthy
@@ -143,16 +146,6 @@ def main():
         print(f"\n❌ Test failed: {e}")
         import traceback
         traceback.print_exc()
-        # Print server logs on failure
-        try:
-            server_process.terminate()
-            stdout, stderr = server_process.communicate(timeout=2)
-            print("\n=== Server stdout (last 3000 chars) ===")
-            print(stdout[-3000:] if len(stdout) > 3000 else stdout)
-            print("\n=== Server stderr (last 3000 chars) ===")
-            print(stderr[-3000:] if len(stderr) > 3000 else stderr)
-        except Exception:
-            pass
         return 1
         
     finally:
