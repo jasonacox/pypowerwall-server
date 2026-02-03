@@ -40,6 +40,7 @@ def mock_pypowerwall():
     mock.version.return_value = "23.44.0"
     mock.vitals.return_value = {
         "TEPOD--1234": {
+            "serialNumber": "TG1234567890AB",
             "POD_ActiveHeating": False,
             "POD_ChargeComplete": False,
             "POD_ChargeRequest": True,
@@ -158,6 +159,8 @@ def connected_gateway(mock_gateway_manager, mock_pypowerwall):
         strings=mock_pypowerwall.strings.return_value,
         system_status=mock_pypowerwall.system_status.return_value,
         grid_status=mock_pypowerwall.grid_status.return_value,
+        reserve=mock_pypowerwall.get_reserve.return_value,
+        time_remaining=mock_pypowerwall.get_time_remaining.return_value,
         timestamp=1234567890.0
     )
     

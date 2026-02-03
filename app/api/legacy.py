@@ -645,9 +645,9 @@ async def get_pod():
         pod["nominal_full_pack_energy"] = system_status.get("nominal_full_pack_energy")
         pod["nominal_energy_remaining"] = system_status.get("nominal_energy_remaining")
 
-    # Use cached time_remaining and reserve
-    pod["time_remaining_hours"] = status.data.time_remaining
-    pod["backup_reserve_percent"] = status.data.reserve
+    # Use cached time_remaining and reserve (if available)
+    pod["time_remaining_hours"] = status.data.time_remaining if status.data.time_remaining is not None else None
+    pod["backup_reserve_percent"] = status.data.reserve if status.data.reserve is not None else None
 
     return pod
 
