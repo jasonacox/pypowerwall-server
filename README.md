@@ -30,16 +30,21 @@ A high-performance FastAPI-based server for monitoring and managing Tesla Powerw
 
 ### Docker (Recommended)
 
+#### TEDAPI Mode (Local Access) or Cloud Mode
 ```bash
-# TEDAPI Mode (Local Access) - requires host network to access gateway at 192.168.91.1
+# TEDAPI Mode requires host network to access gateway at 192.168.91.1
 docker run -d \
   --name pypowerwall-server \
   --network host \
   -e PW_HOST=192.168.91.1 \
   -e PW_GW_PWD=your_gateway_password \
   jasonacox/pypowerwall-server
+```
 
-# Cloud Mode - requires one-time setup using Tesla login step below
+#### Cloud Mode (Remote Access)
+
+```bash
+# Cloud Mode requires one-time setup using Tesla login step below
 docker run -d \
   --name pypowerwall-server \
   -p 8675:8675 \
@@ -48,6 +53,7 @@ docker run -d \
   -e PW_AUTHPATH=/auth \
   jasonacox/pypowerwall-server
 
+# One-time setup (runs auth flow to generate token files)
 docker exec -it pypowerwall-server python -m pypowerwall setup
 ```
 
