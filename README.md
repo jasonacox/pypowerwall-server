@@ -32,7 +32,7 @@ A high-performance FastAPI-based server for monitoring and managing Tesla Powerw
 
 The easiest way to get started is using the provided Docker image. You can run in either TEDAPI Mode (local access) or Cloud Mode (remote access). Select the appropriate option below:
 
-#### TEDAPI Mode (Local Access) or Cloud Mode
+#### TEDAPI Mode (Local Access)
 ```bash
 # TEDAPI Mode requires host network to access gateway at 192.168.91.1
 docker run -d \
