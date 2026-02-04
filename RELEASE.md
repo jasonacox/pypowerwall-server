@@ -1,6 +1,15 @@
 # Release Notes
 
 ## Version History
+
+### [0.1.11] - 2026-02-03
+
+**Fixed:**
+- Bug Fix: Refactor POD data extraction to handle missing values gracefully and ensure energy values always overwrite system status - resolves Internal Server Error on `/pod` endpoint (#5)
+- Fixed issue where `/pod` endpoint would fail with Internal Server Error when extended info was not available
+- POD data extraction now properly handles None values and missing battery block data
+- Energy values from battery blocks now correctly populate the vitals section
+
 ### [0.1.10] - 2026-01-24
 
 **Fixed:**

@@ -623,22 +623,19 @@ async def get_pod():
                     device_name, v = tepod_map[serial]
                     # Populate POD vitals fields from TEPOD entry
                     pod[f"PW{idx}_name"] = device_name
-                    pod[f"PW{idx}_POD_ActiveHeating"] = int(v.get("POD_ActiveHeating", 0))
-                    pod[f"PW{idx}_POD_ChargeComplete"] = int(v.get("POD_ChargeComplete", 0))
-                    pod[f"PW{idx}_POD_ChargeRequest"] = int(v.get("POD_ChargeRequest", 0))
-                    pod[f"PW{idx}_POD_DischargeComplete"] = int(v.get("POD_DischargeComplete", 0))
-                    pod[f"PW{idx}_POD_PermanentlyFaulted"] = int(v.get("POD_PermanentlyFaulted", 0))
-                    pod[f"PW{idx}_POD_PersistentlyFaulted"] = int(v.get("POD_PersistentlyFaulted", 0))
-                    pod[f"PW{idx}_POD_enable_line"] = int(v.get("POD_enable_line", 0))
+                    pod[f"PW{idx}_POD_ActiveHeating"] = int(v.get("POD_ActiveHeating") or 0)
+                    pod[f"PW{idx}_POD_ChargeComplete"] = int(v.get("POD_ChargeComplete") or 0)
+                    pod[f"PW{idx}_POD_ChargeRequest"] = int(v.get("POD_ChargeRequest") or 0)
+                    pod[f"PW{idx}_POD_DischargeComplete"] = int(v.get("POD_DischargeComplete") or 0)
+                    pod[f"PW{idx}_POD_PermanentlyFaulted"] = int(v.get("POD_PermanentlyFaulted") or 0)
+                    pod[f"PW{idx}_POD_PersistentlyFaulted"] = int(v.get("POD_PersistentlyFaulted") or 0)
+                    pod[f"PW{idx}_POD_enable_line"] = int(v.get("POD_enable_line") or 0)
                     pod[f"PW{idx}_POD_available_charge_power"] = v.get("POD_available_charge_power")
                     pod[f"PW{idx}_POD_available_dischg_power"] = v.get("POD_available_dischg_power")
-                    # Energy values from vitals (may override system_status values)
-                    if v.get("POD_nom_energy_remaining") is not None:
-                        pod[f"PW{idx}_POD_nom_energy_remaining"] = v.get("POD_nom_energy_remaining")
-                    if v.get("POD_nom_energy_to_be_charged") is not None:
-                        pod[f"PW{idx}_POD_nom_energy_to_be_charged"] = v.get("POD_nom_energy_to_be_charged")
-                    if v.get("POD_nom_full_pack_energy") is not None:
-                        pod[f"PW{idx}_POD_nom_full_pack_energy"] = v.get("POD_nom_full_pack_energy")
+                    # Energy values from vitals (always overwrite system_status values per old proxy behavior)
+                    pod[f"PW{idx}_POD_nom_energy_remaining"] = v.get("POD_nom_energy_remaining")
+                    pod[f"PW{idx}_POD_nom_energy_to_be_charged"] = v.get("POD_nom_energy_to_be_charged")
+                    pod[f"PW{idx}_POD_nom_full_pack_energy"] = v.get("POD_nom_full_pack_energy")
 
     # Aggregate data from cached system_status
     if system_status:
