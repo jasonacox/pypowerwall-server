@@ -187,7 +187,7 @@ class GatewayConfig(BaseSettings):
     id: str
     name: str
     host: Optional[str] = None
-    port: Optional[int] = None  # Non-standard HTTPS port (e.g. 8443 via travel router)
+    port: Optional[int] = Field(default=None, ge=1, le=65535)  # Non-standard HTTPS port (e.g. 8443 via travel router)
     gw_pwd: Optional[str] = None  # Gateway Wi-Fi password for TEDAPI mode
     email: Optional[str] = None
     authpath: Optional[

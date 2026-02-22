@@ -11,7 +11,6 @@ from app.core.gateway_manager import gateway_manager
 @pytest.fixture
 def two_gateways(mock_gateway_manager, mock_pypowerwall):
     """Add two gateways: a standard Powerwall and a solar inverter (no batteries)."""
-    from app.models.gateway import Gateway, GatewayStatus, PowerwallData
 
     def _make_status(gw_id, gw_name, gw_type):
         gw = Gateway(
@@ -30,6 +29,7 @@ def two_gateways(mock_gateway_manager, mock_pypowerwall):
             version=mock_pypowerwall.version.return_value,
             vitals=mock_pypowerwall.vitals.return_value,
             strings=mock_pypowerwall.strings.return_value,
+            alerts=mock_pypowerwall.alerts.return_value,
             system_status=mock_pypowerwall.system_status.return_value,
             grid_status=mock_pypowerwall.grid_status.return_value,
             reserve=mock_pypowerwall.get_reserve.return_value,
