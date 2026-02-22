@@ -16,6 +16,13 @@ Key Routes (all cache-backed for graceful degradation):
     - /stats -> Server statistics
     - /api/networks, /api/system/networks -> Network configuration
     - /api/powerwalls -> Powerwall device list
+    - /api/system_status -> Full system status (cached)
+    - /api/system_status/soe -> Battery state of energy
+    - /api/system_status/grid_status -> Grid connection status
+    - /api/system_status/grid_faults -> Grid fault events
+
+Auth Routes (powerflow web app compatibility):
+    - POST /api/login/Basic -> Fake login; sets long-lived AuthCookie/UserRecord
 
 Control Routes (require authentication):
     - POST /control/{path} -> Control operations (reserve, mode, etc.)
@@ -104,6 +111,47 @@ def get_default_gateway():
     if gateway_manager.gateways:
         return list(gateway_manager.gateways.keys())[0]
     raise HTTPException(status_code=503, detail="No gateways configured")
+
+
+# Login cookie max-age: 10 years for long-running kiosk dashboards
+_AUTH_COOKIE_MAX_AGE = 10 * 365 * 24 * 60 * 60  # 315360000 seconds
+
+
+@router.post("/api/login/Basic")
+async def post_login_basic(response: Response):
+    """Fake login endpoint for powerflow web app compatibility (issue #7).
+
+    The Tesla Gateway web app (served from /powerflow) stores auth state in
+    localStorage.  When that state expires the app calls POST /api/login/Basic
+    to re-authenticate.  Without this endpoint the powerflow UI shows a login
+    screen.
+
+    We return a synthetic success payload and set long-lived AuthCookie /
+    UserRecord cookies so the browser never hits the login screen again.
+    """
+    response.set_cookie(
+        key="AuthCookie",
+        value="1234567890",
+        max_age=_AUTH_COOKIE_MAX_AGE,
+        path="/",
+        samesite="lax",
+    )
+    response.set_cookie(
+        key="UserRecord",
+        value="1234567890",
+        max_age=_AUTH_COOKIE_MAX_AGE,
+        path="/",
+        samesite="lax",
+    )
+    return {
+        "email": "",
+        "firstname": "Tesla",
+        "lastname": "Energy",
+        "roles": ["Home_Owner"],
+        "token": "1234567890",
+        "provider": "Basic",
+        "loginType": "Basic",
+    }
 
 
 @router.get("/vitals")
@@ -739,6 +787,26 @@ async def get_battery_power():
 
 # NOTE: Specific /api/* routes must be defined BEFORE the catch-all /api/{path:path}
 # Otherwise FastAPI will match the catch-all first.
+
+
+@router.get("/api/system_status")
+async def get_api_system_status():
+    """Get full system status - API format (legacy proxy endpoint).
+
+    Returns the cached system_status data (battery blocks, nominal energy, etc.).
+    Data is populated by the background polling task, so this endpoint is
+    always non-blocking and safe for concurrent requests.
+
+    Uses graceful degradation: returns cached data even if gateway is temporarily offline.
+    Returns empty object if no data available yet (e.g., during startup).
+    """
+    gateway_id = get_default_gateway()
+    status = gateway_manager.get_gateway(gateway_id)
+
+    if not status or not status.data:
+        return {}
+
+    return status.data.system_status or {}
 
 
 @router.get("/api/system_status/soe")

@@ -2,6 +2,25 @@
 
 ## Version History
 
+### [0.1.12] - 2026-02-21
+
+**Fixed:**
+- Fix powerflow animation showing login screen after a few hours or browser restart (#7)
+  - Added `POST /api/login/Basic` fake-login endpoint that the Tesla Gateway web app calls when re-authenticating
+  - Added middleware to inject `AuthCookie` and `UserRecord` cookies (10-year expiry) on every successful response, matching the original pypowerwall proxy behavior
+  - Patched `isAuthenticated` in the bundled `app/static/powerflow/app.js` so the login screen is never shown regardless of cookie or localStorage state
+- Fix Powerwall capacity spec comparison using wrong rated capacity (12.5 kWh → 13.5 kWh per Powerwall unit) (#9)
+- Added missing `GET /api/system_status` endpoint (parent route for existing `/soe`, `/grid_status`, `/grid_faults` sub-routes)
+
+**Added:**
+- Console System Health panel: **Powerwall Mode** item showing current operating mode (Self-Consumption, Backup, Time-Based, Off-Grid), per feature request (#1)
+- Console System Health panel: **Firmware** item displaying gateway firmware version, per feature request (#1)
+- Renamed "Uptime" label to **"Server Uptime"** for clarity
+
+**Changed:**
+- Suppress verbose uvicorn access log spam: `GET /api/...` lines now only appear at WARNING level and above
+- Suppress websocket connection noise (`connection open`, `connection closed`, `WebSocket ... [accepted]`) from logs unless running in debug mode
+
 ### [0.1.11] - 2026-02-03
 
 **Fixed:**
@@ -99,7 +118,7 @@
   - Power direction indicators (↑ charging, ↓ discharging) on Powerwall power values
   - Total energy storage metrics: capacity, current charge, time remaining, backup reserve
   - Tesla App percentage display alongside actual charge percentage
-  - Capacity comparison to spec (12.5 kWh per Powerwall) with color-coded indicators
+  - Capacity comparison to spec (12.5 kWh per Powerwall) with color-coded indicators *(corrected to 13.5 kWh in v0.1.12, see #9)*
   - System Health panel with site name, mode, gateways, connection status, uptime, and resource metrics
 - Alert sorting by priority (notice → info → warning) in console dashboard
 
