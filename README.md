@@ -9,7 +9,7 @@
 
 A high-performance FastAPI-based server for monitoring and managing Tesla Powerwall systems. Designed as the next-generation evolution of the [pypowerwall proxy](https://github.com/jasonacox/pypowerwall/tree/main/proxy#pypowerwall-proxy-server) with multi-gateway support, real-time monitoring, and a built-in status console.
 
-<img alt="PyPowerwall Server Console" src="https://github.com/user-attachments/assets/d71e0b8f-419a-418f-9700-e54005479d1b" />
+<img alt="PyPowerwall Server Console" src="https://github.com/user-attachments/assets/9ea75c12-6f01-4825-9695-a9c965dbc874" />
 
 ## Features
 
