@@ -40,6 +40,27 @@ gateways:
     authpath: /auth
     fleetapi: true
     timezone: America/Chicago
+  
+  # Example 5: Standalone solar inverter (no Powerwall batteries)
+  # Only /strings and /alerts endpoints return useful data for inverter-only units.
+  # Setting type: inverter causes the console to omit the Powerwall Status
+  # (battery) panels for this gateway and label its strings/alerts separately.
+  - id: south-inverter
+    name: South Array Inverter
+    host: 192.168.91.1
+    gw_pwd: your_gateway_password
+    type: inverter
+    timezone: America/Los_Angeles
+  
+  # Example 6: Gateway behind a travel router on a non-standard port
+  # The travel router bridges the Tesla AP SSID and port-forwards
+  # e.g.  192.168.1.50:8443  ->  192.168.91.1:443
+  - id: garage
+    name: Garage Gateway (travel router)
+    host: 192.168.1.50
+    port: 8443
+    gw_pwd: your_gateway_password
+    timezone: America/Los_Angeles
 
 # Configuration Notes:
 #

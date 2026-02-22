@@ -80,7 +80,7 @@ def mock_pypowerwall():
         "nominal_energy_remaining": 11547,
         "battery_blocks": [
             {
-                "Type": "ACPW",
+                "Type": "",
                 "PackagePartNumber": "1234567-00-A",
                 "PackageSerialNumber": "TG1234567890AB",
                 "nominal_energy_remaining": 11547,

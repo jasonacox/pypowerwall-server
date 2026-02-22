@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pypowerwall-server"
-version = "0.1.12"  # Also defined in app/config.py as SERVER_VERSION
+version = "0.1.13"  # Also defined in app/config.py as SERVER_VERSION
 description = "A high-performance FastAPI-based server for monitoring and managing Tesla Powerwall systems"
 readme = "README.md"
 authors = [

@@ -147,11 +147,13 @@ class GatewayManager:
                     id=config.id,
                     name=config.name,
                     host=config.host,
+                    port=config.port,
                     gw_pwd=config.gw_pwd,
                     email=config.email,
                     timezone=config.timezone,
                     cloud_mode=config.cloud_mode,
                     fleetapi=config.fleetapi,
+                    type=config.type,
                 )
 
                 # Store gateway - connection will be created lazily on first poll
@@ -264,8 +266,13 @@ class GatewayManager:
                             timeout=15.0,
                         )
                     else:
+                        # Build host string with optional non-standard port
+                        # e.g. host="192.168.1.50", port=8443 -> "192.168.1.50:8443"
+                        effective_host = (
+                            f"{config.host}:{config.port}" if config.port else config.host
+                        )
                         tedapi_kwargs = {
-                            "host": config.host,
+                            "host": effective_host,
                             "gw_pwd": config.gw_pwd,
                             "timezone": config.timezone,
                             "timeout": settings.timeout,
@@ -462,6 +469,20 @@ class GatewayManager:
                         data.tedapi_mode = pw.tedapi_mode
             except Exception:
                 pass
+
+            # Cache TEDAPI config for battery block type enrichment (PW3 systems)
+            # battery_blocks[].type gives "Powerwall3" / "Powerwall3Follower" etc.,
+            # which is more useful for model detection than system_status Type ("ACPW").
+            try:
+                if hasattr(pw, "tedapi") and pw.tedapi and hasattr(pw.tedapi, "get_config"):
+                    tedapi_config = await asyncio.wait_for(
+                        loop.run_in_executor(self._executor, pw.tedapi.get_config),
+                        timeout=10.0,
+                    )
+                    if tedapi_config and isinstance(tedapi_config, dict):
+                        data.tedapi_config = tedapi_config
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.debug(f"TEDAPI config not available for {gateway_id}: {e}")
 
             # Try to get grid status (for caching)
             try:

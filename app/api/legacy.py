@@ -601,6 +601,19 @@ async def get_pod():
 
     pod = {}
 
+    # Build a serial-number → block type lookup from cached TEDAPI config.
+    # TEDAPI config battery_blocks carry a human-readable "type" field
+    # ("Powerwall3", "Powerwall3Follower", etc.) that system_status does not.
+    # VIN format: "PARTNUM--SERIAL" (e.g. "1707000-11-M--TG1253370033TB" → "TG1253370033TB")
+    tedapi_type_map: dict = {}
+    if status.data.tedapi_config:
+        for cfg_block in status.data.tedapi_config.get("battery_blocks", []):
+            vin = cfg_block.get("vin", "")
+            block_type = cfg_block.get("type")
+            if vin and block_type and "--" in vin:
+                serial = vin.rsplit("--", 1)[1]
+                tedapi_type_map[serial] = block_type
+
     # Get Individual Powerwall Battery Data from cached system_status
     system_status = status.data.system_status
     if system_status and "battery_blocks" in system_status:
@@ -630,6 +643,10 @@ async def get_pod():
             )
             pod[f"PW{idx}_PackagePartNumber"] = block.get("PackagePartNumber")
             pod[f"PW{idx}_PackageSerialNumber"] = block.get("PackageSerialNumber")
+            # Prefer TEDAPI config type ("Powerwall3", "Powerwall3Follower") over
+            # system_status Type ("ACPW") which is not useful for model detection.
+            serial = block.get("PackageSerialNumber", "")
+            pod[f"PW{idx}_Type"] = tedapi_type_map.get(serial) or block.get("Type")
             pod[f"PW{idx}_pinv_state"] = block.get("pinv_state")
             pod[f"PW{idx}_pinv_grid_state"] = block.get("pinv_grid_state")
             pod[f"PW{idx}_p_out"] = block.get("p_out")

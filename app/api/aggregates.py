@@ -9,12 +9,17 @@ Routes:
     - GET /api/aggregate/power   -> Power flows only (site, battery, load, solar, grid)
     - GET /api/aggregate/soe     -> Average battery level across all gateways
     - GET /api/aggregate/battery -> Battery capacity and charge information
+    - GET /api/aggregate/strings -> Per-gateway solar string data keyed by gateway ID
+    - GET /api/aggregate/alerts  -> Per-gateway alert lists keyed by gateway ID
+    - GET /api/aggregate/vitals  -> Per-gateway vitals keyed by gateway ID
 
 Use Cases:
     - Dashboard displaying total system capacity
     - Monitoring multiple Powerwall installations as single system
     - Historical data collection for combined systems
     - Load balancing across multiple sites
+    - Per-gateway string/alert data without string-name collision
+      (e.g. two gateways both report string "A" — keyed by gateway ID they are distinct)
 
 Data Aggregation:
     - Battery percentages are averaged across online gateways
@@ -133,4 +138,62 @@ async def get_aggregate_battery():
         "num_gateways": data.num_gateways,
         "num_online": data.num_online,
         "timestamp": data.timestamp,
+    }
+
+
+@router.get("/strings")
+async def get_aggregate_strings():
+    """Get per-gateway solar string data, keyed by gateway ID.
+
+    Returns string data from all gateways that have it, keyed by gateway ID.
+    Each gateway's strings use its own local naming (e.g. string "A"), so two
+    gateways can both report string "A" without collision — they are separated
+    by their gateway ID key.
+
+    This endpoint is the recommended way to collect string data when multiple
+    gateways are configured. For Telegraf users it provides a natural "gateway"
+    tag dimension without needing [[processor.rename.replace]] workarounds.
+
+    Only gateways with available data are included (offline gateways omitted).
+    """
+    all_gateways = gateway_manager.get_all_gateways()
+    return {
+        gw_id: status.data.strings or {}
+        for gw_id, status in all_gateways.items()
+        if status.data
+    }
+
+
+@router.get("/alerts")
+async def get_aggregate_alerts():
+    """Get per-gateway alert lists, keyed by gateway ID.
+
+    Returns the active alert list from each gateway, keyed by gateway ID.
+    When multiple gateways are configured this lets you see which device
+    generated each alert rather than having them all merged into one list.
+
+    Only gateways with available data are included (offline gateways omitted).
+    """
+    all_gateways = gateway_manager.get_all_gateways()
+    return {
+        gw_id: status.data.alerts or []
+        for gw_id, status in all_gateways.items()
+        if status.data
+    }
+
+
+@router.get("/vitals")
+async def get_aggregate_vitals():
+    """Get per-gateway vitals data, keyed by gateway ID.
+
+    Returns device-level telemetry (temperatures, voltages, currents) from
+    each gateway, keyed by gateway ID.
+
+    Only gateways with available data are included (offline gateways omitted).
+    """
+    all_gateways = gateway_manager.get_all_gateways()
+    return {
+        gw_id: status.data.vitals or {}
+        for gw_id, status in all_gateways.items()
+        if status.data
     }
