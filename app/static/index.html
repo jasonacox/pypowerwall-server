@@ -609,7 +609,13 @@
             font-weight: 600;
             color: var(--text-primary);
         }
-        
+
+        .powerwall-model {
+            font-size: 1.0em;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
         .spec-good {
             color: var(--accent-green);
         }
@@ -898,6 +904,23 @@
         .energy-detail {
             position: relative;
             z-index: 1;
+        }
+
+        /* Per-gateway section labels (Alerts, Solar Strings, Powerwall Status panels) */
+        .gateway-section-header {
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            border-top: 1px solid var(--border);
+            margin-top: 8px;
+            padding: 6px 0 3px 0;
+        }
+        .gateway-section-header:first-child {
+            border-top: none;
+            margin-top: 0;
+            padding-top: 0;
         }
     </style>
 </head>
@@ -1378,141 +1401,115 @@
             document.getElementById('gateway-count').textContent = data.num_online || 0;
         }
         
+        // Gateway metadata populated once at startup: { gateway_id: { name, type } }
+        // type is "powerwall" (has batteries) or "inverter" (solar-only, no batteries)
+        // Used by loadAlerts/loadStrings/loadPowerwalls to choose single vs multi-gateway paths.
+        let gatewayMeta = {};
+
+        // Render alert list → HTML string (reused for both single and per-gateway sections)
+        function formatAlerts(alerts) {
+            const noHtml = '<div class="no-alerts"><span class="icon">✅</span>No active alerts</div>';
+            if (!alerts || (Array.isArray(alerts) ? !alerts.length : !Object.keys(alerts).length)) return noHtml;
+            const noticeAlerts = ['FWUpdateSucceeded', 'SystemConnectedToGrid', 'GridCodesWrite', 'PodCommissionTime'];
+            const infoAlerts = ['ScheduledIslandContactorOpen', 'SelfTest'];
+            function categorize(text) {
+                const name = text.split(':')[0].trim();
+                if (noticeAlerts.some(n => name.includes(n))) return { type: 'notice', icon: '✓' };
+                if (infoAlerts.some(n => name.includes(n))) return { type: 'info', icon: 'ℹ' };
+                return { type: 'warning', icon: '⚠️' };
+            }
+            const arr = Array.isArray(alerts) ? alerts : Object.entries(alerts).map(([k, v]) => `${k}: ${v}`);
+            const priority = { 'notice': 1, 'info': 2, 'warning': 3 };
+            const sorted = arr.map(a => {
+                const alertText = typeof a === 'string' ? a : JSON.stringify(a);
+                const { type, icon } = categorize(alertText);
+                return { alertText, type, icon };
+            }).sort((a, b) => priority[a.type] - priority[b.type]);
+            return sorted.slice(0, 10).map(({ alertText, type, icon }) =>
+                `<div class="alert-item ${type}"><span class="alert-icon">${icon}</span><span>${alertText}</span></div>`
+            ).join('') || noHtml;
+        }
+
         // Fetch alerts
         async function loadAlerts() {
+            const container = document.getElementById('alert-list');
+            const isMulti = Object.keys(gatewayMeta).length > 1;
             try {
-                const response = await fetch('/alerts');
-                if (!response.ok) throw new Error('Failed to load alerts');
-                const alerts = await response.json();
-                
-                const container = document.getElementById('alert-list');
-                
-                if (!alerts || alerts.length === 0 || Object.keys(alerts).length === 0) {
-                    container.innerHTML = `
-                        <div class="no-alerts">
-                            <span class="icon">✅</span>
-                            No active alerts
-                        </div>
-                    `;
-                    return;
-                }
-                
-                // Define alert categories
-                const noticeAlerts = ['FWUpdateSucceeded', 'SystemConnectedToGrid', 'GridCodesWrite', 'PodCommissionTime'];
-                const infoAlerts = ['ScheduledIslandContactorOpen', 'SelfTest'];
-                
-                // Function to categorize alert
-                function categorizeAlert(alertText) {
-                    const alertName = alertText.split(':')[0].trim();
-                    
-                    if (noticeAlerts.some(notice => alertName.includes(notice))) {
-                        return { type: 'notice', icon: '✓' };
+                if (!isMulti) {
+                    // Single gateway — legacy endpoint unchanged
+                    const response = await fetch('/alerts');
+                    if (!response.ok) throw new Error('Failed to load alerts');
+                    container.innerHTML = formatAlerts(await response.json());
+                } else {
+                    // Multi-gateway — per-gateway labeled sections
+                    const response = await fetch('/api/aggregate/alerts');
+                    if (!response.ok) throw new Error('Failed to load alerts');
+                    const byGateway = await response.json();
+                    let html = '';
+                    for (const [gwId, alerts] of Object.entries(byGateway)) {
+                        html += `<div class="gateway-section-header">${gatewayMeta[gwId]?.name || gwId}</div>`;
+                        html += formatAlerts(alerts);
                     }
-                    if (infoAlerts.some(info => alertName.includes(info))) {
-                        return { type: 'info', icon: 'ℹ' };
-                    }
-                    return { type: 'warning', icon: '⚠️' };
+                    container.innerHTML = html || '<div class="no-alerts"><span class="icon">✅</span>No active alerts</div>';
                 }
-                
-                // Handle both array and object formats
-                const alertArray = Array.isArray(alerts) ? alerts : Object.entries(alerts).map(([k, v]) => `${k}: ${v}`);
-                
-                // Sort alerts by type priority (notice -> info -> warning)
-                const typePriority = { 'notice': 1, 'info': 2, 'warning': 3 };
-                const sortedAlerts = alertArray.map(alert => {
-                    const alertText = typeof alert === 'string' ? alert : JSON.stringify(alert);
-                    const { type, icon } = categorizeAlert(alertText);
-                    return { alertText, type, icon };
-                }).sort((a, b) => typePriority[a.type] - typePriority[b.type]);
-                
-                container.innerHTML = sortedAlerts.slice(0, 10).map(({ alertText, type, icon }) => {
-                    return `
-                        <div class="alert-item ${type}">
-                            <span class="alert-icon">${icon}</span>
-                            <span>${alertText}</span>
-                        </div>
-                    `;
-                }).join('');
             } catch (e) {
                 console.log('Alerts not available:', e.message);
-                document.getElementById('alert-list').innerHTML = `
-                    <div class="no-alerts">
-                        <span class="icon">✅</span>
-                        No active alerts
-                    </div>
-                `;
+                container.innerHTML = '<div class="no-alerts"><span class="icon">✅</span>No active alerts</div>';
             }
         }
-        
+
+        // Render solar-string data → HTML string (reused for both single and per-gateway sections)
+        function formatStrings(strings) {
+            if (!strings || !Object.keys(strings).length) return '<div class="no-strings">No string data available</div>';
+            const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
+            const moonIcon = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
+            let html = '', count = 0;
+            for (const [name, data] of Object.entries(strings)) {
+                if (typeof data !== 'object' || data === null) continue;
+                count++;
+                const connected = data.Connected || data.connected;
+                const voltage = data.Voltage || data.voltage || data.v || 0;
+                const current = data.Current || data.current || data.i || 0;
+                const power = data.Power || data.power || (voltage * current);
+                html += `<div class="string-item ${connected ? '' : 'disconnected'}">
+                            <div class="string-icon ${connected ? 'connected' : 'disconnected'}">${connected ? sunIcon : moonIcon}</div>
+                            <span class="string-name">${name}</span>
+                            <span class="string-value voltage">${typeof voltage === 'number' ? voltage.toFixed(1) : voltage}V</span>
+                            <span class="string-value current">${typeof current === 'number' ? current.toFixed(2) : current}A</span>
+                            <span class="string-value power">${typeof power === 'number' ? power.toFixed(0) : power}W</span>
+                        </div>`;
+            }
+            return count ? html : '<div class="no-strings">No string data available</div>';
+        }
+
         // Fetch solar strings
         async function loadStrings() {
+            const container = document.getElementById('string-list');
+            const isMulti = Object.keys(gatewayMeta).length > 1;
             try {
-                const response = await fetch('/strings');
-                if (!response.ok) throw new Error('Failed to load strings');
-                const strings = await response.json();
-                
-                const container = document.getElementById('string-list');
-                
-                if (!strings || Object.keys(strings).length === 0) {
-                    container.innerHTML = `<div class="no-strings">No string data available</div>`;
-                    return;
-                }
-                
-                // SVG icons for sun (connected) and moon (disconnected)
-                const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="5"/>
-                    <line x1="12" y1="1" x2="12" y2="3"/>
-                    <line x1="12" y1="21" x2="12" y2="23"/>
-                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-                    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-                    <line x1="1" y1="12" x2="3" y2="12"/>
-                    <line x1="21" y1="12" x2="23" y2="12"/>
-                    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-                    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-                </svg>`;
-                
-                const moonIcon = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-                </svg>`;
-                
-                // Parse strings data - show all strings
-                let html = '';
-                let totalCount = 0;
-                for (const [name, data] of Object.entries(strings)) {
-                    if (typeof data === 'object' && data !== null) {
-                        totalCount++;
-                        const connected = data.Connected || data.connected;
-                        const voltage = data.Voltage || data.voltage || data.v || 0;
-                        const current = data.Current || data.current || data.i || 0;
-                        const power = data.Power || data.power || (voltage * current);
-                        
-                        const icon = connected ? sunIcon : moonIcon;
-                        const iconClass = connected ? 'connected' : 'disconnected';
-                        const rowClass = connected ? '' : 'disconnected';
-                        
-                        html += `
-                            <div class="string-item ${rowClass}">
-                                <div class="string-icon ${iconClass}">${icon}</div>
-                                <span class="string-name">${name}</span>
-                                <span class="string-value voltage">${typeof voltage === 'number' ? voltage.toFixed(1) : voltage}V</span>
-                                <span class="string-value current">${typeof current === 'number' ? current.toFixed(2) : current}A</span>
-                                <span class="string-value power">${typeof power === 'number' ? power.toFixed(0) : power}W</span>
-                            </div>
-                        `;
-                    }
-                }
-                
-                if (totalCount === 0) {
-                    container.innerHTML = `<div class="no-strings">No string data available</div>`;
+                if (!isMulti) {
+                    // Single gateway — legacy endpoint unchanged
+                    const response = await fetch('/strings');
+                    if (!response.ok) throw new Error('Failed to load strings');
+                    container.innerHTML = formatStrings(await response.json());
                 } else {
-                    container.innerHTML = html;
+                    // Multi-gateway — per-gateway labeled sections
+                    const response = await fetch('/api/aggregate/strings');
+                    if (!response.ok) throw new Error('Failed to load strings');
+                    const byGateway = await response.json();
+                    let html = '';
+                    for (const [gwId, strings] of Object.entries(byGateway)) {
+                        html += `<div class="gateway-section-header">${gatewayMeta[gwId]?.name || gwId}</div>`;
+                        html += formatStrings(strings);
+                    }
+                    container.innerHTML = html || '<div class="no-strings">No string data available</div>';
                 }
             } catch (e) {
                 console.log('Strings not available:', e.message);
-                document.getElementById('string-list').innerHTML = `<div class="no-strings">String data not available</div>`;
+                container.innerHTML = '<div class="no-strings">String data not available</div>';
             }
         }
-        
+
         // Fetch server stats
         async function loadStats() {
             try {
@@ -1642,17 +1639,33 @@
         }
         
         // Fetch Powerwall pod data
+        // Detect Powerwall model from battery block metadata.
+        // isPw3System: gateway-level flag derived from /stats pw3:true (most reliable).
+        // Falls back to PackagePartNumber prefix heuristics, then rated capacity.
+        function pwModel(partNum, blockType, nomCapWh, isPw3System) {
+            if (blockType === 'Powerwall3Follower') return 'Powerwall 3 (Follower)';
+            if (isPw3System) return 'Powerwall 3';
+            if (blockType === 'Powerwall3' || blockType === 'LFPV') return 'Powerwall 3';
+            if (partNum && /^(1707000|3012170)/.test(partNum)) return 'Powerwall 3';
+            if (nomCapWh && nomCapWh < 8000) return 'Powerwall 1';
+            // Powerwall+ part numbers (integrated inverter, ~13.5 kWh)
+            if (partNum && /^(1114932|2012170|2849923)/.test(partNum)) return 'Powerwall +';
+            return 'Powerwall 2';
+        }
+
         async function loadPowerwalls() {
+            const container = document.getElementById('powerwall-content');
+            const isMulti = Object.keys(gatewayMeta).length > 1;
+            if (!isMulti) {
+            // Single gateway — full detail view via /pod (unchanged)
             try {
                 const response = await fetch('/pod');
                 if (!response.ok) throw new Error('Failed to load pod data');
                 const pod = await response.json();
                 
-                const container = document.getElementById('powerwall-content');
-                
                 // Extract Powerwall data
                 const powerwalls = [];
-                const pwRegex = /^(PW\d+)_(POD_nom_full_pack_energy|v_out|p_out|f_out)$/;
+                const pwRegex = /^(PW\d+)_(POD_nom_full_pack_energy|v_out|p_out|f_out|PackagePartNumber|Type)$/;
                 const pwData = {};
                 
                 for (const [key, value] of Object.entries(pod)) {
@@ -1677,6 +1690,7 @@
                 // Build table
                 let html = '<table class="powerwall-table"><thead><tr>';
                 html += '<th>Powerwall</th>';
+                html += '<th>Model</th>';
                 html += '<th>Capacity</th>';
                 html += '<th>Voltage</th>';
                 html += '<th>Power</th>';
@@ -1697,9 +1711,12 @@
                     const powerArrow = powerNum > 0 ? ' ↓' : powerNum < 0 ? ' ↑' : '';
                     const powerArrowClass = powerNum > 0 ? 'arrow-down' : powerNum < 0 ? 'arrow-up' : '';
                     const frequency = pw.f_out ? pw.f_out.toFixed(2) : '--';
-                    
+                    const model = pwModel(pw.PackagePartNumber, pw.Type, pw.POD_nom_full_pack_energy,
+                        gatewayMeta['default']?.pw3 || window._systemPw3 || false);
+
                     html += '<tr>';
                     html += `<td class="powerwall-name">${pw.name}</td>`;
+                    html += `<td class="powerwall-model">${model}</td>`;
                     html += `<td>${capacity} kWh <span class="${capacityClass}">(${capacityPct}%)</span></td>`;
                     html += `<td>${voltage} V</td>`;
                     html += `<td>${power} kW<span class="energy-arrow ${powerArrowClass}">${powerArrow}</span></td>`;
@@ -1874,8 +1891,64 @@
                 container.innerHTML = html;
             } catch (e) {
                 console.log('Powerwall data not available:', e.message);
-                document.getElementById('powerwall-content').innerHTML = `<div class="no-strings">Powerwall data not available</div>`;
+                container.innerHTML = '<div class="no-strings">Powerwall data not available</div>';
             }
+            } else {
+            // Multi-gateway — one labeled section per powerwall-type gateway.
+            // Inverter-only gateways (type: "inverter") are excluded from this panel.
+            try {
+                const resp = await fetch('/api/gateways/');
+                if (!resp.ok) throw new Error('Failed to load gateways');
+                const allStatuses = await resp.json();
+                const SPEC_CAPACITY = 13.5;
+                let html = '', hadAny = false;
+                for (const [gwId, status] of Object.entries(allStatuses)) {
+                    // Skip inverter-only gateways — they have no battery blocks
+                    const gwType = status.gateway?.type || gatewayMeta[gwId]?.type || 'powerwall';
+                    if (gwType === 'inverter') continue;
+                    if (!status.online || !status.data) continue;
+                    hadAny = true;
+                    const gwName = status.gateway?.name || gatewayMeta[gwId]?.name || gwId;
+                    const sysStatus = status.data.system_status || {};
+                    const blocks = sysStatus.battery_blocks || [];
+                    html += `<div class="gateway-section-header">${gwName}</div>`;
+                    if (!blocks.length) { html += '<div class="no-strings">No Powerwall data</div>'; continue; }
+                    // Battery table (same columns as single-gateway view)
+                    html += '<table class="powerwall-table"><thead><tr><th>Powerwall</th><th>Model</th><th>Capacity</th><th>Voltage</th><th>Power</th><th>Frequency</th></tr></thead><tbody>';
+                    blocks.forEach((block, i) => {
+                        const cap = block.nominal_full_pack_energy;
+                        const capKwh = cap ? (cap / 1000).toFixed(2) : '--';
+                        const capPct = cap ? ((cap / 1000 / SPEC_CAPACITY) * 100).toFixed(1) : '--';
+                        const capClass = cap && cap / 1000 >= SPEC_CAPACITY ? 'spec-good' : 'spec-warning';
+                        const voltage = block.v_out ? block.v_out.toFixed(1) : '--';
+                        const pwr = block.p_out || 0;
+                        const pwrStr = pwr !== 0 ? Math.abs(pwr).toFixed(2) : '--';
+                        const arrow = pwr > 0 ? ' ↓' : pwr < 0 ? ' ↑' : '';
+                        const arrowClass = pwr > 0 ? 'arrow-down' : pwr < 0 ? 'arrow-up' : '';
+                        const freq = block.f_out ? block.f_out.toFixed(2) : '--';
+                        const model = pwModel(block.PackagePartNumber, block.Type, cap,
+                            gatewayMeta[gwId]?.pw3 || false);
+                        html += `<tr><td class="powerwall-name">PW${i + 1}</td><td class="powerwall-model">${model}</td><td>${capKwh} kWh <span class="${capClass}">(${capPct}%)</span></td><td>${voltage} V</td><td>${pwrStr} kW<span class="energy-arrow ${arrowClass}">${arrow}</span></td><td>${freq} Hz</td></tr>`;
+                    });
+                    html += '</tbody></table>';
+                    // Compact summary row
+                    const soe = status.data.soe;
+                    const reserve = status.data.reserve;
+                    const tr = status.data.time_remaining;
+                    const totalCap = sysStatus.nominal_full_pack_energy;
+                    html += '<div class="powerwall-summary" style="margin-top:8px;font-size:0.82rem;gap:8px;">';
+                    if (totalCap) html += `<div class="powerwall-summary-item"><div class="powerwall-summary-label">Total Capacity</div><div class="powerwall-summary-value">${(totalCap / 1000).toFixed(2)} kWh</div></div>`;
+                    if (soe != null) html += `<div class="powerwall-summary-item"><div class="powerwall-summary-label">Charge</div><div class="powerwall-summary-value">${soe.toFixed(1)}%</div></div>`;
+                    if (reserve != null) html += `<div class="powerwall-summary-item"><div class="powerwall-summary-label">Reserve</div><div class="powerwall-summary-value">${reserve.toFixed(1)}%</div></div>`;
+                    if (tr != null) html += `<div class="powerwall-summary-item"><div class="powerwall-summary-label">Time Remaining</div><div class="powerwall-summary-value">${tr.toFixed(1)} hrs</div></div>`;
+                    html += '</div>';
+                }
+                container.innerHTML = hadAny ? html : '<div class="no-strings">No Powerwall data available</div>';
+            } catch (e) {
+                console.log('Powerwall data not available:', e.message);
+                container.innerHTML = '<div class="no-strings">Powerwall data not available</div>';
+            }
+            } // end else (multi-gateway)
         }
         
         // Fetch gateways
@@ -1940,23 +2013,54 @@
             }
         }
         
-        // Initialize
-        connectWebSocket();
-        loadAlerts();
-        loadStrings();
-        loadStats();
-        loadPowerwalls();
-        loadGateways();
-        
-        // Refresh secondary data periodically
-        setInterval(() => {
+        // Initialize — load gateway metadata first so multi-gateway panels branch correctly
+        async function initGateways() {
+            try {
+                const [gwResp, statsResp] = await Promise.all([
+                    fetch('/api/gateways/'),
+                    fetch('/stats'),
+                ]);
+                if (statsResp.ok) {
+                    const stats = await statsResp.json();
+                    // Store pw3 flag per gateway (single-gateway: applies to "default")
+                    // We'll attach it to each gateway entry below
+                    window._systemPw3 = stats.pw3 === true;
+                }
+                if (gwResp.ok) {
+                    const statuses = await gwResp.json();
+                    gatewayMeta = Object.fromEntries(
+                        Object.entries(statuses).map(([id, s]) => [id, {
+                            name: s.gateway?.name || id,
+                            type: s.gateway?.type || 'powerwall',
+                            // pw3 is a system-wide flag; attach to every gateway entry
+                            pw3: window._systemPw3 || false,
+                        }])
+                    );
+                }
+            } catch (e) {
+                console.log('Could not load gateway metadata:', e.message);
+            }
+        }
+
+        (async () => {
+            await initGateways();
+            connectWebSocket();
             loadAlerts();
             loadStrings();
             loadStats();
             loadPowerwalls();
             loadGateways();
-        }, 30000);
-        
+
+            // Refresh secondary data periodically
+            setInterval(() => {
+                loadAlerts();
+                loadStrings();
+                loadStats();
+                loadPowerwalls();
+                loadGateways();
+            }, 30000);
+        })();
+
         console.log('PyPowerwall Server console loaded');
     </script>
 </body>

@@ -27,12 +27,14 @@ class Gateway(BaseModel):
     Attributes:
         id: Unique identifier for the gateway (used in URLs)
         name: Human-readable display name
-        host: IP address or hostname (TEDAPI mode only)
+        host: IP address or hostname (TEDAPI mode only); may include :port suffix
+        port: Optional non-standard HTTPS port (e.g. 8443 when behind a travel router)
         gw_pwd: Gateway WiFi password for local access (TEDAPI mode only)
         email: Tesla account email (Cloud/FleetAPI modes)
         timezone: Local timezone for timestamp conversion
         cloud_mode: Enable Tesla Cloud API access
         fleetapi: Enable Tesla FleetAPI access
+        type: Gateway device type - "powerwall" (has batteries) or "inverter" (solar only)
         online: Current connection status (updated by gateway_manager)
         last_error: Most recent error message if connection failed
     """
@@ -40,12 +42,14 @@ class Gateway(BaseModel):
     id: str
     name: str
     host: Optional[str] = None
+    port: Optional[int] = Field(default=None, ge=1, le=65535)  # Non-standard HTTPS port (e.g. 8443 via travel router)
     gw_pwd: Optional[str] = None  # Gateway Wi-Fi password for TEDAPI
     email: Optional[str] = None
     site_id: Optional[str] = None  # Tesla Site ID (populated after connection)
     timezone: str = "America/Los_Angeles"
     cloud_mode: bool = False
     fleetapi: bool = False
+    type: str = "powerwall"  # "powerwall" | "inverter" (solar-only, no batteries)
     online: bool = False
     last_error: Optional[str] = None
 
@@ -132,6 +136,7 @@ class PowerwallData(BaseModel):
     site_name: Optional[str] = None  # Site name from Powerwall
     pw3: Optional[bool] = None  # True if Powerwall 3 system
     tedapi_mode: Optional[str] = None  # TEDAPI mode (e.g., "FleetAPI")
+    tedapi_config: Optional[Dict[str, Any]] = None  # Cached /tedapi/config response; battery_blocks[].type used for model detection
     timestamp: Optional[float] = None
 
 

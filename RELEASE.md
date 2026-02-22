@@ -2,6 +2,21 @@
 
 ## Version History
 
+### [0.1.13] - 2026-06-26
+
+**Added:**
+- Gateway `type` field (`"powerwall"` | `"inverter"`) — inverter-only sites can now be declared explicitly so the console skips battery panels for them (pypowerwall/issues#254)
+- Gateway `port` field — non-standard HTTPS ports (e.g. behind a travel router on `:8443`) are now supported; `pypowerwall/__init__.py` updated to strip the port suffix before IP/hostname regex validation (pypowerwall/issues#254)
+- New aggregate API endpoints for multi-gateway disambiguation (pypowerwall/issues#254):
+  - `GET /api/aggregate/strings` — per-gateway solar string data keyed by gateway ID
+  - `GET /api/aggregate/alerts` — per-gateway alert lists keyed by gateway ID
+  - `GET /api/aggregate/vitals` — per-gateway vitals dicts keyed by gateway ID
+- Console multi-gateway support — Alerts, Solar Strings, and Powerwall Status panels now detect multiple gateways and render per-gateway labeled sections with gateway names as section headers (pypowerwall/issues#254)
+- `gateways.yaml` examples for inverter-type and travel-router-port configurations
+
+**Changed:**
+- Console initialization wrapped in async IIFE so gateway metadata (`/api/gateways/`) is fetched before all data panels load, enabling correct single-vs-multi branching on page load
+
 ### [0.1.12] - 2026-02-21
 
 **Fixed:**

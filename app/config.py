@@ -173,7 +173,7 @@ from pydantic_settings import BaseSettings
 logger = logging.getLogger(__name__)
 
 # Server version
-SERVER_VERSION = "0.1.12"
+SERVER_VERSION = "0.1.13"
 
 
 class GatewayConfig(BaseSettings):
@@ -187,6 +187,7 @@ class GatewayConfig(BaseSettings):
     id: str
     name: str
     host: Optional[str] = None
+    port: Optional[int] = Field(default=None, ge=1, le=65535)  # Non-standard HTTPS port (e.g. 8443 via travel router)
     gw_pwd: Optional[str] = None  # Gateway Wi-Fi password for TEDAPI mode
     email: Optional[str] = None
     authpath: Optional[
@@ -195,6 +196,7 @@ class GatewayConfig(BaseSettings):
     timezone: str = "America/Los_Angeles"
     cloud_mode: bool = False
     fleetapi: bool = False
+    type: str = "powerwall"  # "powerwall" | "inverter" (solar-only, no batteries)
 
     model_config = {"env_prefix": ""}
 
