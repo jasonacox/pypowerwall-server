@@ -1066,8 +1066,16 @@
                         <div class="health-value" id="server-sitename">--</div>
                     </div>
                     <div class="health-item">
-                        <div class="health-label">Mode</div>
+                        <div class="health-label">Connect Mode</div>
                         <div class="health-value" id="server-mode">--</div>
+                    </div>
+                    <div class="health-item">
+                        <div class="health-label">Powerwall Mode</div>
+                        <div class="health-value" id="server-pw-mode">--</div>
+                    </div>
+                    <div class="health-item">
+                        <div class="health-label">Firmware</div>
+                        <div class="health-value" id="server-firmware">--</div>
                     </div>
                     <div class="health-item">
                         <div class="health-label">Gateways</div>
@@ -1078,7 +1086,7 @@
                         <div class="health-value" id="server-connection">--</div>
                     </div>
                     <div class="health-item">
-                        <div class="health-label">Uptime</div>
+                        <div class="health-label">Server Uptime</div>
                         <div class="health-value" id="server-uptime">--</div>
                     </div>
                     <div class="health-item">
@@ -1090,7 +1098,7 @@
                         <div class="health-value" id="server-errors">--</div>
                     </div>
                     <div class="health-item">
-                        <div class="health-label">Memory</div>
+                        <div class="health-label">Server Memory</div>
                         <div class="health-value" id="server-memory">--</div>
                     </div>
                     <div class="health-item">
@@ -1598,6 +1606,36 @@
                 document.getElementById('version-badge').textContent = `v${serverVersion}`;
                 document.getElementById('footer-versions').textContent = 
                     `Server: v${serverVersion} | PyPowerwall: v${libVersion}`;
+
+                // Powerwall Mode from /api/operation
+                try {
+                    const opResponse = await fetch('/api/operation');
+                    if (opResponse.ok) {
+                        const opData = await opResponse.json();
+                        const modeMap = {
+                            'self_consumption': 'Self-Consumption',
+                            'backup': 'Backup',
+                            'autonomous': 'Time-Based',
+                            'off_grid': 'Off-Grid',
+                        };
+                        const rawMode = opData.real_mode || '';
+                        const pwMode = modeMap[rawMode] || rawMode || '--';
+                        document.getElementById('server-pw-mode').textContent = pwMode;
+                    }
+                } catch (e) {
+                    console.log('Operation mode not available:', e.message);
+                }
+
+                // Firmware version from /version
+                try {
+                    const vResponse = await fetch('/version');
+                    if (vResponse.ok) {
+                        const vData = await vResponse.json();
+                        document.getElementById('server-firmware').textContent = vData.version || '--';
+                    }
+                } catch (e) {
+                    console.log('Firmware version not available:', e.message);
+                }
             } catch (e) {
                 console.log('Stats not available:', e.message);
             }
@@ -1645,7 +1683,7 @@
                 html += '<th>Frequency</th>';
                 html += '</tr></thead><tbody>';
                 
-                const SPEC_CAPACITY = 12.5; // kWh per Powerwall
+                const SPEC_CAPACITY = 13.5; // kWh per Powerwall
                 
                 pwList.forEach(pw => {
                     const capacity = pw.POD_nom_full_pack_energy ? (pw.POD_nom_full_pack_energy / 1000).toFixed(2) : '--';

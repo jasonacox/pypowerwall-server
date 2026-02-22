@@ -73,6 +73,40 @@ log_level = logging.DEBUG if settings.debug else logging.INFO
 logging.basicConfig(
     level=log_level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+
+
+class _SuppressWebSocketConnectionMessages(logging.Filter):
+    """Filter out websocket connection noise on uvicorn.error.
+
+    Uvicorn injects its 'uvicorn.error' logger into the websockets library,
+    so these messages all flow through that logger at INFO level:
+      - "connection open"
+      - "connection closed"
+      - '10.x.x.x - "WebSocket /ws/..." [accepted]'
+
+    We suppress only those specific patterns, leaving real errors and all
+    other INFO messages untouched.
+    """
+
+    _EXACT = frozenset(["connection open", "connection closed"])
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno != logging.INFO:
+            return True
+        msg = record.getMessage()
+        if msg in self._EXACT:
+            return False
+        if 'WebSocket' in msg and msg.endswith('[accepted]'):
+            return False
+        return True
+
+
+# Suppress noisy log output unless debug mode is on:
+#   uvicorn.access: "GET /api/..." request lines
+#   uvicorn.error filter: "connection open", "connection closed", WebSocket [accepted]
+if not settings.debug:
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.error").addFilter(_SuppressWebSocketConnectionMessages())
 logger = logging.getLogger(__name__)
 
 
@@ -129,10 +163,20 @@ app.add_middleware(
 )
 
 
+# Cookie max-age for powerflow web app auth compatibility (issue #7)
+# Use a 10-year lifetime so the cookie never expires on long-running kiosk dashboards.
+_AUTH_COOKIE_MAX_AGE = 10 * 365 * 24 * 60 * 60  # 10 years
+
+
 # Add request tracking middleware
 @app.middleware("http")
 async def track_requests(request: Request, call_next):
-    """Track request statistics for /stats endpoint."""
+    """Track request statistics and inject auth cookies for powerflow compatibility.
+
+    Injects AuthCookie and UserRecord on every successful response so the Tesla
+    Gateway web app (served from /powerflow) never shows the login screen.
+    This mirrors the behavior of the original pypowerwall proxy (issue #7).
+    """
     try:
         response = await call_next(request)
 
@@ -146,6 +190,34 @@ async def track_requests(request: Request, call_next):
         # Record errors (4xx, 5xx status codes)
         if response.status_code >= 400:
             stats_tracker.record_error()
+
+        # Inject auth cookies for powerflow web app compatibility (issue #7).
+        # The Tesla Gateway web UI checks for AuthCookie and shows a login screen
+        # when it is absent or expired.  We set it here (matching the original proxy)
+        # so the cookie is always present with a fresh max-age.  Only injected on
+        # successful responses (2xx/3xx) and only when the endpoint has not already
+        # set it (e.g. POST /api/login/Basic sets its own Set-Cookie header).
+        if response.status_code < 400:
+            existing_set_cookie = [
+                v
+                for k, v in response.headers.items()
+                if k.lower() == "set-cookie" and "AuthCookie" in v
+            ]
+            if not existing_set_cookie:
+                response.set_cookie(
+                    key="AuthCookie",
+                    value="1234567890",
+                    max_age=_AUTH_COOKIE_MAX_AGE,
+                    path="/",
+                    samesite="lax",
+                )
+                response.set_cookie(
+                    key="UserRecord",
+                    value="1234567890",
+                    max_age=_AUTH_COOKIE_MAX_AGE,
+                    path="/",
+                    samesite="lax",
+                )
 
         return response
     except Exception as e:

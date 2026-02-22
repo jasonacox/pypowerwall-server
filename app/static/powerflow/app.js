@@ -3045,15 +3045,9 @@
             r = i(45),
             a = i(29);
         function o(e, t = []) {
-            let i = !1;
-            for (let e = 0; e < t.length; e++)
-                if (Object(a.o)(t[e])) {
-                    i = !0;
-                    break;
-                }
-            return (
-                null !== e.lastLoginAt && e.loginType !== n.c.KIOSK && !i && (null != Object(r.b)("AuthCookie") || l(e))
-            );
+            // Always return true so the powerflow animation is always shown
+            // and the legacy login screen is never triggered (issue #7 patch).
+            return true;
         }
         function s(e, t = []) {
             return o(e, t) && e.loginType === n.c.CUSTOMER;
