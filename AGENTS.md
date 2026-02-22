@@ -1,4 +1,4 @@
-# CLAUDE.md - AI Agent Guidelines for pypowerwall-server
+# AGENTS.md - AI Agent Guidelines for pypowerwall-server
 
 This document provides guidelines for AI code agents (Claude, Copilot, etc.) working on this codebase.
 
@@ -152,7 +152,7 @@ async def catch_all(path: str):
 
 ### 6. Safe Defaults
 
-Return empty collections on errors, not exceptions:
+Return empty collections on errors, not exceptions. This applies to **data-returning endpoints**:
 
 ```python
 # ✅ Correct - safe default
@@ -160,10 +160,12 @@ if not status or not status.data:
     return {}
 return status.data.vitals or {}
 
-# ❌ Wrong - raises exception
+# ❌ Wrong - raises exception in a data endpoint
 if not status:
     raise HTTPException(status_code=503, detail="Gateway offline")
 ```
+
+> **Note**: The `get_default_gateway()` helper in `legacy.py` intentionally **does** raise `HTTPException(503)` when no gateway is configured — this is by design, not a violation of this pattern.
 
 ### 7. Data Transformations at Fetch Time
 
@@ -337,20 +339,30 @@ result = await asyncio.wait_for(
 )
 ```
 
+### 5. Overwriting Patched Static Files
+
+`app/static/powerflow/app.js` is a vendored copy of the Tesla Gateway web UI that has been surgically patched. The `isAuthenticated` function (module-internal function `o`) unconditionally returns `true` to suppress the login screen (issue #7). **Never replace this file with a clean download** — doing so re-introduces the login redirect and breaks the powerflow animation display.
+
+### 6. Removing Auth Cookie Middleware
+
+The `track_requests` middleware in `app/main.py` does double duty: request statistics **and** injecting `AuthCookie`/`UserRecord` cookies on every successful response. The cookie injection is required to keep the `/powerflow` web app authenticated (issue #7). Do not remove or restructure the cookie injection block without understanding this dependency.
+
 ## File Overview
 
 | File | Purpose |
 |------|---------|
-| `app/main.py` | FastAPI app, lifespan, middleware, CLI |
+| `app/main.py` | FastAPI app, lifespan, auth cookie middleware, log filtering, router ordering, CLI |
 | `app/config.py` | Pydantic settings, environment variables |
 | `app/core/gateway_manager.py` | Connection management, polling, caching |
-| `app/api/legacy.py` | Backward-compatible proxy endpoints |
+| `app/api/legacy.py` | Backward-compatible proxy endpoints + fake `/api/login/Basic` auth endpoint |
 | `app/api/gateways.py` | Multi-gateway REST API |
 | `app/api/aggregates.py` | Combined data from all gateways |
 | `app/api/websockets.py` | Real-time streaming |
 | `app/models/gateway.py` | Pydantic models |
-| `app/utils/transform.py` | Static file serving |
+| `app/utils/transform.py` | Static file serving and JS injection into HTML |
 | `app/utils/stats_tracker.py` | Request statistics |
+| `app/static/index.html` | Console UI dashboard — Powerwall status, health panel, battery graphics |
+| `app/static/powerflow/app.js` | ⚠️ **PATCHED** vendored Tesla Gateway web UI — `isAuthenticated` always returns `true` (issue #7). **Do NOT replace with a clean copy.** |
 
 ## Version Management
 
@@ -359,4 +371,16 @@ Update version in **both** files when releasing:
 1. `app/config.py`: `SERVER_VERSION = "x.y.z"`
 2. `pyproject.toml`: `version = "x.y.z"`
 
-Then update `RELEASE.md` with changes.
+Then update `RELEASE.md` with changes. When referencing GitHub issues, use `(#N)` format at the end of the relevant line.
+
+## Issues Knowledge Base
+
+A local (git-ignored) knowledge base lives in `issues/`. Check `issues/index.md` for a table of known issues and their resolutions before investigating bugs — the root cause and fix may already be documented.
+
+When investigating and resolving a GitHub issue:
+
+1. Create `issues/IssueN.md` (replace N with the issue number) with root cause, fix summary, and affected files
+2. Add a row to `issues/index.md`
+3. Reference the issue number in `RELEASE.md` when bumping the version
+
+The `issues/` folder is git-ignored and is local documentation only.
