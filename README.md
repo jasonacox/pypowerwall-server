@@ -70,7 +70,8 @@ docker run -d \
   --network host \
   -e PW_GATEWAYS='[
     {"id": "home", "name": "Home Gateway", "host": "192.168.91.1", "gw_pwd": "gateway_password_1"},
-    {"id": "cabin", "name": "Cabin Gateway", "host": "192.168.91.2", "gw_pwd": "gateway_password_2"}
+    {"id": "cabin", "name": "Cabin Gateway", "host": "192.168.91.2", "gw_pwd": "gateway_password_2"},
+    {"id": "garage", "name": "Garage (travel router)", "host": "192.168.1.50", "port": 8443, "gw_pwd": "gateway_password_3"}
   ]' \
   jasonacox/pypowerwall-server
 ```
@@ -178,6 +179,20 @@ gateways:
     email: tesla@email.com
     authpath: /auth
     timezone: America/Denver
+
+  - id: garage
+    name: Garage (travel router)
+    host: 192.168.1.50   # travel router IP
+    port: 8443           # non-standard HTTPS port forwarded to 192.168.91.1
+    gw_pwd: gw_pwd_3
+    timezone: America/Los_Angeles
+
+  - id: south-inverter
+    name: South Array Inverter
+    host: 192.168.91.1
+    gw_pwd: gw_pwd_4
+    type: inverter       # solar-only; suppresses battery panels in console
+    timezone: America/Los_Angeles
     
   - id: cloud-site
     name: Cloud Mode Site
@@ -191,6 +206,10 @@ gateways:
 - `email` + `authpath`: For Tesla Cloud API (control operations)
   - Run `pypowerwall-server --setup` to authenticate and generate auth files
   - Specify directory containing `.pypowerwall.auth` and `.pypowerwall.site` files
+
+**Optional fields:**
+- `port`: Non-standard HTTPS port (e.g. `8443`) — use when the gateway is behind a travel router that forwards a custom port to `192.168.91.1:443`
+- `type`: Gateway device type — `powerwall` (default, has batteries) or `inverter` (solar-only; suppresses battery panels in the console)
 
 ## API Endpoints
 
