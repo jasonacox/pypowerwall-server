@@ -35,4 +35,3 @@ console.log('DAKboard theme loaded');
     $('.power-flow-grid.active').css({
         "background-color": "#000",
     });
-}

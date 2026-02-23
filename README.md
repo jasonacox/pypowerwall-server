@@ -121,6 +121,7 @@ PW_GW_PWD=your_gateway_password
 PW_TIMEZONE=America/Los_Angeles
 PW_PORT=8675              # Default port (proxy-compatible)
 PW_BIND_ADDRESS=0.0.0.0  # Listen on all interfaces
+PROXY_BASE_URL=/pypowerwall  # Optional: serve under a sub-path (see Reverse Proxy)
 ```
 
 **Single Gateway Mode (With Cloud Control):**
@@ -210,6 +211,69 @@ gateways:
 **Optional fields:**
 - `port`: Non-standard HTTPS port (e.g. `8443`) — use when the gateway is behind a travel router that forwards a custom port to `192.168.91.1:443`
 - `type`: Gateway device type — `powerwall` (default, has batteries) or `inverter` (solar-only; suppresses battery panels in the console)
+
+### Reverse Proxy / HTTPS Proxy
+
+You can serve pypowerwall-server from a sub-path alongside other services (e.g. Grafana on `/`) using `PROXY_BASE_URL`. This is the recommended setup for HTTPS via nginx.
+
+**Environment variable:**
+```bash
+PROXY_BASE_URL=/pypowerwall   # Serve everything under /pypowerwall/
+```
+
+With this set, all UI pages, static assets, and API calls are rendered with the correct prefix so the browser resolves them through the proxy. No changes to API clients are needed.
+
+**Example nginx configuration:**
+```nginx
+server {
+    listen 443 ssl;
+    server_name lab.lan;
+
+    # Grafana at root
+    location / {
+        proxy_pass http://grafana:3000/;
+    }
+
+    # PyPowerwall at /pypowerwall/
+    location /pypowerwall/ {
+        # Strip the /pypowerwall prefix before forwarding (trailing slash is required)
+        proxy_pass http://pypowerwall:8675/;
+
+        proxy_set_header Host              $http_host;
+        proxy_set_header X-Forwarded-Host  $http_host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Port  $server_port;
+
+        # Strip CORS headers added by pypowerwall so nginx can set its own
+        proxy_hide_header Access-Control-Allow-Origin;
+        proxy_hide_header Access-Control-Allow-Credentials;
+        proxy_hide_header Access-Control-Allow-Methods;
+        proxy_hide_header Access-Control-Allow-Headers;
+
+        # Using "*" is suitable for trusted LAN deployments where API data is not sensitive.
+        # For stricter setups, replace "*" with your specific trusted origin, e.g.:
+        #   add_header Access-Control-Allow-Origin "https://pypowerwall.lan" always;
+        add_header Access-Control-Allow-Origin  "*" always;
+        add_header Access-Control-Allow-Methods "GET, POST, OPTIONS" always;
+
+        # WebSocket upgrade support
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+> **Note:** nginx's trailing slash in `proxy_pass http://pypowerwall:8675/;` strips the `/pypowerwall` prefix before forwarding requests to pypowerwall. The `PROXY_BASE_URL` setting is only used to generate correct browser-side URLs (asset paths, API URLs, redirects) — pypowerwall itself receives all requests without the prefix.
+
+**URL mapping with this configuration:**
+
+| Browser URL | Forwarded to pypowerwall as |
+|---|---|
+| `https://lab.lan/pypowerwall/` | `GET /` — Power Flow animation |
+| `https://lab.lan/pypowerwall/console` | `GET /console` — Management console |
+| `https://lab.lan/pypowerwall/api/...` | `GET /api/...` — API endpoints |
+| `https://lab.lan/pypowerwall/static/...` | `GET /static/...` — Static assets |
 
 ## API Endpoints
 

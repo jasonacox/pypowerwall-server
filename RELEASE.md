@@ -2,6 +2,26 @@
 
 ## Version History
 
+### [0.2.0] - 2026-02-22
+
+**Added:**
+- `PROXY_BASE_URL` environment variable — serve pypowerwall-server under a sub-path (e.g. `/pypowerwall`) when hosted behind a reverse proxy alongside other services such as Grafana. All UI pages, asset references, API base URLs, redirects, and console links are rewritten at serve time to include the configured prefix.
+- Fetch monkey-patch injected into both the powerflow UI and the management console when `PROXY_BASE_URL` is set, so `app.js` root-relative calls (e.g. `/stats`, `/version`, `/api/...`) are automatically prefixed without modifying the vendored JavaScript bundle.
+- README: new **Reverse Proxy / HTTPS Proxy** section with a complete nginx configuration example showing how to co-host pypowerwall and Grafana on one HTTPS virtual host, explaining the `proxy_pass` trailing-slash prefix-stripping pattern and the `PROXY_BASE_URL` URL-generation role.
+
+**Fixed:**
+- **Static file 404 with Starlette 0.46+** — setting `root_path=_proxy_base` on the FastAPI app caused Starlette's `Mount.matches()` to update the child `root_path`, which `StaticFiles.get_path()` then used to double-prefix the file path (e.g. looking for `app/static/static/powerflow/app.css`). Removed `root_path` from the FastAPI constructor; path stripping is handled by the existing `strip_proxy_prefix` middleware instead.
+- **`app.js` calling `/stats` without proxy prefix** — `app.js` uses root-relative fetch calls that bypass `window.apiBaseUrl`. Fixed by injecting a `window.fetch` monkey-patch into the powerflow `index.html` head (same pattern already used in the console) that prepends `PROXY_BASE_URL` to any root-relative URL.
+- **`example.html` jQuery 404** — `<script src="/static/powerflow/jquery.min.js">` was hardcoded without the proxy base; changed to `{PROXY_BASE}/static/powerflow/jquery.min.js`.
+- **`example.html` version URL broken on HTTPS** — old code used `window.location.hostname + ":" + window.location.port` which produces `lab.lan:` (empty port) on standard HTTPS; replaced with `window.location.host` (includes port only when non-standard) and added `{PROXY_BASE}` prefix.
+- **Console iframe loading Grafana instead of Power Flow** — `<iframe src="/?style=clear">` resolved to Grafana's `location /`; changed to `{PROXY_BASE}/?style=clear`.
+- **Console nav and footer links missing proxy base** — header links to `/`, `/docs`, `/api/gateways` and footer link to `/docs` all now use `{PROXY_BASE}/` so they resolve correctly when mounted under a sub-path.
+- **CORS duplicate header** — both nginx `add_header` and pypowerwall's CORSMiddleware were setting `Access-Control-Allow-Origin`, causing browsers to reject credentialed iframe requests. Resolved with `proxy_hide_header` in nginx (documented in README).
+- **CORS credentialed iframe** — `allow_origins=["*"]` is forbidden with `allow_credentials=True`; switched to `allow_origin_regex=".*"` so Starlette reflects the actual request `Origin` header, satisfying browsers for credentialed cross-origin requests.
+- **HTTPS Mixed Content / wrong scheme** — API base URL now honours `X-Forwarded-Proto` and `X-Forwarded-Host` headers so the injected `window.apiBaseUrl` uses the correct `https://` scheme and host when running behind an HTTPS reverse proxy.
+- **Stray `}` syntax errors** in all six theme files (`black.js`, `dakboard.js`, `grafana.js`, `grafana-dark.js`, `white.js`, `solar.js`) that caused `SyntaxError` in the browser console.
+- **`$ is not defined` in theme files** — theme scripts ran before jQuery was globally available. Fixed by explicitly loading `jquery.min.js` after `app.js` in `powerflow/index.html` so `$` is available when themes execute.
+
 ### [0.1.13] - 2026-06-26
 
 **Added:**

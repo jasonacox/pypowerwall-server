@@ -115,15 +115,17 @@
                 position: fixed !important;
             }
         </style>
+        {PROXY_BASE_SCRIPT}
         <script>
             // Redirect to /console if not in an iframe
             if (window.self === window.top) {
-                window.location.href = '/console';
+                window.location.href = '{PROXY_BASE}/console';
             }
         </script>
         <script lang="javascript">
             window.appPrefix = "{ASSET_PREFIX}"
             window.apiBaseUrl = "{API_BASE_URL}"
+            window.pypowerwallTheme = "{THEME_NAME}"
         </script>
         <script>
             window.__INITIAL_STATE__ = {
@@ -165,8 +167,9 @@
     </head>
     <body>
         <div id="root" style="height:100%"></div>
-        <script src="{STYLE}" type="text/javascript"></script>
         <script src="{ASSET_PREFIX}vendor.js" type="text/javascript"></script>
         <script src="{ASSET_PREFIX}app.js" type="text/javascript"></script>
+        <script src="{ASSET_PREFIX}jquery.min.js" type="text/javascript"></script>
+        <script src="{STYLE}" type="text/javascript"></script>
     </body>
 </html>
