@@ -250,6 +250,9 @@ server {
         proxy_hide_header Access-Control-Allow-Methods;
         proxy_hide_header Access-Control-Allow-Headers;
 
+        # Using "*" is suitable for trusted LAN deployments where API data is not sensitive.
+        # For stricter setups, replace "*" with your specific trusted origin, e.g.:
+        #   add_header Access-Control-Allow-Origin "https://pypowerwall.lan" always;
         add_header Access-Control-Allow-Origin  "*" always;
         add_header Access-Control-Allow-Methods "GET, POST, OPTIONS" always;
 

@@ -65,7 +65,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings, SERVER_VERSION
 from app.api import legacy, gateways, aggregates, websockets
 from app.core.gateway_manager import gateway_manager
-from app.utils.transform import get_static, inject_js
+from app.utils.transform import get_static
 from app.utils.stats_tracker import stats_tracker
 
 # Configure logging based on PW_DEBUG setting
@@ -168,6 +168,10 @@ app = FastAPI(
     version=SERVER_VERSION,
     docs_url="/docs",
     redoc_url="/redoc",
+    # When behind a proxy sub-path, set openapi_url so the Swagger/ReDoc UIs
+    # fetch the spec from the prefixed path rather than a root-relative /openapi.json
+    # that would escape the proxy base (e.g. route to Grafana at /).
+    openapi_url=f"{_proxy_base}/openapi.json" if _proxy_base else "/openapi.json",
     lifespan=lifespan,
 )
 
@@ -204,6 +208,7 @@ _AUTH_COOKIE_MAX_AGE = 10 * 365 * 24 * 60 * 60  # 10 years
 # identically to /aggregates.  Only active when PROXY_BASE_URL is set to a non-root
 # value (i.e. anything other than "/").
 if _proxy_base:
+    _proxy_base_bytes = _proxy_base.encode("latin-1")
 
     @app.middleware("http")
     async def strip_proxy_prefix(request: Request, call_next):
@@ -212,7 +217,11 @@ if _proxy_base:
         if path == _proxy_base or path.startswith(_proxy_base + "/"):
             new_path = path[len(_proxy_base):] or "/"
             request.scope["path"] = new_path
-            request.scope["raw_path"] = new_path.encode("latin-1")
+            # Slice the original raw_path bytes to preserve percent-encoding
+            # rather than re-encoding the decoded string, which can corrupt
+            # non-ASCII or already-encoded characters.
+            raw = request.scope["raw_path"]
+            request.scope["raw_path"] = raw[len(_proxy_base_bytes):] or b"/"
         return await call_next(request)
 
 
@@ -279,25 +288,11 @@ static_path = Path(__file__).parent / "static"
 
 # Include API routers
 # NOTE: Order matters! More specific routers (gateways, aggregates) must be
-# included BEFORE legacy router to prevent the legacy catch-all /api/{path:path}
-# from intercepting requests meant for other routers.
+# included BEFORE legacy router so that /api/gateways/* and /api/aggregate/*
+# routes are not shadowed by legacy endpoints that share the /api/* path prefix.
 app.include_router(gateways.router, prefix="/api/gateways", tags=["Gateways"])
 app.include_router(aggregates.router, prefix="/api/aggregate", tags=["Aggregates"])
 app.include_router(websockets.router, prefix="/ws", tags=["WebSockets"])
-
-# When running under a proxy sub-path (PROXY_BASE_URL), register an explicit
-# static-file route at the prefixed path BEFORE the legacy router.
-# app.mount() sub-apps interact poorly with middleware path-rewriting in some
-# Starlette versions, so we use a regular FileResponse route instead.
-if _proxy_base:
-
-    @app.get(f"{_proxy_base}/static/{{file_path:path}}", include_in_schema=False)
-    async def serve_static_prefixed(file_path: str):
-        """Serve static files at the proxy sub-path prefix."""
-        file_location = static_path / file_path
-        if file_location.exists() and file_location.is_file():
-            return FileResponse(file_location)
-        raise HTTPException(status_code=404, detail="Not Found")
 
 app.include_router(legacy.router, tags=["Legacy Proxy Compatibility"])
 
@@ -424,22 +419,23 @@ async def root(request: Request, style: str = None):
         return HTMLResponse(content=content)
 
     # Fallback if proxy web files not found
+    b = _proxy_base
     return HTMLResponse(
-        content="""
+        content=f"""
         <!DOCTYPE html>
         <html>
         <head>
             <title>PyPowerwall Server</title>
             <style>
-                body {
+                body {{
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                     max-width: 800px;
                     margin: 50px auto;
                     padding: 20px;
-                }
-                h1 { color: #e31937; }
-                a { color: #0066cc; text-decoration: none; }
-                a:hover { text-decoration: underline; }
+                }}
+                h1 {{ color: #e31937; }}
+                a {{ color: #0066cc; text-decoration: none; }}
+                a:hover {{ text-decoration: underline; }}
             </style>
         </head>
         <body>
@@ -447,9 +443,9 @@ async def root(request: Request, style: str = None):
             <p>Power Flow animation not available. Install pypowerwall proxy web files.</p>
             <h2>Quick Links</h2>
             <ul>
-                <li><a href="/console">Management Console</a></li>
-                <li><a href="/docs">API Documentation (Swagger UI)</a></li>
-                <li><a href="/redoc">API Documentation (ReDoc)</a></li>
+                <li><a href="{b}/console">Management Console</a></li>
+                <li><a href="{b}/docs">API Documentation (Swagger UI)</a></li>
+                <li><a href="{b}/redoc">API Documentation (ReDoc)</a></li>
             </ul>
         </body>
         </html>
@@ -489,22 +485,23 @@ async def console():
         content = content.replace("{PROXY_BASE_SCRIPT}", proxy_base_script)
         content = content.replace("{PROXY_BASE}", _proxy_base)
         return HTMLResponse(content=content)
+    b = _proxy_base
     return HTMLResponse(
-        content="""
+        content=f"""
         <!DOCTYPE html>
         <html>
         <head>
             <title>PyPowerwall Server</title>
             <style>
-                body {
+                body {{
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                     max-width: 800px;
                     margin: 50px auto;
                     padding: 20px;
-                }
-                h1 { color: #e31937; }
-                a { color: #0066cc; text-decoration: none; }
-                a:hover { text-decoration: underline; }
+                }}
+                h1 {{ color: #e31937; }}
+                a {{ color: #0066cc; text-decoration: none; }}
+                a:hover {{ text-decoration: underline; }}
             </style>
         </head>
         <body>
@@ -512,13 +509,13 @@ async def console():
             <p>Welcome to PyPowerwall Server - A modern FastAPI-based monitoring solution for Tesla Powerwall.</p>
             <h2>Quick Links</h2>
             <ul>
-                <li><a href="/docs">API Documentation (Swagger UI)</a></li>
-                <li><a href="/redoc">API Documentation (ReDoc)</a></li>
-                <li><a href="/api/gateways">List Gateways</a></li>
-                <li><a href="/vitals">Vitals (Legacy)</a></li>
-                <li><a href="/aggregates">Aggregates (Legacy)</a></li>
+                <li><a href="{b}/docs">API Documentation (Swagger UI)</a></li>
+                <li><a href="{b}/redoc">API Documentation (ReDoc)</a></li>
+                <li><a href="{b}/api/gateways">List Gateways</a></li>
+                <li><a href="{b}/vitals">Vitals (Legacy)</a></li>
+                <li><a href="{b}/aggregates">Aggregates (Legacy)</a></li>
             </ul>
-            <p><a href="/">← Back to Power Flow</a></p>
+            <p><a href="{b}/">← Back to Power Flow</a></p>
         </body>
         </html>
     """
