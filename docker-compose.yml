@@ -24,6 +24,9 @@ services:
       # CORS settings
       - CORS_ORIGINS=["*"]
       
+      # Reverse proxy sub-path (optional) - uncomment if serving under a prefix
+      # - PROXY_BASE_URL=/pypowerwall
+      
       # Control features (optional) - Uncomment to enable:
       # - CONTROL_ENABLED=true
       # - CONTROL_TOKEN=your-secure-random-token-here

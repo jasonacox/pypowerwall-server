@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    {PROXY_BASE_SCRIPT}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PyPowerwall Server</title>
@@ -933,9 +934,9 @@
                 <span id="version-badge" class="version-badge">v--</span>
             </div>
             <div class="header-links">
-                <a href="/">Power Flow</a>
-                <a href="/docs">API Docs</a>
-                <a href="/api/gateways">Gateways API</a>
+                <a href="{PROXY_BASE}/">Power Flow</a>
+                <a href="{PROXY_BASE}/docs">API Docs</a>
+                <a href="{PROXY_BASE}/api/gateways">Gateways API</a>
                 <a href="https://github.com/jasonacox/pypowerwall-server" target="_blank">GitHub</a>
             </div>
         </header>
@@ -966,7 +967,7 @@
                     </div>
                 </div>
                 <div class="card-content">
-                    <iframe src="/?style=clear" class="power-flow-iframe" title="Power Flow Animation"></iframe>
+                    <iframe src="{PROXY_BASE}/?style=clear" class="power-flow-iframe" title="Power Flow Animation"></iframe>
                 </div>
             </div>
             
@@ -1177,7 +1178,7 @@
     <footer>
         <p>
             <span id="footer-versions">Server: v-- | PyPowerwall: v--</span>
-            | <a href="/docs">API Documentation</a> 
+            | <a href="{PROXY_BASE}/docs">API Documentation</a> 
             | <a href="https://github.com/jasonacox/pypowerwall-server" target="_blank">GitHub</a>
         </p>
     </footer>

@@ -119,6 +119,8 @@ async def lifespan(app: FastAPI):
     logger.info(f"Polling interval (PW_CACHE_EXPIRE): {settings.cache_expire}s")
     logger.info(f"Timeout (PW_TIMEOUT): {settings.timeout}s")
     logger.info(f"Server listening on {settings.server_host}:{settings.server_port}")
+    if _proxy_base:
+        logger.info(f"Reverse proxy base path (PROXY_BASE_URL): {_proxy_base}")
 
     # Initialize gateway manager
     await gateway_manager.initialize(
@@ -143,7 +145,23 @@ async def lifespan(app: FastAPI):
     await gateway_manager.shutdown()
 
 
+# Normalize PROXY_BASE_URL: strip trailing slash, keep leading slash (or empty string)
+# e.g. "/" -> "", "/powerwall" -> "/powerwall", "/powerwall/" -> "/powerwall"
+_proxy_base = settings.proxy_base_url.rstrip("/") if settings.proxy_base_url != "/" else ""
+
 # Create FastAPI application
+# NOTE: Do NOT set root_path=_proxy_base here. FastAPI's __call__ injects root_path
+# into scope["root_path"] for every request. Starlette 0.46+ uses root_path in
+# Mount.matches() child_scope AND in StaticFiles.get_path() → get_route_path().
+# When nginx strips the proxy prefix before forwarding (trailing-slash proxy_pass),
+# the path arrives WITHOUT the prefix (e.g. "/static/powerflow/app.css").
+# If root_path="/pypowerwall" is also in scope, Mount sets child root_path to
+# "/pypowerwall/static", then get_route_path returns the un-stripped
+#  "/static/powerflow/app.css", and StaticFiles tries to serve
+# "static/powerflow/app.css" relative to app/static/ → "app/static/static/..."
+# which doesn't exist → 404.  Removing root_path here keeps scope["root_path"]
+# empty so the Mount child scope is just "/static" and get_route_path correctly
+# strips that prefix, yielding "powerflow/app.css" → correct file.
 app = FastAPI(
     title="PyPowerwall Server",
     description="Modern FastAPI server for Tesla Powerwall monitoring with multi-gateway support",
@@ -153,10 +171,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Configure CORS
+# Configure CORS.
+# The CORS spec forbids allow_credentials=True combined with allow_origins=["*"].
+# However, the powerflow app.js runs in iframes on different origins and sends
+# cookies (AuthCookie/UserRecord injected by track_requests), making every request
+# credentialed.  Credentialed requests require the exact origin reflected back —
+# not a wildcard — plus Access-Control-Allow-Credentials: true.
+#
+# Solution: when CORS_ORIGINS is the default wildcard, use allow_origin_regex=".*"
+# instead.  Starlette then reflects the actual request Origin and sets credentials,
+# satisfying the browser for both plain and credentialed cross-origin requests.
+# When specific origins are configured via CORS_ORIGINS, use those directly.
+_cors_wildcard = "*" in settings.cors_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=[] if _cors_wildcard else settings.cors_origins,
+    allow_origin_regex=".*" if _cors_wildcard else None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -166,6 +196,24 @@ app.add_middleware(
 # Cookie max-age for powerflow web app auth compatibility (issue #7)
 # Use a 10-year lifetime so the cookie never expires on long-running kiosk dashboards.
 _AUTH_COOKIE_MAX_AGE = 10 * 365 * 24 * 60 * 60  # 10 years
+
+
+# Reverse proxy path prefix stripping (PROXY_BASE_URL)
+# Mirrors the old pypowerwall proxy behavior: strip the base path prefix from every
+# incoming request before routing so that e.g. /powerwall/aggregates is handled
+# identically to /aggregates.  Only active when PROXY_BASE_URL is set to a non-root
+# value (i.e. anything other than "/").
+if _proxy_base:
+
+    @app.middleware("http")
+    async def strip_proxy_prefix(request: Request, call_next):
+        """Strip PROXY_BASE_URL prefix from request paths for reverse proxy support."""
+        path = request.scope["path"]
+        if path == _proxy_base or path.startswith(_proxy_base + "/"):
+            new_path = path[len(_proxy_base):] or "/"
+            request.scope["path"] = new_path
+            request.scope["raw_path"] = new_path.encode("latin-1")
+        return await call_next(request)
 
 
 # Add request tracking middleware
@@ -226,6 +274,9 @@ async def track_requests(request: Request, call_next):
         raise
 
 
+# Static files path (used by mounts and prefixed static route below)
+static_path = Path(__file__).parent / "static"
+
 # Include API routers
 # NOTE: Order matters! More specific routers (gateways, aggregates) must be
 # included BEFORE legacy router to prevent the legacy catch-all /api/{path:path}
@@ -233,15 +284,29 @@ async def track_requests(request: Request, call_next):
 app.include_router(gateways.router, prefix="/api/gateways", tags=["Gateways"])
 app.include_router(aggregates.router, prefix="/api/aggregate", tags=["Aggregates"])
 app.include_router(websockets.router, prefix="/ws", tags=["WebSockets"])
+
+# When running under a proxy sub-path (PROXY_BASE_URL), register an explicit
+# static-file route at the prefixed path BEFORE the legacy router.
+# app.mount() sub-apps interact poorly with middleware path-rewriting in some
+# Starlette versions, so we use a regular FileResponse route instead.
+if _proxy_base:
+
+    @app.get(f"{_proxy_base}/static/{{file_path:path}}", include_in_schema=False)
+    async def serve_static_prefixed(file_path: str):
+        """Serve static files at the proxy sub-path prefix."""
+        file_location = static_path / file_path
+        if file_location.exists() and file_location.is_file():
+            return FileResponse(file_location)
+        raise HTTPException(status_code=404, detail="Not Found")
+
 app.include_router(legacy.router, tags=["Legacy Proxy Compatibility"])
 
 # Mount static files
-static_path = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 
 
 @app.get("/favicon.ico", include_in_schema=False)
-async def favicon():
+async def favicon_ico():
     """Serve favicon.ico from static files."""
     favicon_path = static_path / "favicon.ico"
     if favicon_path.exists():
@@ -301,19 +366,60 @@ async def root(request: Request, style: str = None):
         content = content.replace("{EMAIL}", "")
         content = content.replace("{THEME_CLASS}", f"pypowerwall-theme-{style_name}")
 
-        # Build absolute API base URL from request
-        api_base_url = f"{request.url.scheme}://{request.url.netloc}/api"
+        # Build absolute API base URL from request.
+        # When behind an HTTPS reverse proxy (e.g. nginx), the backend sees
+        # requests as plain HTTP.  Honour X-Forwarded-Proto / X-Forwarded-Host
+        # so the injected {API_BASE_URL} uses the correct scheme, avoiding
+        # Mixed Content errors in the browser.
+        #
+        # nginx's $host variable strips the port; $http_host preserves it.
+        # If nginx sends X-Forwarded-Host without a port (common with $host),
+        # check X-Forwarded-Port and re-attach the port so the powerflow app.js
+        # calls back through the same proxy rather than the bare origin port.
+        scheme = (
+            request.headers.get("x-forwarded-proto")
+            or request.url.scheme
+        )
+        host = (
+            request.headers.get("x-forwarded-host")
+            or request.url.netloc
+        )
+        # Re-attach non-standard port when X-Forwarded-Host was set without one
+        fwd_port = request.headers.get("x-forwarded-port")
+        if fwd_port and ":" not in host:
+            standard = ("443" if scheme == "https" else "80")
+            if fwd_port != standard:
+                host = f"{host}:{fwd_port}"
+        api_base_url = f"{scheme}://{host}{_proxy_base}/api"
 
-        # Set up asset prefix for static files - needs trailing slash for webpack chunk loading
-        static_asset_prefix = "/static/powerflow/"
+        # Set up asset prefix for static files - needs trailing slash for webpack chunk loading.
+        # Prepend proxy base so webpack public path (s.p = window.appPrefix) resolves chunks
+        # correctly when the server is mounted under a sub-path (PROXY_BASE_URL).
+        static_asset_prefix = f"{_proxy_base}/static/powerflow/"
         content = content.replace("{STYLE}", static_asset_prefix + style_file)
+        content = content.replace("{THEME_NAME}", style_name)
         content = content.replace("{ASSET_PREFIX}", static_asset_prefix)
         content = content.replace("{API_BASE_URL}", api_base_url)
+        content = content.replace("{PROXY_BASE}", _proxy_base)
 
-        # Inject JS transformation if style file exists
-        style_path = os.path.join(static_path, "powerflow", style_file)
-        if os.path.exists(style_path):
-            content = inject_js(content, static_asset_prefix + style_file)
+        # When running under a proxy sub-path (PROXY_BASE_URL), inject a fetch
+        # monkey-patch so app.js root-relative calls like /stats and /version
+        # get the prefix prepended automatically.
+        if _proxy_base:
+            pf_proxy_script = f"""<script>
+(function() {{
+    var _BASE = "{_proxy_base}";
+    var _origFetch = window.fetch;
+    window.fetch = function(url, opts) {{
+        if (typeof url === 'string' && url.charAt(0) === '/' && url.indexOf(_BASE) !== 0)
+            url = _BASE + url;
+        return _origFetch.apply(this, opts !== undefined ? [url, opts] : [url]);
+    }};
+}})();
+</script>"""
+        else:
+            pf_proxy_script = ""
+        content = content.replace("{PROXY_BASE_SCRIPT}", pf_proxy_script)
 
         return HTMLResponse(content=content)
 
@@ -356,7 +462,33 @@ async def console():
     """Serve the management console UI."""
     index_path = Path(__file__).parent / "static" / "index.html"
     if index_path.exists():
-        return HTMLResponse(content=index_path.read_text())
+        content = index_path.read_text()
+        # When running under a proxy sub-path (PROXY_BASE_URL), inject a fetch
+        # monkey-patch so all root-relative API calls get the prefix prepended
+        # automatically, without modifying every call site in index.html.
+        if _proxy_base:
+            proxy_base_script = f"""<script>
+(function() {{
+    var _BASE = "{_proxy_base}";
+    window._BASE = _BASE;
+    var _origFetch = window.fetch;
+    window.fetch = function(url, opts) {{
+        if (typeof url === 'string' && url.charAt(0) === '/' && url.indexOf(_BASE) !== 0)
+            url = _BASE + url;
+        return _origFetch.apply(this, opts !== undefined ? [url, opts] : [url]);
+    }};
+}})();
+</script>"""
+            # Fix WebSocket URL which is built in JS as a template literal
+            content = content.replace(
+                "/ws/aggregate",
+                f"{_proxy_base}/ws/aggregate",
+            )
+        else:
+            proxy_base_script = ""
+        content = content.replace("{PROXY_BASE_SCRIPT}", proxy_base_script)
+        content = content.replace("{PROXY_BASE}", _proxy_base)
+        return HTMLResponse(content=content)
     return HTMLResponse(
         content="""
         <!DOCTYPE html>
@@ -399,7 +531,9 @@ async def example():
     """Serve the Power Flow iFrame example page."""
     example_path = Path(__file__).parent / "static" / "example.html"
     if example_path.exists():
-        return HTMLResponse(content=example_path.read_text())
+        content = example_path.read_text()
+        content = content.replace("{PROXY_BASE}", _proxy_base)
+        return HTMLResponse(content=content)
     return HTMLResponse(
         content="""
         <!DOCTYPE html>
@@ -416,7 +550,7 @@ async def example():
 
 @app.get("/favicon-32x32.png", tags=["Static"])
 @app.get("/favicon-16x16.png", tags=["Static"])
-async def favicon(request: Request):
+async def favicon_png(request: Request):
     """Serve favicon files."""
     filename = request.url.path.lstrip("/")
     favicon_path = Path(__file__).parent / "static" / filename

@@ -35,4 +35,3 @@ console.log('Grafana theme loaded');
     $('.power-flow-grid.active').css({
         "background-color": "#161719",
     });
-}
