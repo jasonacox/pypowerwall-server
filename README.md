@@ -43,6 +43,19 @@ docker run -d \
   jasonacox/pypowerwall-server
 ```
 
+#### TEDAPI v1r Mode (RSA Key Auth)
+```bash
+# TEDAPI v1r uses an RSA-4096 private key instead of the gateway Wi-Fi password.
+# Generate a key pair with pypowerwall, then mount it into the container.
+docker run -d \
+  --name pypowerwall-server \
+  --network host \
+  -e PW_HOST=192.168.91.1 \
+  -e PW_RSA_KEY_PATH=/keys/tedapi_rsa_private.pem \
+  -v /path/to/keys:/keys \
+  jasonacox/pypowerwall-server
+```
+
 #### Cloud Mode (Remote Access)
 
 ```bash
@@ -124,6 +137,13 @@ PW_BIND_ADDRESS=0.0.0.0  # Listen on all interfaces
 PROXY_BASE_URL=/pypowerwall  # Optional: serve under a sub-path (see Reverse Proxy)
 ```
 
+**Single Gateway Mode (TEDAPI v1r — RSA Key Auth):**
+```bash
+PW_HOST=192.168.91.1
+PW_RSA_KEY_PATH=/path/to/tedapi_rsa_private.pem  # RSA-4096 private key (alternative to PW_GW_PWD)
+PW_TIMEZONE=America/Los_Angeles
+```
+
 **Single Gateway Mode (With Cloud Control):**
 ```bash
 PW_HOST=192.168.91.1
@@ -200,17 +220,29 @@ gateways:
     email: user@example.com
     authpath: /auth
     cloud_mode: true
+
+  - id: v1r-gateway
+    name: TEDAPI v1r Gateway
+    host: 192.168.91.1
+    rsa_key_path: /keys/tedapi_rsa_private.pem  # RSA-4096 private key (TEDAPI v1r mode)
+    timezone: America/Los_Angeles
 ```
 
 **Authentication:**
-- `gw_pwd`: For TEDAPI local gateway access
+- `gw_pwd`: For TEDAPI local gateway access (standard mode)
+- `rsa_key_path`: Path to RSA-4096 private key PEM file for TEDAPI v1r LAN access (alternative to `gw_pwd`)
 - `email` + `authpath`: For Tesla Cloud API (control operations)
   - Run `pypowerwall-server --setup` to authenticate and generate auth files
   - Specify directory containing `.pypowerwall.auth` and `.pypowerwall.site` files
 
+**TEDAPI connection modes:**
+- `host` + `gw_pwd` → TEDAPI (standard, uses gateway Wi-Fi password)
+- `host` + `rsa_key_path` → TEDAPI v1r (uses RSA-4096 private key; shown as "TEDAPI v1r" in console)
+
 **Optional fields:**
 - `port`: Non-standard HTTPS port (e.g. `8443`) — use when the gateway is behind a travel router that forwards a custom port to `192.168.91.1:443`
 - `type`: Gateway device type — `powerwall` (default, has batteries) or `inverter` (solar-only; suppresses battery panels in the console)
+- `rsa_key_path`: RSA-4096 private key PEM path for TEDAPI v1r LAN authentication
 
 ### Reverse Proxy / HTTPS Proxy
 
