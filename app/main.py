@@ -207,22 +207,31 @@ _AUTH_COOKIE_MAX_AGE = 10 * 365 * 24 * 60 * 60  # 10 years
 # incoming request before routing so that e.g. /powerwall/aggregates is handled
 # identically to /aggregates.  Only active when PROXY_BASE_URL is set to a non-root
 # value (i.e. anything other than "/").
+#
+# NOTE: Must be a pure ASGI middleware class (not BaseHTTPMiddleware) so it also
+# intercepts WebSocket upgrade connections. BaseHTTPMiddleware only dispatches
+# scope["type"] == "http"; websocket scopes pass through unmodified, which means
+# the prefix would never be stripped and /pypowerwall/ws/aggregate would 404.
 if _proxy_base:
     _proxy_base_bytes = _proxy_base.encode("latin-1")
 
-    @app.middleware("http")
-    async def strip_proxy_prefix(request: Request, call_next):
-        """Strip PROXY_BASE_URL prefix from request paths for reverse proxy support."""
-        path = request.scope["path"]
-        if path == _proxy_base or path.startswith(_proxy_base + "/"):
-            new_path = path[len(_proxy_base):] or "/"
-            request.scope["path"] = new_path
-            # Slice the original raw_path bytes to preserve percent-encoding
-            # rather than re-encoding the decoded string, which can corrupt
-            # non-ASCII or already-encoded characters.
-            raw = request.scope["raw_path"]
-            request.scope["raw_path"] = raw[len(_proxy_base_bytes):] or b"/"
-        return await call_next(request)
+    class _StripProxyPrefix:
+        """Pure ASGI middleware: strip PROXY_BASE_URL prefix from HTTP and WebSocket paths."""
+
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] in ("http", "websocket"):
+                path = scope.get("path", "")
+                if path == _proxy_base or path.startswith(_proxy_base + "/"):
+                    new_path = path[len(_proxy_base):] or "/"
+                    scope["path"] = new_path
+                    raw = scope.get("raw_path", b"")
+                    scope["raw_path"] = raw[len(_proxy_base_bytes):] or b"/"
+            await self.app(scope, receive, send)
+
+    app.add_middleware(_StripProxyPrefix)
 
 
 # Add request tracking middleware
