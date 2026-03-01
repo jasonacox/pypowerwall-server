@@ -2,6 +2,18 @@
 
 ## Version History
 
+### [0.2.1] - 2026-03-01
+
+**Added:**
+- `PW_RSA_KEY_PATH` environment variable — path to an RSA-4096 private key PEM file for TEDAPI v1r LAN access (new pypowerwall authentication mode). Supported in single-gateway env-var config and `gateways.yaml` multi-gateway config.
+- Console **Connect Mode** and **Connected Gateways** panels now display `TEDAPI v1r` when `rsa_key_path` is configured, or `TEDAPI` otherwise (previously always showed `TEDAPI`).
+- `Dockerfile.beta` — alternative Dockerfile for beta builds that installs the production `requirements.txt` (for all transitive deps) then shadows the installed `pypowerwall` package with the local source tree via `PYTHONPATH=/app`. Used by `upload.sh` when building a beta release tag.
+
+**Fixed:**
+- **WebSocket disconnected under reverse proxy** — `strip_proxy_prefix` was implemented as `BaseHTTPMiddleware` which only intercepts `scope["type"] == "http"`. WebSocket upgrade connections (`scope["type"] == "websocket"`) bypassed it entirely, leaving the proxy prefix in the path and causing `/pypowerwall/ws/aggregate` to 404. Replaced with a pure ASGI middleware class (`_StripProxyPrefix`) that handles both `http` and `websocket` scope types.
+- Duplicate `favicon()` function names — renamed to `favicon_ico()` and `favicon_png()` to avoid the second definition silently shadowing the first.
+- PR #16 reviewer feedback: removed unused `inject_js` import, fixed `raw_path` byte-slice to preserve percent-encoding, removed dead unreachable `serve_static_prefixed` route, made `openapi_url` proxy-base aware so Swagger/ReDoc work under a sub-path, updated router comment, fixed hardcoded links in root/console fallback HTML, added README nginx CORS wildcard note.
+
 ### [0.2.0] - 2026-02-22
 
 **Added:**
