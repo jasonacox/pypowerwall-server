@@ -65,16 +65,16 @@ Environment Variables (Proxy Compatible):
         PW_CACHE_FILE        - Cache file path (default: auto - uses PW_AUTH_PATH/.powerwall or /tmp/.powerwall)
         PW_SITEID            - Tesla site ID for multi-site accounts (default: none)
         PW_CONTROL_SECRET    - Enable control commands (default: none/disabled)
-        PW_NEG_SOLAR         - Allow negative solar values "yes"/"no" (default: "no")
-        PROXY_BASE_URL       - Base URL for reverse proxy (default: "/")
+        PW_NEG_SOLAR         - Allow negative solar values "yes"/"no" (default: "no")        PW_RSA_KEY_PATH      - Path to RSA-4096 private key PEM for TEDAPI v1r LAN access (default: none)        PROXY_BASE_URL       - Base URL for reverse proxy (default: "/")
 
 Connection Modes:
 
     TEDAPI (Local Gateway Access):
         • Fastest, most reliable
         • Requires direct connection to gateway WiFi or local network
-        • Configuration: PW_HOST + PW_GW_PWD
-        • Example: 192.168.91.1 with gateway password
+        • Configuration: PW_HOST + PW_GW_PWD  (password-based)
+        •            OR: PW_HOST + PW_RSA_KEY_PATH  (RSA key-based, v1r mode)
+        • Example: 192.168.91.1 with gateway password or RSA PEM key
     
     Cloud Mode:
         • Remote access from anywhere
@@ -189,6 +189,7 @@ class GatewayConfig(BaseSettings):
     host: Optional[str] = None
     port: Optional[int] = Field(default=None, ge=1, le=65535)  # Non-standard HTTPS port (e.g. 8443 via travel router)
     gw_pwd: Optional[str] = None  # Gateway Wi-Fi password for TEDAPI mode
+    rsa_key_path: Optional[str] = None  # Path to RSA-4096 private key PEM for v1r LAN TEDAPI access
     email: Optional[str] = None
     authpath: Optional[
         str
@@ -253,6 +254,9 @@ class Settings(BaseSettings):
     siteid: Optional[str] = Field(default=None, alias="PW_SITEID")
     control_secret: Optional[str] = Field(default=None, alias="PW_CONTROL_SECRET")
     proxy_base_url: str = Field(default="/", alias="PROXY_BASE_URL")
+    pw_rsa_key_path: Optional[str] = Field(
+        default=None, alias="PW_RSA_KEY_PATH"
+    )  # RSA-4096 private key PEM path for TEDAPI v1r LAN access
     neg_solar: bool = Field(
         default=False, alias="PW_NEG_SOLAR"
     )  # Allow negative solar values (default: no)
@@ -303,6 +307,7 @@ class Settings(BaseSettings):
                     name="Default Gateway",
                     host=self.pw_host,
                     gw_pwd=self.pw_gw_pwd,
+                    rsa_key_path=self.pw_rsa_key_path,
                     email=self.pw_email,
                     authpath=self.pw_authpath,
                     timezone=self.pw_timezone,

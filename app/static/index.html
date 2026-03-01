@@ -1524,29 +1524,22 @@
                 
                 // Mode
                 let mode = '--';
-                let qualifiers = [];
-                
+
                 // Determine base mode
-                if (stats.fleetapi || stats.cloudmode) {
+                if (stats.fleetapi) {
+                    mode = 'FleetAPI';
+                } else if (stats.cloudmode) {
                     mode = 'Cloud';
-                    if (stats.fleetapi) {
-                        qualifiers.push('FleetAPI');
-                    }
+                } else if (stats.tedapi) {
+                    const hasRsaKey = Object.values(gatewayMeta).some(gw => gw.rsa_key_path);
+                    mode = hasRsaKey ? 'TEDAPI v1r' : 'TEDAPI';
                 } else {
                     mode = 'Local';
-                    if (stats.tedapi) {
-                        qualifiers.push('TEDAPI');
-                    }
                 }
-                
-                // Add PW3 if applicable
+
+                // Append PW3 qualifier if applicable
                 if (stats.pw3) {
-                    qualifiers.push('PW3');
-                }
-                
-                // Build final mode string
-                if (qualifiers.length > 0) {
-                    mode += ' (' + qualifiers.join(' ') + ')';
+                    mode += ' (PW3)';
                 }
                 
                 document.getElementById('server-mode').textContent = mode;
@@ -1983,7 +1976,7 @@
                     // Handle both nested and flat response formats
                     const gw = status.gateway || status;
                     const isOnline = status.online ?? false;
-                    const mode = gw.fleetapi ? 'FleetAPI' : gw.cloud_mode ? 'Cloud' : 'TEDAPI';
+                    const mode = gw.fleetapi ? 'FleetAPI' : gw.cloud_mode ? 'Cloud' : gw.rsa_key_path ? 'TEDAPI v1r' : 'TEDAPI';
                     const hostInfo = (gw.cloud_mode || gw.fleetapi)
                         ? (gw.site_id || gw.email || id)
                         : (gw.host || id);
@@ -2033,6 +2026,7 @@
                         Object.entries(statuses).map(([id, s]) => [id, {
                             name: s.gateway?.name || id,
                             type: s.gateway?.type || 'powerwall',
+                            rsa_key_path: s.gateway?.rsa_key_path || null,
                             // pw3 is a system-wide flag; attach to every gateway entry
                             pw3: window._systemPw3 || false,
                         }])

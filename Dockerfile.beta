@@ -1,0 +1,39 @@
+FROM python:3.12-slim-bookworm
+
+WORKDIR /app
+
+# Install all requirements including pypowerwall (to pull in its transitive deps),
+# then install the local pypowerwall's own deps (may be ahead of the pinned release).
+# Copy the local pypowerwall source tree and shadow it via PYTHONPATH.
+COPY requirements.txt .
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        gcc \
+        python3-dev \
+        libffi-dev \
+        make \
+        automake \
+        autoconf \
+        libtool && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir \
+        "protobuf>=3.20.0" python-dotenv pyroute2 \
+        python-dateutil requests-oauthlib websocket-client cryptography && \
+    apt-get purge -y gcc python3-dev libffi-dev make automake autoconf libtool && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy local pypowerwall source tree — shadows the pip-installed version via PYTHONPATH
+COPY pypowerwall/ ./pypowerwall/
+
+# Ensure /app is first on the Python path so local pypowerwall/ is imported
+ENV PYTHONPATH=/app
+
+# Copy application
+COPY app/ ./app/
+
+# Expose port
+EXPOSE 8675
+
+# Run the application
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8675"]
