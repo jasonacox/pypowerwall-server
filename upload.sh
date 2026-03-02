@@ -74,6 +74,14 @@ if [ "$last_path" == "pypowerwall-server" ]; then
     DOCKERFILE="Dockerfile.beta"
     LATEST_TAG=""  # Beta builds do not overwrite :latest
 
+    # Preflight: Dockerfile.beta COPYs pypowerwall/ into the image; fail fast if missing.
+    if [ ! -d "pypowerwall" ] && [ ! -L "pypowerwall" ]; then
+      echo "ERROR: Beta builds require a 'pypowerwall/' directory or symlink in the project root."
+      echo "  Dockerfile.beta will COPY ./pypowerwall into the image."
+      echo "  Create it (e.g. ln -s /path/to/pypowerwall/pypowerwall pypowerwall) and re-run."
+      exit 1
+    fi
+
     # Docker BuildKit does not follow symlinks that point outside the build context.
     # If pypowerwall/ is a symlink (e.g. to ../pypowerwall/pypowerwall), dereference it
     # into a real directory so the COPY step in Dockerfile.beta works correctly.
@@ -84,8 +92,10 @@ if [ "$last_path" == "pypowerwall-server" ]; then
       mv pypowerwall pypowerwall_symlink
       mv pypowerwall_real pypowerwall
       PYPW_DEREFFED=true
-      # Ensure symlink is always restored even if the build fails
-      trap 'if [ "$PYPW_DEREFFED" = true ] && [ -d pypowerwall_symlink ]; then rm -rf pypowerwall; mv pypowerwall_symlink pypowerwall; fi' EXIT
+      # Ensure symlink is always restored even if the build fails.
+      # Use -L (is a symlink) not -d (is a directory) so the check works even
+      # when the symlink target is temporarily missing or broken.
+      trap 'if [ "$PYPW_DEREFFED" = true ] && [ -L pypowerwall_symlink ]; then rm -rf pypowerwall; mv pypowerwall_symlink pypowerwall; fi' EXIT
     fi
   fi
 

@@ -65,7 +65,9 @@ Environment Variables (Proxy Compatible):
         PW_CACHE_FILE        - Cache file path (default: auto - uses PW_AUTH_PATH/.powerwall or /tmp/.powerwall)
         PW_SITEID            - Tesla site ID for multi-site accounts (default: none)
         PW_CONTROL_SECRET    - Enable control commands (default: none/disabled)
-        PW_NEG_SOLAR         - Allow negative solar values "yes"/"no" (default: "no")        PW_RSA_KEY_PATH      - Path to RSA-4096 private key PEM for TEDAPI v1r LAN access (default: none)        PROXY_BASE_URL       - Base URL for reverse proxy (default: "/")
+        PW_NEG_SOLAR         - Allow negative solar values "yes"/"no" (default: "no")
+        PW_RSA_KEY_PATH      - Path to RSA-4096 private key PEM for TEDAPI v1r LAN access (default: none)
+        PROXY_BASE_URL       - Base URL for reverse proxy (default: "/")
 
 Connection Modes:
 

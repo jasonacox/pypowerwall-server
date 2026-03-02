@@ -150,6 +150,7 @@ class GatewayManager:
                     port=config.port,
                     gw_pwd=config.gw_pwd,
                     rsa_key_path=config.rsa_key_path,
+                    rsa_key_configured=bool(config.rsa_key_path),
                     email=config.email,
                     timezone=config.timezone,
                     cloud_mode=config.cloud_mode,

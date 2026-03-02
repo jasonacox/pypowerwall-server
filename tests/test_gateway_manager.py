@@ -122,3 +122,37 @@ async def test_polling_with_missing_optional_data(mock_gateway_manager, mock_pyp
     assert status.data.aggregates is not None
     assert status.data.vitals is None
     assert status.data.strings is None
+
+
+def test_gateway_rsa_key_configured():
+    """Test rsa_key_configured flag and path disclosure prevention."""
+    from app.models.gateway import Gateway
+
+    gw = Gateway(
+        id="v1r",
+        name="TEDAPI v1r",
+        host="192.168.91.1",
+        rsa_key_path="/keys/tedapi_rsa_private.pem",
+        rsa_key_configured=True,
+    )
+    assert gw.rsa_key_configured is True
+    # rsa_key_path must NOT appear in serialized output (path disclosure prevention)
+    data = gw.model_dump()
+    assert "rsa_key_path" not in data
+    assert data["rsa_key_configured"] is True
+
+
+def test_gateway_rsa_key_not_configured():
+    """Test rsa_key_configured defaults to False when no key is set."""
+    from app.models.gateway import Gateway
+
+    gw = Gateway(
+        id="tedapi",
+        name="TEDAPI Gateway",
+        host="192.168.91.1",
+        gw_pwd="wifi-password",
+    )
+    assert gw.rsa_key_configured is False
+    data = gw.model_dump()
+    assert "rsa_key_path" not in data
+    assert data["rsa_key_configured"] is False
