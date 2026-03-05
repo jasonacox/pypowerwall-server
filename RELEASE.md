@@ -6,6 +6,7 @@
 
 **Fixed:**
 - **WebSocket disconnected under reverse proxy** — `strip_proxy_prefix` was implemented as `BaseHTTPMiddleware` which only intercepts `scope["type"] == "http"`. WebSocket upgrade connections (`scope["type"] == "websocket"`) bypassed it entirely, leaving the proxy prefix in the path and causing `/pypowerwall/ws/aggregate` to 404. Replaced with a pure ASGI middleware class (`_StripProxyPrefix`) that handles both `http` and `websocket` scope types.
+- **`raw_path` desync under pure ASGI middleware** — when `raw_path` is absent from the ASGI scope (permitted by the ASGI spec), the previous code used `scope.get("raw_path", b"")` which defaulted to `b""` and then unconditionally set `scope["raw_path"] = b"/"`, desynchronizing it from `scope["path"]`. Fixed to only strip `raw_path` when it is present and matches the prefix; otherwise derives it from the stripped `path` to keep them consistent (#18).
 - Duplicate `favicon()` function names — renamed to `favicon_ico()` and `favicon_png()` to avoid the second definition silently shadowing the first.
 - PR #16 reviewer feedback: removed unused `inject_js` import, fixed `raw_path` byte-slice to preserve percent-encoding, removed dead unreachable `serve_static_prefixed` route, made `openapi_url` proxy-base aware so Swagger/ReDoc work under a sub-path, updated router comment, fixed hardcoded links in root/console fallback HTML, added README nginx CORS wildcard note.
 
