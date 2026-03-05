@@ -227,8 +227,14 @@ if _proxy_base:
                 if path == _proxy_base or path.startswith(_proxy_base + "/"):
                     new_path = path[len(_proxy_base):] or "/"
                     scope["path"] = new_path
-                    raw = scope.get("raw_path", b"")
-                    scope["raw_path"] = raw[len(_proxy_base_bytes):] or b"/"
+                    raw = scope.get("raw_path")
+                    if isinstance(raw, (bytes, bytearray)):
+                        if raw == _proxy_base_bytes or raw.startswith(_proxy_base_bytes + b"/"):
+                            scope["raw_path"] = raw[len(_proxy_base_bytes):] or b"/"
+                        # else: raw_path present but doesn't start with prefix; keep as-is
+                    else:
+                        # raw_path absent; derive from stripped path to keep path/raw_path in sync
+                        scope["raw_path"] = new_path.encode("latin-1")
             await self.app(scope, receive, send)
 
     app.add_middleware(_StripProxyPrefix)
