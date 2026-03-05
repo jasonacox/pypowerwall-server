@@ -156,3 +156,49 @@ def test_gateway_rsa_key_not_configured():
     data = gw.model_dump()
     assert "rsa_key_path" not in data
     assert data["rsa_key_configured"] is False
+
+
+@pytest.mark.asyncio
+async def test_rsa_key_path_passed_to_powerwall_constructor(monkeypatch, mock_pypowerwall):
+    """Test that rsa_key_path is passed to pypowerwall.Powerwall() when configured.
+
+    Covers the plumbing in gateway_manager._poll_gateway() lines 292-293:
+        if config.rsa_key_path:
+            tedapi_kwargs["rsa_key_path"] = config.rsa_key_path
+    """
+    from unittest.mock import Mock
+    from app.config import GatewayConfig
+    from app.models.gateway import Gateway, GatewayStatus
+    import pypowerwall
+
+    # Replace Powerwall constructor with a spy that returns the standard mock instance
+    powerwall_spy = Mock(return_value=mock_pypowerwall)
+    monkeypatch.setattr(pypowerwall, "Powerwall", powerwall_spy)
+
+    gw = Gateway(
+        id="v1r-connect",
+        name="TEDAPI v1r",
+        host="192.168.91.1",
+        rsa_key_path="/keys/tedapi_rsa_private.pem",
+        rsa_key_configured=True,
+    )
+    config = GatewayConfig(
+        id="v1r-connect",
+        name="TEDAPI v1r",
+        host="192.168.91.1",
+        rsa_key_path="/keys/tedapi_rsa_private.pem",
+    )
+
+    gateway_manager.gateways["v1r-connect"] = gw
+    gateway_manager._pending_configs["v1r-connect"] = config
+    gateway_manager.cache["v1r-connect"] = GatewayStatus(gateway=gw, online=False)
+    gateway_manager._consecutive_failures["v1r-connect"] = 0
+    gateway_manager._next_poll_time["v1r-connect"] = 0
+
+    await gateway_manager._poll_gateway("v1r-connect")
+
+    # Powerwall must have been constructed exactly once with the correct kwargs
+    assert powerwall_spy.called, "pypowerwall.Powerwall() was never called"
+    call_kwargs = powerwall_spy.call_args.kwargs
+    assert call_kwargs.get("rsa_key_path") == "/keys/tedapi_rsa_private.pem"
+    assert call_kwargs.get("host") == "192.168.91.1"
