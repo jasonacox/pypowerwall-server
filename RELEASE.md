@@ -2,7 +2,7 @@
 
 ## Version History
 
-### [0.2.1] - 2026-03-01
+### [0.2.2] - 2026-03-04
 
 **Added:**
 - `PW_RSA_KEY_PATH` environment variable — path to an RSA-4096 private key PEM file for TEDAPI v1r LAN access (new pypowerwall authentication mode). Supported in single-gateway env-var config and `gateways.yaml` multi-gateway config.
