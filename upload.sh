@@ -65,18 +65,61 @@ if [ "$last_path" == "pypowerwall-server" ]; then
     echo "Building with cache"
   fi
   
+  # Select Dockerfile and determine whether to tag :latest
+  if [ "$RELEASE_TYPE" == "2" ]; then
+    DOCKERFILE="Dockerfile"
+    LATEST_TAG="-t jasonacox/pypowerwall-server:latest"
+    PYPW_DEREFFED=false
+  else
+    DOCKERFILE="Dockerfile.beta"
+    LATEST_TAG=""  # Beta builds do not overwrite :latest
+
+    # Preflight: Dockerfile.beta COPYs pypowerwall/ into the image; fail fast if missing.
+    if [ ! -d "pypowerwall" ] && [ ! -L "pypowerwall" ]; then
+      echo "ERROR: Beta builds require a 'pypowerwall/' directory or symlink in the project root."
+      echo "  Dockerfile.beta will COPY ./pypowerwall into the image."
+      echo "  Create it (e.g. ln -s /path/to/pypowerwall/pypowerwall pypowerwall) and re-run."
+      exit 1
+    fi
+
+    # Docker BuildKit does not follow symlinks that point outside the build context.
+    # If pypowerwall/ is a symlink (e.g. to ../pypowerwall/pypowerwall), dereference it
+    # into a real directory so the COPY step in Dockerfile.beta works correctly.
+    PYPW_DEREFFED=false
+    if [ -L "pypowerwall" ]; then
+      echo "* Dereferencing pypowerwall symlink for Docker build context..."
+      cp -rL pypowerwall pypowerwall_real
+      mv pypowerwall pypowerwall_symlink
+      mv pypowerwall_real pypowerwall
+      PYPW_DEREFFED=true
+      # Ensure symlink is always restored even if the build fails.
+      # Use -L (is a symlink) not -d (is a directory) so the check works even
+      # when the symlink target is temporarily missing or broken.
+      trap 'if [ "$PYPW_DEREFFED" = true ] && [ -L pypowerwall_symlink ]; then rm -rf pypowerwall; mv pypowerwall_symlink pypowerwall; fi' EXIT
+    fi
+  fi
+
   # Build jasonacox/pypowerwall-server:x.y.z
-  echo "* BUILD ${CONTAINER_NAME}"
-  docker buildx build -f Dockerfile ${NO_CACHE_FLAG} --platform linux/amd64,linux/arm64,linux/arm/v7 --push -t ${CONTAINER_NAME} -t jasonacox/pypowerwall-server:latest .
+  echo "* BUILD ${CONTAINER_NAME} (using ${DOCKERFILE})"
+  docker buildx build -f ${DOCKERFILE} ${NO_CACHE_FLAG} --platform linux/amd64,linux/arm64,linux/arm/v7 --push -t ${CONTAINER_NAME} ${LATEST_TAG} .
   echo ""
 
   # Verify
   echo "* VERIFY ${CONTAINER_NAME}"
   docker buildx imagetools inspect ${CONTAINER_NAME} | grep Platform
   echo ""
-  echo "* VERIFY jasonacox/pypowerwall-server:latest"
-  docker buildx imagetools inspect jasonacox/pypowerwall-server:latest | grep Platform
-  echo ""
+  if [ "$RELEASE_TYPE" == "2" ]; then
+    echo "* VERIFY jasonacox/pypowerwall-server:latest"
+    docker buildx imagetools inspect jasonacox/pypowerwall-server:latest | grep Platform
+    echo ""
+  fi
+
+  # Restore pypowerwall symlink if it was dereferenced for the beta build
+  if [ "$PYPW_DEREFFED" = true ]; then
+    echo "* Restoring pypowerwall symlink..."
+    rm -rf pypowerwall
+    mv pypowerwall_symlink pypowerwall
+  fi
 
   # Calculate build time
   BUILD_END=$(date +%s)

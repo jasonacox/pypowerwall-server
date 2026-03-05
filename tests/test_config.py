@@ -49,3 +49,22 @@ def test_gateway_config_cloud_mode():
     assert config.cloud_mode is True
     assert config.email == "test@example.com"
     assert config.authpath == "/path/to/auth"
+
+
+def test_settings_rsa_key_path(monkeypatch):
+    """Test that PW_RSA_KEY_PATH is loaded from environment."""
+    monkeypatch.setenv("PW_RSA_KEY_PATH", "/keys/tedapi_rsa_private.pem")
+    settings = Settings()
+    assert settings.pw_rsa_key_path == "/keys/tedapi_rsa_private.pem"
+
+
+def test_gateway_config_rsa_key_path():
+    """Test GatewayConfig accepts rsa_key_path for TEDAPI v1r mode."""
+    config = GatewayConfig(
+        id="v1r-test",
+        name="TEDAPI v1r Gateway",
+        host="192.168.91.1",
+        rsa_key_path="/keys/tedapi_rsa_private.pem",
+    )
+    assert config.rsa_key_path == "/keys/tedapi_rsa_private.pem"
+    assert config.gw_pwd is None

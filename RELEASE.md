@@ -2,13 +2,17 @@
 
 ## Version History
 
-### [0.2.1] - 2026-03-04
+### [0.2.2] - 2026-03-04
+
+**Added:**
+- `PW_RSA_KEY_PATH` environment variable — path to an RSA-4096 private key PEM file for TEDAPI v1r LAN access (new pypowerwall authentication mode). Supported in single-gateway env-var config and `gateways.yaml` multi-gateway config.
+- Console **Connect Mode** and **Connected Gateways** panels now display `TEDAPI v1r` when `rsa_key_path` is configured, or `TEDAPI` otherwise (previously always showed `TEDAPI`).
+- `Dockerfile.beta` — alternative Dockerfile for beta builds that installs the production `requirements.txt` (for all transitive deps) then shadows the installed `pypowerwall` package with the local source tree via `PYTHONPATH=/app`. Used by `upload.sh` when building a beta release tag.
 
 **Fixed:**
-- **WebSocket disconnected under reverse proxy** — `strip_proxy_prefix` was implemented as `BaseHTTPMiddleware` which only intercepts `scope["type"] == "http"`. WebSocket upgrade connections (`scope["type"] == "websocket"`) bypassed it entirely, leaving the proxy prefix in the path and causing `/pypowerwall/ws/aggregate` to 404. Replaced with a pure ASGI middleware class (`_StripProxyPrefix`) that handles both `http` and `websocket` scope types.
-- **`raw_path` desync under pure ASGI middleware** — when `raw_path` is absent from the ASGI scope (permitted by the ASGI spec), the previous code used `scope.get("raw_path", b"")` which defaulted to `b""` and then unconditionally set `scope["raw_path"] = b"/"`, desynchronizing it from `scope["path"]`. Fixed to only strip `raw_path` when it is present and matches the prefix; otherwise derives it from the stripped `path` to keep them consistent (#18).
-- Duplicate `favicon()` function names — renamed to `favicon_ico()` and `favicon_png()` to avoid the second definition silently shadowing the first.
-- PR #16 reviewer feedback: removed unused `inject_js` import, fixed `raw_path` byte-slice to preserve percent-encoding, removed dead unreachable `serve_static_prefixed` route, made `openapi_url` proxy-base aware so Swagger/ReDoc work under a sub-path, updated router comment, fixed hardcoded links in root/console fallback HTML, added README nginx CORS wildcard note.
+- `rsa_key_path` excluded from API responses to prevent path disclosure; a safe boolean `rsa_key_configured` is exposed instead (#17).
+- `upload.sh` trap used `-d` to test for the `pypowerwall_symlink` cleanup target — changed to `-L` so it correctly detects a symlink even if its target is temporarily missing (#17).
+- `upload.sh` now checks that the `pypowerwall/` source tree exists before attempting a beta build, exiting with a clear error message if it is absent (#17).
 
 ### [0.2.0] - 2026-02-22
 
