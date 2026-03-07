@@ -195,7 +195,7 @@ class GatewayManager:
         for config in gateway_configs:
             if config.host and config.gw_pwd and config.email and not config.cloud_mode:
                 try:
-                    authpath = config.authpath or settings.authpath or ""
+                    authpath = config.authpath or settings.pw_authpath or ""
                     loop = asyncio.get_running_loop()
                     cloud_kwargs = {
                         "email": config.email,
@@ -214,11 +214,11 @@ class GatewayManager:
                     logger.info(
                         "Cloud control connection established for write operations"
                     )
+                    break  # Only need one cloud control connection
                 except Exception as e:
                     logger.warning(
                         f"Cloud control connection failed (control will be unavailable): {e}"
                     )
-                break  # Only need one cloud control connection
 
         # Start polling task
         if self.gateways:

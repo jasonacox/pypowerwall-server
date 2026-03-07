@@ -12,10 +12,14 @@ def reset_gateway_manager():
     gateway_manager.gateways.clear()
     gateway_manager.connections.clear()
     gateway_manager.cache.clear()
+    gateway_manager._cloud_control = None
+    gateway_manager._executor = None
     yield
     gateway_manager.gateways.clear()
     gateway_manager.connections.clear()
     gateway_manager.cache.clear()
+    gateway_manager._cloud_control = None
+    gateway_manager._executor = None
 
 
 @pytest.fixture
