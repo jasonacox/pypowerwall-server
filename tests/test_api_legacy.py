@@ -1,4 +1,6 @@
 """Tests for legacy proxy API endpoints."""
+import pytest
+from unittest.mock import Mock
 
 
 def test_aggregates_endpoint(client, connected_gateway):
@@ -187,3 +189,138 @@ def test_endpoint_without_gateway(client, mock_gateway_manager):
     """Test endpoints return 503 when no gateway available."""
     response = client.get("/aggregates")
     assert response.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# /control/<path> endpoint tests (cloud control routing)
+# ---------------------------------------------------------------------------
+
+_CONTROL_TOKEN = "test-secret-token"
+
+
+@pytest.fixture
+def control_client(monkeypatch):
+    """Test client with control features enabled via monkeypatched settings."""
+    from app.config import settings
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    monkeypatch.setattr(settings, "control_secret", _CONTROL_TOKEN)
+    return TestClient(app)
+
+
+def test_control_reserve_routes_to_cloud(
+    control_client, connected_gateway, monkeypatch
+):
+    """Test that POST /control/reserve uses cloud_control when _cloud_control is set."""
+    from app.core.gateway_manager import gateway_manager
+
+    mock_cloud = Mock()
+    mock_cloud.set_reserve.return_value = {"result": "Updated"}
+    gateway_manager._cloud_control = mock_cloud
+
+    response = control_client.post(
+        "/control/reserve",
+        json={"value": 20},
+        headers={"Authorization": _CONTROL_TOKEN},
+    )
+
+    assert response.status_code == 200
+    mock_cloud.set_reserve.assert_called_once_with(20)
+
+
+def test_control_mode_routes_to_cloud(
+    control_client, connected_gateway, monkeypatch
+):
+    """Test that POST /control/mode uses cloud_control when _cloud_control is set."""
+    from app.core.gateway_manager import gateway_manager
+
+    mock_cloud = Mock()
+    mock_cloud.set_mode.return_value = {"result": "Updated"}
+    gateway_manager._cloud_control = mock_cloud
+
+    response = control_client.post(
+        "/control/mode",
+        json={"value": "self_consumption"},
+        headers={"Authorization": _CONTROL_TOKEN},
+    )
+
+    assert response.status_code == 200
+    mock_cloud.set_mode.assert_called_once_with("self_consumption")
+
+
+def test_control_cloud_returns_none_gives_503(
+    control_client, connected_gateway, monkeypatch
+):
+    """Test that cloud_control returning None raises HTTP 503."""
+    from app.core.gateway_manager import gateway_manager
+
+    mock_cloud = Mock()
+    mock_cloud.set_reserve.return_value = None
+    gateway_manager._cloud_control = mock_cloud
+
+    response = control_client.post(
+        "/control/reserve",
+        json={"value": 20},
+        headers={"Authorization": _CONTROL_TOKEN},
+    )
+
+    assert response.status_code == 503
+
+
+def test_control_reserve_fallback_without_cloud(
+    control_client, connected_gateway, mock_pypowerwall
+):
+    """Test that POST /control/reserve falls back to call_api when no _cloud_control."""
+    from app.core.gateway_manager import gateway_manager
+
+    gateway_manager._cloud_control = None
+    mock_pypowerwall.post.return_value = {"result": "Updated"}
+
+    response = control_client.post(
+        "/control/reserve",
+        json={"value": 20},
+        headers={"Authorization": _CONTROL_TOKEN},
+    )
+
+    assert response.status_code == 200
+    mock_pypowerwall.post.assert_called_once()
+
+
+def test_control_unmapped_path_uses_call_api(
+    control_client, connected_gateway, mock_pypowerwall, monkeypatch
+):
+    """Test that unmapped paths always fall back to call_api even if _cloud_control is set."""
+    from app.core.gateway_manager import gateway_manager
+
+    mock_cloud = Mock()
+    gateway_manager._cloud_control = mock_cloud
+    mock_pypowerwall.post.return_value = {"result": "OK"}
+
+    response = control_client.post(
+        "/control/some/other/path",
+        json={"key": "value"},
+        headers={"Authorization": _CONTROL_TOKEN},
+    )
+
+    assert response.status_code == 200
+    # cloud mock should NOT have been called
+    mock_cloud.set_reserve.assert_not_called()
+    mock_cloud.set_mode.assert_not_called()
+    mock_pypowerwall.post.assert_called_once()
+
+
+def test_control_requires_auth_header(control_client, connected_gateway):
+    """Test that /control/* returns 401 without Authorization header."""
+    response = control_client.post("/control/reserve", json={"value": 20})
+    assert response.status_code == 401
+
+
+def test_control_rejects_wrong_token(control_client, connected_gateway):
+    """Test that /control/* returns 401 with an invalid token."""
+    response = control_client.post(
+        "/control/reserve",
+        json={"value": 20},
+        headers={"Authorization": "wrong-token"},
+    )
+    assert response.status_code == 401

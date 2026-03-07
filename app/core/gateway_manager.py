@@ -99,6 +99,13 @@ class GatewayManager:
         # Will be sized during initialize() based on gateway count
         self._executor: Optional[ThreadPoolExecutor] = None
 
+        # Cloud connection for control operations (set_reserve, set_mode).
+        # TEDAPI doesn't support POST/write APIs, so a separate cloud-mode
+        # pypowerwall instance is created when cloud credentials are available
+        # alongside a TEDAPI gateway. This enables hybrid operation:
+        # TEDAPI for fast local reads, cloud for control writes.
+        self._cloud_control: Optional[pypowerwall.Powerwall] = None
+
     async def initialize(
         self, gateway_configs: List[GatewayConfig], poll_interval: int = 5
     ):
@@ -181,6 +188,37 @@ class GatewayManager:
                 )
             except Exception as e:
                 logger.error(f"Failed to initialize gateway {config.id}: {e}")
+
+        # Initialize cloud control connection for TEDAPI gateways with cloud credentials.
+        # This enables hybrid operation: local TEDAPI reads + cloud control writes.
+        from app.config import settings
+        for config in gateway_configs:
+            if config.host and config.gw_pwd and config.email and not config.cloud_mode:
+                try:
+                    authpath = config.authpath or settings.pw_authpath or ""
+                    loop = asyncio.get_running_loop()
+                    cloud_kwargs = {
+                        "email": config.email,
+                        "authpath": authpath,
+                        "cachefile": "/tmp/.powerwall.cloud",
+                        "timezone": config.timezone,
+                        "cloudmode": True,
+                    }
+                    self._cloud_control = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            self._executor,
+                            lambda kw=cloud_kwargs: pypowerwall.Powerwall(**kw),
+                        ),
+                        timeout=15.0,
+                    )
+                    logger.info(
+                        "Cloud control connection established for write operations"
+                    )
+                    break  # Only need one cloud control connection
+                except Exception as e:
+                    logger.warning(
+                        f"Cloud control connection failed (control will be unavailable): {e}"
+                    )
 
         # Start polling task
         if self.gateways:
@@ -798,6 +836,49 @@ class GatewayManager:
             return None
         except Exception as e:
             logger.warning(f"[{gateway_id}] call_api({method}) error: {e}")
+            return None
+
+    async def cloud_control(
+        self, method: str, *args, timeout: float = 10.0, **kwargs
+    ) -> Optional[Any]:
+        """Call a control method via the cloud connection.
+
+        TEDAPI (local gateway) doesn't support write operations. When cloud
+        credentials are configured alongside a TEDAPI gateway, a separate
+        cloud-mode pypowerwall connection is created for control operations
+        like set_reserve() and set_mode().
+
+        Args:
+            method: Method name on pypowerwall (e.g., 'set_reserve', 'set_mode')
+            *args: Positional arguments for the method
+            timeout: Timeout in seconds (default: 10.0)
+            **kwargs: Keyword arguments for the method
+
+        Returns:
+            Result of the method call, or None on error/timeout
+        """
+        if not self._cloud_control:
+            logger.error(f"cloud_control({method}): no cloud connection available")
+            return None
+        try:
+            method_func = getattr(self._cloud_control, method)
+            loop = asyncio.get_running_loop()
+            result = await asyncio.wait_for(
+                loop.run_in_executor(
+                    self._executor, lambda: method_func(*args, **kwargs)
+                ),
+                timeout=timeout,
+            )
+            logger.info(f"cloud_control({method}) completed successfully")
+            return result
+        except asyncio.TimeoutError:
+            logger.warning(f"cloud_control({method}) timeout after {timeout}s")
+            return None
+        except AttributeError:
+            logger.error(f"cloud_control({method}): method not found")
+            return None
+        except Exception as e:
+            logger.warning(f"cloud_control({method}) error: {e}")
             return None
 
     async def call_tedapi(
