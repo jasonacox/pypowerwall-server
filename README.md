@@ -52,9 +52,12 @@ docker run -d \
   --network host \
   -e PW_HOST=192.168.91.1 \
   -e PW_RSA_KEY_PATH=/keys/tedapi_rsa_private.pem \
+  -e PW_WIFI_HOST=192.168.91.1 \
   -v /path/to/keys:/keys \
   jasonacox/pypowerwall-server
 ```
+
+> **Note:** `PW_WIFI_HOST` is the IP address pypowerwall uses for the WiFi fallback path in v1r mode. It defaults to `192.168.91.1`. Only set it if your gateway is on a different IP (e.g. behind a travel router).
 
 #### Cloud Mode (Remote Access)
 
@@ -141,6 +144,7 @@ PROXY_BASE_URL=/pypowerwall  # Optional: serve under a sub-path (see Reverse Pro
 ```bash
 PW_HOST=192.168.91.1
 PW_RSA_KEY_PATH=/path/to/tedapi_rsa_private.pem  # RSA-4096 private key (alternative to PW_GW_PWD)
+PW_WIFI_HOST=192.168.91.1                         # WiFi fallback IP for v1r mode (default: 192.168.91.1)
 PW_TIMEZONE=America/Los_Angeles
 ```
 
@@ -225,6 +229,7 @@ gateways:
     name: TEDAPI v1r Gateway
     host: 192.168.91.1
     rsa_key_path: /keys/tedapi_rsa_private.pem  # RSA-4096 private key (TEDAPI v1r mode)
+    wifi_host: 192.168.91.1                     # WiFi fallback IP (optional, defaults to 192.168.91.1)
     timezone: America/Los_Angeles
 ```
 
@@ -238,11 +243,13 @@ gateways:
 **TEDAPI connection modes:**
 - `host` + `gw_pwd` → TEDAPI (standard, uses gateway Wi-Fi password)
 - `host` + `rsa_key_path` → TEDAPI v1r (uses RSA-4096 private key; shown as "TEDAPI v1r" in console)
+- `wifi_host` → Optional WiFi fallback IP for v1r mode (default `192.168.91.1`; only needed when your gateway is on a non-standard IP)
 
 **Optional fields:**
 - `port`: Non-standard HTTPS port (e.g. `8443`) — use when the gateway is behind a travel router that forwards a custom port to `192.168.91.1:443`
 - `type`: Gateway device type — `powerwall` (default, has batteries) or `inverter` (solar-only; suppresses battery panels in the console)
 - `rsa_key_path`: RSA-4096 private key PEM path for TEDAPI v1r LAN authentication
+- `wifi_host`: WiFi host IP for TEDAPI v1r WiFi fallback (default `192.168.91.1`; set this when your gateway's WiFi AP is on a different subnet, e.g. behind a travel router)
 
 ### Reverse Proxy / HTTPS Proxy
 

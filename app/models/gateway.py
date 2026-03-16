@@ -45,7 +45,8 @@ class Gateway(BaseModel):
     port: Optional[int] = Field(default=None, ge=1, le=65535)  # Non-standard HTTPS port (e.g. 8443 via travel router)
     gw_pwd: Optional[str] = None  # Gateway Wi-Fi password for TEDAPI
     rsa_key_path: Optional[str] = Field(default=None, exclude=True)  # RSA-4096 private key PEM path (internal only; not serialized in API responses)
-    rsa_key_configured: bool = False  # True when rsa_key_path is set; safe to expose in API responses
+    rsa_key_configured: bool = False
+    wifi_host: Optional[str] = None  # True when rsa_key_path is set; safe to expose in API responses
     email: Optional[str] = None
     site_id: Optional[str] = None  # Tesla Site ID (populated after connection)
     timezone: str = "America/Los_Angeles"

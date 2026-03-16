@@ -151,6 +151,7 @@ class GatewayManager:
                     gw_pwd=config.gw_pwd,
                     rsa_key_path=config.rsa_key_path,
                     rsa_key_configured=bool(config.rsa_key_path),
+                    wifi_host=config.wifi_host,
                     email=config.email,
                     timezone=config.timezone,
                     cloud_mode=config.cloud_mode,
@@ -300,6 +301,8 @@ class GatewayManager:
                             tedapi_kwargs["siteid"] = settings.siteid
                         if config.rsa_key_path:
                             tedapi_kwargs["rsa_key_path"] = config.rsa_key_path
+                        if config.wifi_host:
+                            tedapi_kwargs["wifi_host"] = config.wifi_host
                         pw = await asyncio.wait_for(
                             loop.run_in_executor(
                                 self._executor,

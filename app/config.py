@@ -67,6 +67,7 @@ Environment Variables (Proxy Compatible):
         PW_CONTROL_SECRET    - Enable control commands (default: none/disabled)
         PW_NEG_SOLAR         - Allow negative solar values "yes"/"no" (default: "no")
         PW_RSA_KEY_PATH      - Path to RSA-4096 private key PEM for TEDAPI v1r LAN access (default: none)
+        PW_WIFI_HOST         - WiFi host IP for TEDAPI v1r WiFi fallback (default: none)
         PROXY_BASE_URL       - Base URL for reverse proxy (default: "/")
 
 Connection Modes:
@@ -192,6 +193,7 @@ class GatewayConfig(BaseSettings):
     port: Optional[int] = Field(default=None, ge=1, le=65535)  # Non-standard HTTPS port (e.g. 8443 via travel router)
     gw_pwd: Optional[str] = None  # Gateway Wi-Fi password for TEDAPI mode
     rsa_key_path: Optional[str] = None  # Path to RSA-4096 private key PEM for v1r LAN TEDAPI access
+    wifi_host: Optional[str] = None  # WiFi host IP for TEDAPI v1r WiFi fallback
     email: Optional[str] = None
     authpath: Optional[
         str
@@ -259,6 +261,9 @@ class Settings(BaseSettings):
     pw_rsa_key_path: Optional[str] = Field(
         default=None, alias="PW_RSA_KEY_PATH"
     )  # RSA-4096 private key PEM path for TEDAPI v1r LAN access
+    pw_wifi_host: Optional[str] = Field(
+        default=None, alias="PW_WIFI_HOST"
+    )  # WiFi host IP for TEDAPI v1r WiFi fallback
     neg_solar: bool = Field(
         default=False, alias="PW_NEG_SOLAR"
     )  # Allow negative solar values (default: no)
@@ -310,6 +315,7 @@ class Settings(BaseSettings):
                     host=self.pw_host,
                     gw_pwd=self.pw_gw_pwd,
                     rsa_key_path=self.pw_rsa_key_path,
+                    wifi_host=self.pw_wifi_host,
                     email=self.pw_email,
                     authpath=self.pw_authpath,
                     timezone=self.pw_timezone,
