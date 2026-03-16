@@ -267,6 +267,14 @@ class GatewayManager:
                             ),
                             timeout=15.0,
                         )
+                        connected = await asyncio.wait_for(
+                            loop.run_in_executor(self._executor, pw.is_connected),
+                            timeout=10.0,
+                        )
+                        if not connected:
+                            raise Exception(
+                                f"pypowerwall failed to connect to gateway {gateway_id} (cloud mode)"
+                            )
                     else:
                         # Build host string with optional non-standard port
                         # e.g. host="192.168.1.50", port=8443 -> "192.168.1.50:8443"
@@ -299,6 +307,14 @@ class GatewayManager:
                             ),
                             timeout=15.0,
                         )
+                        connected = await asyncio.wait_for(
+                            loop.run_in_executor(self._executor, pw.is_connected),
+                            timeout=10.0,
+                        )
+                        if not connected:
+                            raise Exception(
+                                f"pypowerwall failed to connect to gateway {gateway_id} (TEDAPI mode)"
+                            )
 
                     self.connections[gateway_id] = pw
                     del self._pending_configs[gateway_id]
