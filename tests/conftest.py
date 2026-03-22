@@ -78,6 +78,7 @@ def mock_pypowerwall():
     mock.alerts.return_value = []
     mock.get_reserve.return_value = 20
     mock.get_time_remaining.return_value = 8.5
+    mock.get_mode.return_value = "self_consumption"
     mock.grid_status.return_value = "UP"
     mock.system_status.return_value = {
         "nominal_full_pack_energy": 13500,
