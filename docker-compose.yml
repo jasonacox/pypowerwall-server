@@ -30,6 +30,16 @@ services:
       # Control features (optional) - Uncomment to enable:
       # - CONTROL_ENABLED=true
       # - CONTROL_TOKEN=your-secure-random-token-here
+    # Health check - verifies the server process is running and responding.
+    # /health always returns HTTP 200 regardless of gateway connectivity,
+    # making it safe for process-level liveness checking. wget is included
+    # in the image for this purpose.
+    healthcheck:
+      test: wget --spider -q http://localhost:8675/health || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     restart: unless-stopped
     networks:
       - pypowerwall

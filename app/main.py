@@ -582,6 +582,7 @@ async def handle_malformed_object_url():
 
 
 @app.get("/health", tags=["Health"])
+@app.head("/health", tags=["Health"], include_in_schema=False)
 async def health_check():
     """Health check endpoint with actual gateway status.
 

@@ -967,6 +967,7 @@ async def get_api_status():
 
 
 @router.get("/api/site_info")
+@router.head("/api/site_info", include_in_schema=False)
 async def get_api_site_info():
     """Get site info - API format (legacy proxy endpoint)."""
     gateway_id = get_default_gateway()
@@ -1031,26 +1032,37 @@ async def get_api_site_name():
 @router.get("/api/operation")
 async def get_api_operation():
     """Get operation mode and backup reserve - API format (legacy proxy endpoint).
-    
+
     Uses graceful degradation: returns cached data even if gateway is temporarily offline.
+
+    The operation mode is polled every cycle via pw.get_mode() (which reads
+    /api/operation from the gateway) so that changes made in the Tesla app are
+    reflected within one poll interval (fixes issue #14).
+
+    Mode values:
+        "self_consumption" - Self-Powered mode
+        "backup"           - Backup-Only mode
+        "autonomous"       - Time-Based Control mode
     """
     gateway_id = get_default_gateway()
     status = gateway_manager.get_gateway(gateway_id)
 
     real_mode = "self_consumption"  # Default mode
     backup_reserve_percent = 0.0
-    
-    # Get reserve from cached data
+
     if status and status.data:
         if status.data.reserve is not None:
             backup_reserve_percent = status.data.reserve
-        
-        # Try to get operation mode from system_status if available
-        if status.data.system_status and isinstance(status.data.system_status, dict):
+
+        # Use the cached operation mode polled by the background task.
+        # Fall back to system_status.default_real_mode if mode isn't cached yet.
+        if status.data.mode:
+            real_mode = status.data.mode
+        elif status.data.system_status and isinstance(status.data.system_status, dict):
             mode = status.data.system_status.get("default_real_mode")
             if mode:
                 real_mode = mode
-    
+
     return {
         "real_mode": real_mode,
         "backup_reserve_percent": backup_reserve_percent,
