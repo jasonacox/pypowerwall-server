@@ -134,6 +134,7 @@ class PowerwallData(BaseModel):
     status: Optional[Union[str, Dict[str, Any]]] = None  # Status string or full status dict
     device_type: Optional[str] = None
     site_name: Optional[str] = None  # Site name from Powerwall
+    mode: Optional[str] = None  # Operation mode: "self_consumption", "backup", "autonomous" (time-based)
     pw3: Optional[bool] = None  # True if Powerwall 3 system
     tedapi_mode: Optional[str] = None  # TEDAPI mode (e.g., "FleetAPI")
     tedapi_config: Optional[Dict[str, Any]] = None  # Cached /tedapi/config response; battery_blocks[].type used for model detection

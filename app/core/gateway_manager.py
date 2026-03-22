@@ -507,6 +507,19 @@ class GatewayManager:
             except (asyncio.TimeoutError, Exception) as e:
                 logger.debug(f"Grid status detail not available for {gateway_id}: {e}")
 
+            # Try to get operation mode (for /api/operation endpoint)
+            # Mode can be "self_consumption", "backup", or "autonomous" (time-based control).
+            # This is fetched from /api/operation on the gateway via pw.get_mode() and
+            # must be polled on every cycle so that mode changes made in the Tesla app
+            # are reflected promptly (fixes issue #14).
+            try:
+                data.mode = await asyncio.wait_for(
+                    loop.run_in_executor(self._executor, pw.get_mode),
+                    timeout=5.0,
+                )
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.debug(f"Operation mode not available for {gateway_id}: {e}")
+
             # Try to get reserve and time remaining (for caching)
             try:
                 # Request the Tesla App scaled reserve setting (scale=True)

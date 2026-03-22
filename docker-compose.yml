@@ -30,6 +30,15 @@ services:
       # Control features (optional) - Uncomment to enable:
       # - CONTROL_ENABLED=true
       # - CONTROL_TOKEN=your-secure-random-token-here
+    # Health check - verifies the server process is running and responding.
+    # The /health endpoint always returns HTTP 200 (status field indicates
+    # gateway connectivity). curl is included in the image for this purpose.
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8675/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
     restart: unless-stopped
     networks:
       - pypowerwall
