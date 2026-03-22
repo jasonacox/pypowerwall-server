@@ -967,6 +967,7 @@ async def get_api_status():
 
 
 @router.get("/api/site_info")
+@router.head("/api/site_info", include_in_schema=False)
 async def get_api_site_info():
     """Get site info - API format (legacy proxy endpoint)."""
     gateway_id = get_default_gateway()

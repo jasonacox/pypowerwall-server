@@ -31,14 +31,15 @@ services:
       # - CONTROL_ENABLED=true
       # - CONTROL_TOKEN=your-secure-random-token-here
     # Health check - verifies the server process is running and responding.
-    # The /health endpoint always returns HTTP 200 (status field indicates
-    # gateway connectivity). curl is included in the image for this purpose.
+    # /health always returns HTTP 200 regardless of gateway connectivity,
+    # making it safe for process-level liveness checking. wget is included
+    # in the image for this purpose.
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8675/health"]
+      test: wget --spider -q http://localhost:8675/health || exit 1
       interval: 30s
       timeout: 10s
-      start_period: 60s
       retries: 3
+      start_period: 60s
     restart: unless-stopped
     networks:
       - pypowerwall
