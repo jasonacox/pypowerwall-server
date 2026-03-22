@@ -187,3 +187,64 @@ def test_endpoint_without_gateway(client, mock_gateway_manager):
     """Test endpoints return 503 when no gateway available."""
     response = client.get("/aggregates")
     assert response.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# /api/operation tests (issue #14 — mode caching)
+# ---------------------------------------------------------------------------
+
+def test_api_operation_returns_cached_mode(client, connected_gateway):
+    """Test /api/operation returns the polled cached mode when data.mode is present."""
+    # Set mode directly on the cached data (simulates a completed poll cycle)
+    connected_gateway.data.mode = "backup"
+    connected_gateway.data.reserve = 30.0
+
+    response = client.get("/api/operation")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["real_mode"] == "backup"
+    assert data["backup_reserve_percent"] == 30.0
+
+
+def test_api_operation_prefers_cached_mode_over_system_status(client, connected_gateway):
+    """Test /api/operation prefers data.mode over system_status.default_real_mode."""
+    # Set both cached mode and system_status fallback — cached mode must win.
+    connected_gateway.data.mode = "autonomous"
+    connected_gateway.data.system_status = {"default_real_mode": "self_consumption"}
+
+    response = client.get("/api/operation")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["real_mode"] == "autonomous"
+
+
+def test_api_operation_falls_back_to_system_status_when_mode_not_cached(client, connected_gateway):
+    """Test /api/operation falls back to system_status.default_real_mode when mode is None."""
+    # Ensure mode hasn't been cached yet (None)
+    connected_gateway.data.mode = None
+    connected_gateway.data.system_status = {"default_real_mode": "backup"}
+
+    response = client.get("/api/operation")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["real_mode"] == "backup"
+
+
+def test_api_operation_defaults_when_neither_mode_available(client, connected_gateway):
+    """Test /api/operation returns default mode when neither cache nor system_status has a mode."""
+    connected_gateway.data.mode = None
+    connected_gateway.data.system_status = {}  # No default_real_mode key
+
+    response = client.get("/api/operation")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["real_mode"] == "self_consumption"  # Hard-coded default
+
+
+def test_api_operation_all_mode_values(client, connected_gateway):
+    """Test /api/operation correctly returns each valid mode string."""
+    for mode in ("self_consumption", "backup", "autonomous"):
+        connected_gateway.data.mode = mode
+        response = client.get("/api/operation")
+        assert response.status_code == 200
+        assert response.json()["real_mode"] == mode

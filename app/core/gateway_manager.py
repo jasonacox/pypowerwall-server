@@ -512,6 +512,10 @@ class GatewayManager:
             # This is fetched from /api/operation on the gateway via pw.get_mode() and
             # must be polled on every cycle so that mode changes made in the Tesla app
             # are reflected promptly (fixes issue #14).
+            # Pre-fill from last known good value so a transient failure doesn't wipe the cache.
+            last_data = self._last_successful_data.get(gateway_id)
+            if last_data and last_data.mode:
+                data.mode = last_data.mode
             try:
                 data.mode = await asyncio.wait_for(
                     loop.run_in_executor(self._executor, pw.get_mode),
