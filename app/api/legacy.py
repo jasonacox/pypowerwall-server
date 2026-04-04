@@ -89,11 +89,34 @@ def verify_control_token(authorization: Optional[str] = Header(None)):
 async def control_api(
     path: str, data: dict, authorization: Optional[str] = Header(None)
 ):
-    """Authenticated control endpoint for POST operations."""
+    """Authenticated control endpoint for POST operations.
+
+    Routes to cloud control connection for write operations (set_reserve, set_mode)
+    when available, since TEDAPI doesn't support POST/write APIs.
+    Falls back to direct post for cloud-mode or FleetAPI gateways.
+    """
     verify_control_token(authorization)
 
-    gateway_id = get_default_gateway()
+    # Map control paths to pypowerwall cloud control methods.
+    # Used for TEDAPI gateways with cloud credentials (hybrid mode).
+    cloud_control_map = {
+        "reserve": ("set_reserve", lambda d: [d.get("value", 0)]),
+        "mode": ("set_mode", lambda d: [d.get("value", "self_consumption")]),
+    }
 
+    if path in cloud_control_map and gateway_manager._cloud_control:
+        method, args_fn = cloud_control_map[path]
+        result = await gateway_manager.cloud_control(
+            method, *args_fn(data), timeout=10.0
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=503, detail="Control operation failed via cloud"
+            )
+        return result
+
+    # Fallback: direct post for cloud-mode/FleetAPI gateways or unmapped paths
+    gateway_id = get_default_gateway()
     result = await gateway_manager.call_api(
         gateway_id, "post", f"/api/{path}", data, timeout=10.0
     )
