@@ -1647,10 +1647,10 @@
             if (blockType === 'Powerwall3Follower') return 'Powerwall 3 (Follower)';
             if (isPw3System) return 'Powerwall 3';
             if (blockType === 'Powerwall3' || blockType === 'LFPV') return 'Powerwall 3';
-            if (partNum && /^(1707000|3012170)/.test(partNum)) return 'Powerwall 3';
+            if (partNum && /^1707000/.test(partNum)) return 'Powerwall 3';
             if (nomCapWh && nomCapWh < 8000) return 'Powerwall 1';
             // Powerwall+ part numbers (integrated inverter, ~13.5 kWh)
-            if (partNum && /^(1114932|2012170|2849923)/.test(partNum)) return 'Powerwall +';
+            if (partNum && /^(1114932|2012170|2849923|3012170-25-)/.test(partNum)) return 'Powerwall +';
             return 'Powerwall 2';
         }
 
