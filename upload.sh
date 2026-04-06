@@ -101,7 +101,7 @@ if [ "$last_path" == "pypowerwall-server" ]; then
 
   # Build jasonacox/pypowerwall-server:x.y.z
   echo "* BUILD ${CONTAINER_NAME} (using ${DOCKERFILE})"
-  docker buildx build -f ${DOCKERFILE} ${NO_CACHE_FLAG} --platform linux/amd64,linux/arm64,linux/arm/v7 --push -t ${CONTAINER_NAME} ${LATEST_TAG} .
+  docker buildx build -f ${DOCKERFILE} ${NO_CACHE_FLAG} --platform linux/amd64,linux/arm64 --push -t ${CONTAINER_NAME} ${LATEST_TAG} .
   echo ""
 
   # Verify
@@ -133,8 +133,6 @@ if [ "$last_path" == "pypowerwall-server" ]; then
   # Get the digest for each platform
   AMD64_DIGEST=$(docker buildx imagetools inspect ${CONTAINER_NAME} --raw 2>/dev/null | jq -r '.manifests[] | select(.platform.architecture=="amd64") | .digest' 2>/dev/null)
   ARM64_DIGEST=$(docker buildx imagetools inspect ${CONTAINER_NAME} --raw 2>/dev/null | jq -r '.manifests[] | select(.platform.architecture=="arm64") | .digest' 2>/dev/null)
-  ARM_V7_DIGEST=$(docker buildx imagetools inspect ${CONTAINER_NAME} --raw 2>/dev/null | jq -r '.manifests[] | select(.platform.architecture=="arm" and .platform.variant=="v7") | .digest' 2>/dev/null)
-  
   # Get actual image sizes by inspecting each platform's manifest
   if [ -n "$AMD64_DIGEST" ]; then
     SIZE_AMD64=$(docker buildx imagetools inspect ${CONTAINER_NAME}@${AMD64_DIGEST} --raw 2>/dev/null | jq '[.layers[].size] | add' 2>/dev/null)
@@ -150,13 +148,6 @@ if [ "$last_path" == "pypowerwall-server" ]; then
     SIZE_ARM64_MB="N/A"
   fi
   
-  if [ -n "$ARM_V7_DIGEST" ]; then
-    SIZE_ARM_V7=$(docker buildx imagetools inspect ${CONTAINER_NAME}@${ARM_V7_DIGEST} --raw 2>/dev/null | jq '[.layers[].size] | add' 2>/dev/null)
-    SIZE_ARM_V7_MB=$((SIZE_ARM_V7 / 1024 / 1024))
-  else
-    SIZE_ARM_V7_MB="N/A"
-  fi
-
   # Print summary
   echo "=========================================="
   echo "          BUILD SUMMARY"
@@ -165,7 +156,6 @@ if [ "$last_path" == "pypowerwall-server" ]; then
   echo "Container Sizes:"
   echo "  - amd64:       ${SIZE_AMD64_MB} MB"
   echo "  - arm64:       ${SIZE_ARM64_MB} MB"
-  echo "  - arm/v7:      ${SIZE_ARM_V7_MB} MB"
   echo "Container Name:  ${CONTAINER_NAME}"
   echo "Docker Hub:      https://hub.docker.com/r/jasonacox/pypowerwall-server"
   echo "=========================================="
