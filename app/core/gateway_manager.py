@@ -135,14 +135,14 @@ class GatewayManager:
         for config in gateway_configs:
             try:
                 # Validate configuration
-                # TEDAPI mode: need host + gw_pwd
+                # TEDAPI mode: need host + (gw_pwd OR rsa_key_path)
                 # Cloud mode: need email (authpath is optional, pypowerwall has defaults)
-                has_tedapi = config.host and config.gw_pwd
+                has_tedapi = config.host and (config.gw_pwd or config.rsa_key_path)
                 has_cloud = config.email  # cloud_mode is auto-set, email is sufficient
 
                 if not (has_tedapi or has_cloud):
                     logger.error(
-                        f"Invalid configuration for gateway {config.id}: need host+gw_pwd (TEDAPI) or email (Cloud)"
+                        f"Invalid configuration for gateway {config.id}: need host+gw_pwd or host+rsa_key_path (TEDAPI) or email (Cloud)"
                     )
                     continue
 
@@ -156,6 +156,9 @@ class GatewayManager:
                     host=config.host,
                     port=config.port,
                     gw_pwd=config.gw_pwd,
+                    rsa_key_path=config.rsa_key_path,
+                    rsa_key_configured=bool(config.rsa_key_path),
+                    wifi_host=config.wifi_host,
                     email=config.email,
                     timezone=config.timezone,
                     cloud_mode=config.cloud_mode,
@@ -303,6 +306,14 @@ class GatewayManager:
                             ),
                             timeout=15.0,
                         )
+                        connected = await asyncio.wait_for(
+                            loop.run_in_executor(self._executor, pw.is_connected),
+                            timeout=10.0,
+                        )
+                        if not connected:
+                            raise Exception(
+                                f"pypowerwall failed to connect to gateway {gateway_id} (cloud mode)"
+                            )
                     else:
                         # Build host string with optional non-standard port
                         # e.g. host="192.168.1.50", port=8443 -> "192.168.1.50:8443"
@@ -326,6 +337,10 @@ class GatewayManager:
                             tedapi_kwargs["cachefile"] = settings.cache_file
                         if settings.siteid:
                             tedapi_kwargs["siteid"] = settings.siteid
+                        if config.rsa_key_path:
+                            tedapi_kwargs["rsa_key_path"] = config.rsa_key_path
+                        if config.wifi_host:
+                            tedapi_kwargs["wifi_host"] = config.wifi_host
                         pw = await asyncio.wait_for(
                             loop.run_in_executor(
                                 self._executor,
@@ -333,6 +348,14 @@ class GatewayManager:
                             ),
                             timeout=15.0,
                         )
+                        connected = await asyncio.wait_for(
+                            loop.run_in_executor(self._executor, pw.is_connected),
+                            timeout=10.0,
+                        )
+                        if not connected:
+                            raise Exception(
+                                f"pypowerwall failed to connect to gateway {gateway_id} (TEDAPI mode)"
+                            )
 
                     self.connections[gateway_id] = pw
                     del self._pending_configs[gateway_id]
