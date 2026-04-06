@@ -21,7 +21,7 @@ jobs:
     steps:
       - name: Determine image owner
         id: set-owner
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const { data: repo } = await github.rest.repos.get({
