@@ -8,8 +8,11 @@
 - `PW_RSA_KEY_PATH` environment variable — path to an RSA-4096 private key PEM file for TEDAPI v1r LAN access (new pypowerwall authentication mode). Supported in single-gateway env-var config and `gateways.yaml` multi-gateway config.
 - Console **Connect Mode** and **Connected Gateways** panels now display `TEDAPI v1r` when `rsa_key_path` is configured, or `TEDAPI` otherwise (previously always showed `TEDAPI`).
 - `Dockerfile.beta` — alternative Dockerfile for beta builds that installs the production `requirements.txt` (for all transitive deps) then shadows the installed `pypowerwall` package with the local source tree via `PYTHONPATH=/app`. Used by `upload.sh` when building a beta release tag.
+- Hybrid TEDAPI + cloud control for write operations — when TEDAPI is available, control commands (charge limit, operation mode) fall back to cloud if the TEDAPI write fails, ensuring reliable control across LAN and cloud paths (#19). Thanks @lemassykoi!
 
 **Fixed:**
+- Poll operation mode on every background cycle so the cached value stays current; corrected Docker healthcheck to use the correct endpoint (#14, #15). Thanks @jasonacox-sam!
+- `pwModel()` incorrectly identified part number 3012170 as Powerwall 3 — corrected to Powerwall 2/2+ (#25). Thanks @jasonacox-sam!
 - `rsa_key_path` excluded from API responses to prevent path disclosure; a safe boolean `rsa_key_configured` is exposed instead (#17).
 - `upload.sh` trap used `-d` to test for the `pypowerwall_symlink` cleanup target — changed to `-L` so it correctly detects a symlink even if its target is temporarily missing (#17).
 - `upload.sh` now checks that the `pypowerwall/` source tree exists before attempting a beta build, exiting with a clear error message if it is absent (#17).
