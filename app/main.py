@@ -138,10 +138,19 @@ async def lifespan(app: FastAPI):
             mode_info = gateway.host or "TEDAPI"
         logger.info(f"  - {gateway_id}: {gateway.name} ({mode_info})")
 
+    # Start MQTT publisher (no-op when MQTT_HOST is not set)
+    from app.mqtt.publisher import mqtt_publisher
+    await mqtt_publisher.start()
+    if settings.mqtt_enabled:
+        logger.info(
+            f"MQTT publisher enabled — broker: {settings.mqtt_host}:{settings.mqtt_port}"
+        )
+
     yield
 
     # Shutdown
     logger.info("Shutting down PyPowerwall Server...")
+    await mqtt_publisher.stop()
     await gateway_manager.shutdown()
 
 
@@ -310,6 +319,25 @@ app.include_router(aggregates.router, prefix="/api/aggregate", tags=["Aggregates
 app.include_router(websockets.router, prefix="/ws", tags=["WebSockets"])
 
 app.include_router(legacy.router, tags=["Legacy Proxy Compatibility"])
+
+
+@app.get("/api/mqtt/status", tags=["MQTT"])
+async def get_mqtt_status():
+    """Get MQTT publisher status and configuration."""
+    from app.config import settings
+    from app.mqtt.publisher import mqtt_publisher
+
+    return {
+        "enabled": settings.mqtt_enabled,
+        "host": settings.mqtt_host,
+        "port": settings.mqtt_port,
+        "connected": mqtt_publisher.connected if settings.mqtt_enabled else False,
+        "topic_prefix": settings.mqtt_topic_prefix,
+        "ha_discovery": settings.mqtt_ha_discovery,
+        "qos": settings.mqtt_qos,
+        "retain": settings.mqtt_retain,
+        "tls": settings.mqtt_tls,
+    }
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(static_path)), name="static")

@@ -683,6 +683,17 @@ class GatewayManager:
                 gateway=gateway, data=data, online=True, last_updated=data.timestamp
             )
 
+            # Fire-and-forget MQTT publish after the cache is updated.
+            # Importing here (late import) avoids a circular dependency at module
+            # load time (publisher.py → config → gateway_manager).
+            # create_task() ensures MQTT failures never raise into this poll path.
+            from app.mqtt.publisher import mqtt_publisher
+            if mqtt_publisher.enabled:
+                asyncio.create_task(
+                    mqtt_publisher.publish_gateway(gateway_id, self.cache[gateway_id]),
+                    name=f"mqtt-publish-{gateway_id}",
+                )
+
         except Exception as e:
             gateway = self.gateways[gateway_id]
 

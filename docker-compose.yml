@@ -27,6 +27,15 @@ services:
       # Reverse proxy sub-path (optional) - uncomment if serving under a prefix
       # - PROXY_BASE_URL=/pypowerwall
       
+      # MQTT (optional) - uncomment and set MQTT_HOST to enable
+      # - MQTT_HOST=192.168.1.100
+      # - MQTT_PORT=1883
+      # - MQTT_USERNAME=mqttuser
+      # - MQTT_PASSWORD=mqttpassword
+      # - MQTT_HA_DISCOVERY=true      # auto-configure Home Assistant sensors
+      # - MQTT_TOPIC_PREFIX=pypowerwall
+      # - MQTT_TLS=false
+      
       # Control features (optional) - Uncomment to enable:
       # - CONTROL_ENABLED=true
       # - CONTROL_TOKEN=your-secure-random-token-here

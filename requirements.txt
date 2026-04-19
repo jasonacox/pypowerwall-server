@@ -8,3 +8,4 @@ websockets==13.1
 psutil==6.1.1
 beautifulsoup4==4.12.3
 cryptography
+aiomqtt>=2.3.0

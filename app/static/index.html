@@ -666,6 +666,39 @@
         .gateways-card {
             grid-column: span 12;
         }
+
+        /* MQTT Card */
+        .mqtt-card {
+            grid-column: span 12;
+        }
+        .mqtt-status-badge {
+            font-size: 0.8em;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.06);
+            color: var(--text-secondary);
+        }
+        .mqtt-status-badge.connected {
+            background: rgba(63, 185, 80, 0.15);
+            color: var(--accent-green);
+        }
+        .mqtt-status-badge.disconnected {
+            background: rgba(248, 81, 73, 0.15);
+            color: var(--accent-red);
+        }
+        .mqtt-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 8px;
+        }
+        .mqtt-grid .health-item {
+            padding: 8px 12px;
+            border-left: 3px solid var(--text-muted);
+        }
+        .mqtt-grid .health-value {
+            font-size: 0.95em;
+        }
         
         .gateway-list {
             display: grid;
@@ -1172,6 +1205,52 @@
                     <div class="no-strings">Loading gateways...</div>
                 </div>
             </div>
+
+            <!-- MQTT Broker (hidden until MQTT is configured) -->
+            <div class="card mqtt-card" id="mqtt-card" style="display:none">
+                <div class="card-header">
+                    <div class="card-title">
+                        <span class="icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none"/>
+                                <polyline points="9 22 9 12 15 12 15 22" fill="none"/>
+                            </svg>
+                        </span>
+                        MQTT Broker
+                    </div>
+                    <div class="mqtt-status-badge" id="mqtt-status-badge">--</div>
+                </div>
+                <div class="mqtt-grid">
+                    <div class="health-item">
+                        <div class="health-label">Broker</div>
+                        <div class="health-value" id="mqtt-broker">--</div>
+                    </div>
+                    <div class="health-item">
+                        <div class="health-label">Connection</div>
+                        <div class="health-value" id="mqtt-connection">--</div>
+                    </div>
+                    <div class="health-item">
+                        <div class="health-label">Topic Prefix</div>
+                        <div class="health-value" id="mqtt-prefix">--</div>
+                    </div>
+                    <div class="health-item">
+                        <div class="health-label">HA Discovery</div>
+                        <div class="health-value" id="mqtt-ha">--</div>
+                    </div>
+                    <div class="health-item">
+                        <div class="health-label">QoS</div>
+                        <div class="health-value" id="mqtt-qos">--</div>
+                    </div>
+                    <div class="health-item">
+                        <div class="health-label">Retain</div>
+                        <div class="health-value" id="mqtt-retain">--</div>
+                    </div>
+                    <div class="health-item">
+                        <div class="health-label">TLS</div>
+                        <div class="health-value" id="mqtt-tls">--</div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
     
@@ -1512,6 +1591,40 @@
         }
 
         // Fetch server stats
+        async function loadMqtt() {
+            try {
+                const response = await fetch('/api/mqtt/status');
+                if (!response.ok) return;
+                const mqtt = await response.json();
+                if (!mqtt.enabled) return;
+
+                document.getElementById('mqtt-card').style.display = '';
+                document.getElementById('mqtt-broker').textContent = `${mqtt.host}:${mqtt.port}`;
+
+                const badge = document.getElementById('mqtt-status-badge');
+                const connEl = document.getElementById('mqtt-connection');
+                if (mqtt.connected) {
+                    badge.textContent = '● Connected';
+                    badge.className = 'mqtt-status-badge connected';
+                    connEl.textContent = '● Connected';
+                    connEl.style.color = 'var(--accent-green)';
+                } else {
+                    badge.textContent = '● Disconnected';
+                    badge.className = 'mqtt-status-badge disconnected';
+                    connEl.textContent = '● Disconnected';
+                    connEl.style.color = 'var(--accent-red)';
+                }
+
+                document.getElementById('mqtt-prefix').textContent = mqtt.topic_prefix;
+                document.getElementById('mqtt-ha').textContent = mqtt.ha_discovery ? 'Enabled' : 'Disabled';
+                document.getElementById('mqtt-qos').textContent = `QoS ${mqtt.qos}`;
+                document.getElementById('mqtt-retain').textContent = mqtt.retain ? 'Yes' : 'No';
+                document.getElementById('mqtt-tls').textContent = mqtt.tls ? 'Enabled' : 'Disabled';
+            } catch (e) {
+                // MQTT endpoint unavailable — silently skip
+            }
+        }
+
         async function loadStats() {
             try {
                 const response = await fetch('/stats');
@@ -2045,6 +2158,7 @@
             loadStats();
             loadPowerwalls();
             loadGateways();
+            loadMqtt();
 
             // Refresh secondary data periodically
             setInterval(() => {
@@ -2053,6 +2167,7 @@
                 loadStats();
                 loadPowerwalls();
                 loadGateways();
+                loadMqtt();
             }, 30000);
         })();
 

@@ -1,6 +1,6 @@
 """Pydantic models for gateway configuration and data."""
 from typing import Optional, Dict, Any, List, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field  # pylint: disable=no-name-in-module
 
 
 class Gateway(BaseModel):

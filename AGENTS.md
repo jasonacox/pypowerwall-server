@@ -202,6 +202,25 @@ All configuration uses `PW_` prefix for consistency with pypowerwall proxy:
 | `PW_NEG_SOLAR` | yes | Allow negative solar values |
 | `PW_GRACEFUL_DEGRADATION` | yes | Serve stale data when offline |
 
+MQTT uses a separate `MQTT_` prefix (not a Powerwall concept):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MQTT_HOST` | None | Broker hostname/IP. **Required to enable MQTT.** |
+| `MQTT_PORT` | 1883 | Broker port |
+| `MQTT_USERNAME` | None | Optional broker username |
+| `MQTT_PASSWORD` | None | Optional broker password |
+| `MQTT_TLS` | false | Enable TLS/SSL |
+| `MQTT_TLS_CA_CERT` | None | Path to CA certificate |
+| `MQTT_TLS_INSECURE` | false | Skip cert verification (dev only) |
+| `MQTT_TOPIC_PREFIX` | pypowerwall | Root topic prefix |
+| `MQTT_RETAIN` | true | Retain messages on broker |
+| `MQTT_QOS` | 1 | QoS level (0, 1, or 2) |
+| `MQTT_HA_DISCOVERY` | true | Publish Home Assistant auto-discovery payloads |
+| `MQTT_HA_PREFIX` | homeassistant | HA discovery prefix |
+| `MQTT_CLIENT_ID` | pypowerwall-server | MQTT client identifier |
+| `MQTT_KEEPALIVE` | 60 | Keepalive interval (seconds) |
+
 ### Pydantic Settings
 
 Use `Field` with `validation_alias` for environment variable mapping:
@@ -361,8 +380,13 @@ The `track_requests` middleware in `app/main.py` does double duty: request stati
 | `app/models/gateway.py` | Pydantic models |
 | `app/utils/transform.py` | Static file serving and JS injection into HTML |
 | `app/utils/stats_tracker.py` | Request statistics |
-| `app/static/index.html` | Console UI dashboard — Powerwall status, health panel, battery graphics |
+| `app/mqtt/__init__.py` | MQTT package — exports `mqtt_publisher` singleton |
+| `app/mqtt/publisher.py` | `MqttPublisher` — connection loop, topic publishing, LWT, TLS, reconnect |
+| `app/mqtt/ha_discovery.py` | Home Assistant auto-discovery payload builder (pure function) |
+| `app/static/index.html` | Console UI dashboard — Powerwall status, health panel, battery graphics, MQTT broker panel |
 | `app/static/powerflow/app.js` | ⚠️ **PATCHED** vendored Tesla Gateway web UI — `isAuthenticated` always returns `true` (issue #7). **Do NOT replace with a clean copy.** |
+| `mqtt-tools/README.md` | Broker setup guide, CLI monitoring, GUI usage, HA integration steps |
+| `mqtt-tools/monitor.py` | Live tkinter GUI — connects to broker, shows real-time Powerwall telemetry |
 
 ## Version Management
 

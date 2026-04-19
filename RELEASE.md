@@ -2,6 +2,22 @@
 
 ## Version History
 
+### [0.3.0] - 2026-04-18
+
+**Added:**
+- **MQTT Integration** — publish live Powerwall telemetry to any MQTT broker. Set `MQTT_HOST` to enable. All sensor values are published under `{MQTT_TOPIC_PREFIX}/{gateway_id}/` with LWT (`offline`) and `availability` topics for clean broker state.
+- **Home Assistant auto-discovery** — on connect, discovery payloads are published for all sensors so they appear automatically under a single HA device card, requiring zero manual HA configuration (#21).
+- **`mqtt-tools/` folder** — `README.md` broker setup guide with CLI monitoring, HA integration steps, and live GUI instructions; `monitor.py` dark-theme tkinter GUI that subscribes to the broker and displays real-time Powerwall metrics for all gateways.
+- **Console MQTT Broker panel** — new card on the management dashboard (`/`) showing broker connectivity, topic prefix, HA discovery, QoS, retain, and TLS status. Fetched from the new `GET /api/mqtt/status` endpoint.
+- **`{prefix}/{gw}/name` topic** — friendly gateway name (from `gateways.yaml`) is published so the monitor GUI card title matches the configured name.
+- **`MqttPublisher.connected` property** — safe public accessor for broker connection state (replaces internal `_connected` access).
+- Exponential backoff reconnect in `MqttPublisher._connection_loop()` (1 s → 2 s → … → 60 s cap).
+- TLS/SSL support via `MQTT_TLS`, `MQTT_TLS_CA_CERT`, and `MQTT_TLS_INSECURE` environment variables.
+- 37 new tests: `tests/test_mqtt_publisher.py` (18) and `tests/test_mqtt_ha_discovery.py` (19), all with mock broker (no live MQTT dependency).
+
+**Changed:**
+- MQTT env variables added to `docker-compose.yml` as commented-out block for easy opt-in.
+
 ### [0.2.2] - 2026-03-04
 
 **Added:**

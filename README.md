@@ -18,7 +18,7 @@ A high-performance FastAPI-based server for monitoring and managing Tesla Powerw
 - **Real-Time Updates** - WebSocket streaming with 1-second updates and background polling with intelligent caching
 - **Complete API** - Full backward compatibility with pypowerwall proxy plus new multi-gateway and aggregate endpoints
 - **Console Web UI** - Tesla Power Flow animation, management console, and auto-generated API documentation at /docs
-- **Planned: MQTT Integration** - Publish metrics to MQTT brokers for Home Assistant and other automation systems
+- **MQTT Integration** - Publish live Powerwall metrics to any MQTT broker; built-in Home Assistant auto-discovery; see [mqtt-tools/README.md](mqtt-tools/README.md)
 
 ## Quick Start
 
@@ -313,6 +313,37 @@ server {
 | `https://lab.lan/pypowerwall/console` | `GET /console` — Management console |
 | `https://lab.lan/pypowerwall/api/...` | `GET /api/...` — API endpoints |
 | `https://lab.lan/pypowerwall/static/...` | `GET /static/...` — Static assets |
+
+## MQTT Integration
+
+Set `MQTT_HOST` to enable publishing. All other variables are optional.
+
+```bash
+export MQTT_HOST=192.168.1.100       # broker IP — required to enable MQTT
+export MQTT_PORT=1883                # default: 1883
+export MQTT_USERNAME=mqttuser        # optional
+export MQTT_PASSWORD=mqttpassword    # optional
+export MQTT_HA_DISCOVERY=true        # auto-configure Home Assistant sensors (default: true)
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MQTT_HOST` | *(none)* | Broker hostname/IP. **Required to enable MQTT.** |
+| `MQTT_PORT` | `1883` | Broker port |
+| `MQTT_USERNAME` | *(none)* | Username for authentication |
+| `MQTT_PASSWORD` | *(none)* | Password for authentication |
+| `MQTT_TLS` | `false` | Enable TLS/SSL |
+| `MQTT_TLS_CA_CERT` | *(none)* | Path to CA certificate |
+| `MQTT_TLS_INSECURE` | `false` | Disable cert verification (testing only) |
+| `MQTT_TOPIC_PREFIX` | `pypowerwall` | Root topic prefix |
+| `MQTT_RETAIN` | `true` | Retain messages on broker |
+| `MQTT_QOS` | `1` | MQTT QoS level (0, 1, or 2) |
+| `MQTT_HA_DISCOVERY` | `true` | Publish Home Assistant auto-discovery payloads |
+| `MQTT_HA_PREFIX` | `homeassistant` | HA discovery prefix |
+| `MQTT_CLIENT_ID` | `pypowerwall-server` | MQTT client identifier |
+| `MQTT_KEEPALIVE` | `60` | Connection keepalive in seconds |
+
+Topics are published under `{MQTT_TOPIC_PREFIX}/{gateway_id}/` — e.g. `pypowerwall/default/battery`, `pypowerwall/default/solar`, etc. See [mqtt-tools/README.md](mqtt-tools/README.md) for the full topic list, broker setup guide, Home Assistant integration steps, and the live monitor GUI.
 
 ## API Endpoints
 

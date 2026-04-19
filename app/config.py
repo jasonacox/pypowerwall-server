@@ -176,7 +176,7 @@ from pydantic_settings import BaseSettings
 logger = logging.getLogger(__name__)
 
 # Server version
-SERVER_VERSION = "0.2.2"
+SERVER_VERSION = "0.3.0"
 
 
 class GatewayConfig(BaseSettings):
@@ -270,6 +270,28 @@ class Settings(BaseSettings):
 
     # CORS configuration
     cors_origins: List[str] = Field(default=["*"], alias="CORS_ORIGINS")
+
+    # MQTT settings
+    # Set MQTT_HOST to enable MQTT publishing. All other MQTT_ variables are optional.
+    mqtt_host: Optional[str] = Field(default=None, alias="MQTT_HOST")
+    mqtt_port: int = Field(default=1883, alias="MQTT_PORT")
+    mqtt_username: Optional[str] = Field(default=None, alias="MQTT_USERNAME")
+    mqtt_password: Optional[str] = Field(default=None, alias="MQTT_PASSWORD")
+    mqtt_tls: bool = Field(default=False, alias="MQTT_TLS")
+    mqtt_tls_ca_cert: Optional[str] = Field(default=None, alias="MQTT_TLS_CA_CERT")
+    mqtt_tls_insecure: bool = Field(default=False, alias="MQTT_TLS_INSECURE")
+    mqtt_topic_prefix: str = Field(default="pypowerwall", alias="MQTT_TOPIC_PREFIX")
+    mqtt_retain: bool = Field(default=True, alias="MQTT_RETAIN")
+    mqtt_qos: int = Field(default=1, alias="MQTT_QOS")
+    mqtt_ha_discovery: bool = Field(default=True, alias="MQTT_HA_DISCOVERY")
+    mqtt_ha_prefix: str = Field(default="homeassistant", alias="MQTT_HA_PREFIX")
+    mqtt_client_id: str = Field(default="pypowerwall-server", alias="MQTT_CLIENT_ID")
+    mqtt_keepalive: int = Field(default=60, alias="MQTT_KEEPALIVE")
+
+    @property
+    def mqtt_enabled(self) -> bool:
+        """MQTT publishing is enabled when MQTT_HOST is set."""
+        return bool(self.mqtt_host)
 
     # Gateway configuration
     gateways: List[GatewayConfig] = Field(default_factory=list)
