@@ -400,7 +400,7 @@ async def test_initialize_cloud_control_exception_is_handled(monkeypatch):
     def mock_powerwall_factory(**kwargs):
         nonlocal call_count
         call_count += 1
-        if kwargs.get("cloudmode"):
+        if kwargs.get("fleetapi"):
             raise RuntimeError("cloud auth failed")
         return Mock()
 
