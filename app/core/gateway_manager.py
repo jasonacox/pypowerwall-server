@@ -205,7 +205,8 @@ class GatewayManager:
                         "authpath": authpath,
                         "cachefile": "/tmp/.powerwall.cloud",
                         "timezone": config.timezone,
-                        "cloudmode": True,
+                        "fleetapi": config.fleetapi,
+                        "auto_select": True,
                     }
                     self._cloud_control = await asyncio.wait_for(
                         loop.run_in_executor(

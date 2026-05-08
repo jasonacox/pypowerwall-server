@@ -400,9 +400,7 @@ async def test_initialize_cloud_control_exception_is_handled(monkeypatch):
     def mock_powerwall_factory(**kwargs):
         nonlocal call_count
         call_count += 1
-        if kwargs.get("cloudmode"):
-            raise RuntimeError("cloud auth failed")
-        return Mock()
+        raise RuntimeError("cloud auth failed")
 
     import pypowerwall
     monkeypatch.setattr(pypowerwall, "Powerwall", mock_powerwall_factory)
@@ -429,3 +427,4 @@ async def test_initialize_cloud_control_exception_is_handled(monkeypatch):
     assert gm._cloud_control is None
 
     await gm.shutdown()
+
