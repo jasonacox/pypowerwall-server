@@ -53,7 +53,6 @@ def _device_block(gateway_id: str, gateway_name: str, version: Optional[str]) ->
         "manufacturer": "Tesla",
         "model": "Powerwall",
         "sw_version": version or "unknown",
-        "via_device": "pypowerwall-server",
     }
 
 
