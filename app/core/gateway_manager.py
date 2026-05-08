@@ -318,6 +318,10 @@ class GatewayManager:
                         }
                         if settings.pw_password:
                             tedapi_kwargs["password"] = settings.pw_password
+                        if config.rsa_key_path:
+                            tedapi_kwargs["rsa_key_path"] = config.rsa_key_path
+                        if config.wifi_host:
+                            tedapi_kwargs["wifi_host"] = config.wifi_host
                         if config.email:
                             tedapi_kwargs["email"] = config.email
                         if config.authpath:

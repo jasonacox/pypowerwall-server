@@ -99,10 +99,19 @@ async def control_api(
 
     # Map control paths to pypowerwall cloud control methods.
     # Used for TEDAPI gateways with cloud credentials (hybrid mode).
+    # Validate grid_charging requires an explicit boolean value to prevent
+    # silent state changes from malformed or empty payloads.
+    if path == "grid_charging":
+        if "value" not in data or not isinstance(data["value"], bool):
+            raise HTTPException(
+                status_code=400,
+                detail="'value' must be a boolean (true or false)",
+            )
+
     cloud_control_map = {
         "reserve": ("set_reserve", lambda d: [d.get("value", 0)]),
         "mode": ("set_mode", lambda d: [d.get("value", "self_consumption")]),
-        "grid_charging": ("set_grid_charging", lambda d: [d.get("value", False)]),
+        "grid_charging": ("set_grid_charging", lambda d: [d["value"]]),
     }
 
     if path in cloud_control_map and gateway_manager._cloud_control:

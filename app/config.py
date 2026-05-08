@@ -197,6 +197,8 @@ class GatewayConfig(BaseSettings):
     cloud_mode: bool = False
     fleetapi: bool = False
     type: str = "powerwall"  # "powerwall" | "inverter" (solar-only, no batteries)
+    rsa_key_path: Optional[str] = None  # RSA-4096 private key PEM path for TEDAPI v1r mode
+    wifi_host: Optional[str] = None  # WiFi TEDAPI host for v1r wifi fallback
 
     model_config = {"env_prefix": ""}
 
@@ -212,6 +214,8 @@ class Settings(BaseSettings):
     # Powerwall connection settings
     pw_host: Optional[str] = Field(default=None, alias="PW_HOST")
     pw_gw_pwd: Optional[str] = Field(default=None, alias="PW_GW_PWD")
+    pw_rsa_key_path: Optional[str] = Field(default=None, alias="PW_RSA_KEY_PATH")  # RSA-4096 key for TEDAPI v1r
+    pw_wifi_host: Optional[str] = Field(default=None, alias="PW_WIFI_HOST")  # WiFi host for v1r fallback
     pw_password: Optional[str] = Field(
         default=None, alias="PW_PASSWORD"
     )  # Legacy PW2 local access
@@ -307,6 +311,8 @@ class Settings(BaseSettings):
                     authpath=self.pw_authpath,
                     timezone=self.pw_timezone,
                     cloud_mode=bool(self.pw_email and not self.pw_host),
+                    rsa_key_path=self.pw_rsa_key_path,
+                    wifi_host=self.pw_wifi_host or None,
                 )
             ]
 

@@ -250,7 +250,7 @@ def test_control_mode_routes_to_cloud(
 
 
 def test_control_grid_charging_routes_to_cloud(
-    control_client, connected_gateway, monkeypatch
+    control_client, connected_gateway
 ):
     """Test that POST /control/grid_charging uses cloud_control when _cloud_control is set."""
     from app.core.gateway_manager import gateway_manager
@@ -270,7 +270,7 @@ def test_control_grid_charging_routes_to_cloud(
 
 
 def test_control_grid_charging_disable(
-    control_client, connected_gateway, monkeypatch
+    control_client, connected_gateway
 ):
     """Test that POST /control/grid_charging with False disables grid charging."""
     from app.core.gateway_manager import gateway_manager
@@ -287,6 +287,42 @@ def test_control_grid_charging_disable(
 
     assert response.status_code == 200
     mock_cloud.set_grid_charging.assert_called_once_with(False)
+
+
+def test_control_grid_charging_missing_value_returns_400(
+    control_client, connected_gateway
+):
+    """Test that POST /control/grid_charging without 'value' returns 400."""
+    from app.core.gateway_manager import gateway_manager
+
+    mock_cloud = Mock()
+    gateway_manager._cloud_control = mock_cloud
+
+    response = control_client.post(
+        "/control/grid_charging",
+        json={},
+        headers={"Authorization": _CONTROL_TOKEN},
+    )
+
+    assert response.status_code == 400
+
+
+def test_control_grid_charging_non_boolean_value_returns_400(
+    control_client, connected_gateway
+):
+    """Test that POST /control/grid_charging with a non-boolean 'value' returns 400."""
+    from app.core.gateway_manager import gateway_manager
+
+    mock_cloud = Mock()
+    gateway_manager._cloud_control = mock_cloud
+
+    response = control_client.post(
+        "/control/grid_charging",
+        json={"value": "yes"},
+        headers={"Authorization": _CONTROL_TOKEN},
+    )
+
+    assert response.status_code == 400
 
 
 def test_control_cloud_returns_none_gives_503(
