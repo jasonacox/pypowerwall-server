@@ -286,8 +286,47 @@ class TestMqttPublisherEnabled:
         assert published["pypowerwall/offline-gw/online"] == "false"
 
     @pytest.mark.asyncio
+    async def test_connection_loop_publishes_global_availability_on_connect(self, monkeypatch):
+        """On connect, global {prefix}/availability must be published as 'online'.
+
+        This fixes issue #33: the discovery payload references this topic with
+        availability_mode='all', so without this message HA entities stay stuck
+        at 'unavailable' even when per-gateway state data is flowing correctly.
+        """
+        import aiomqtt
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock
+
+        pub = self._make_publisher(monkeypatch)
+
+        published: dict[str, str] = {}
+
+        mock_client = MagicMock()
+        mock_client.publish = AsyncMock(
+            side_effect=lambda topic, payload, **kw: published.__setitem__(topic, payload)
+        )
+
+        @asynccontextmanager
+        async def fake_client_ctx(**kwargs):
+            yield mock_client
+
+        # Run the connection loop but stop it after one pass
+        async def fake_sleep(n):
+            pub._shutdown = True  # stop inner heartbeat immediately
+
+        with (
+            patch("aiomqtt.Client", side_effect=lambda **kw: fake_client_ctx(**kw)),
+            patch("asyncio.sleep", new=fake_sleep),
+        ):
+            await pub._connection_loop()
+
+        assert "pypowerwall/availability" in published, (
+            "Global availability topic must be published on connect (issue #33)"
+        )
+        assert published["pypowerwall/availability"] == "online"
+
+    @pytest.mark.asyncio
     async def test_stop_cancels_connection_task(self, monkeypatch):
-        """stop() cancels the background connection task cleanly."""
         pub = self._make_publisher(monkeypatch)
 
         # Patch aiomqtt so the connection loop hangs without a real broker

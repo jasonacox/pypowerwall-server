@@ -363,6 +363,17 @@ class MqttPublisher:
                         f"MQTT connected to {settings.mqtt_host}:{settings.mqtt_port}"
                     )
 
+                    # Publish the global "online" availability heartbeat.
+                    # This is the retained counterpart to the LWT "offline" payload.
+                    # HA discovery payloads reference this topic with
+                    # availability_mode="all", so without this message every entity
+                    # stays stuck at "unavailable" even when state data is flowing.
+                    global_avail_topic = f"{settings.mqtt_topic_prefix}/availability"
+                    await self._safe_publish(
+                        global_avail_topic, "online",
+                        retain=True, qos=settings.mqtt_qos,
+                    )
+
                     # Inner heartbeat loop: stays alive until a publish failure
                     # sets _connected=False, or until shutdown is requested.
                     # The 5-second sleep matches the default poll interval so we
