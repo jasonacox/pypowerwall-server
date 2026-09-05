@@ -19,7 +19,7 @@ The **Control** panel allows you to manage the Powerwall's operation mode, reser
 
 <img alt="PyPowerwall Server Console - Control" src="https://github.com/user-attachments/assets/5a2bb9ee-78f6-440e-97e6-407fbfa720f7" />
 
-The **MQTT** panel shows the live MQTT settings if configured.
+The **MQTT** panel shows the live MQTT settings if the `PW_MQTT_BROKER` environment variable is set.
 
 <img alt="PyPowerwall Server Console - MQTT" src="https://github.com/user-attachments/assets/f57aff54-5e6e-4a85-a3dc-ec7892a2369d" />
 
