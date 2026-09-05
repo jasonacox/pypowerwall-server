@@ -15,6 +15,14 @@ The **Energy** panel toggles between **Energy Summary** (current kW totals) and 
 
 <img alt="PyPowerwall Server Console - Trend" src="https://github.com/user-attachments/assets/3fac475e-aebd-46a8-8c2d-8c4d294b2360" />
 
+The **Control** panel allows you to manage the Powerwall's operation mode, reserve percentage, and grid charging settings. Requires setting the `PW_CONTROL_SECRET` environment variable.
+
+<img alt="PyPowerwall Server Console - Control" src="https://github.com/user-attachments/assets/5a2bb9ee-78f6-440e-97e6-407fbfa720f7" />
+
+The **MQTT** panel shows the live MQTT settings if configured.
+
+<img alt="PyPowerwall Server Console - MQTT" src="https://github.com/user-attachments/assets/f57aff54-5e6e-4a85-a3dc-ec7892a2369d" />
+
 ## Features
 
 - **Multi-Gateway Support** - Monitor multiple Powerwall installations from a single server with per-gateway configuration and aggregated metrics
