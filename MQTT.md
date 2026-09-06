@@ -253,7 +253,12 @@ Sensors to auto-discover per gateway:
 | Backup Reserve | — | `%` | `mdi:battery-lock` |
 | Total Battery Capacity | `energy_storage` | `Wh` | `mdi:battery-high` |
 | Current Battery Charge | `energy_storage` | `Wh` | `mdi:battery-medium` |
-| Lifetime Energy (6 sensors) | `energy` | `Wh` | — |
+| Grid Energy Imported | `energy` | `Wh` | `mdi:transmission-tower-import` |
+| Grid Energy Exported | `energy` | `Wh` | `mdi:transmission-tower-export` |
+| Home Energy Consumption | `energy` | `Wh` | `mdi:home-lightning-bolt` |
+| Solar Energy Production | `energy` | `Wh` | `mdi:solar-power` |
+| Battery Energy Charged | `energy` | `Wh` | `mdi:battery-charging` |
+| Battery Energy Discharged | `energy` | `Wh` | `mdi:battery-minus` |
 
 Binary sensors:
 | Sensor | HA device_class |
