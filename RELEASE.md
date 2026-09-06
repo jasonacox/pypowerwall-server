@@ -2,7 +2,7 @@
 
 ## Version History
 
-### [0.6.2] - Upcoming
+### [0.6.2] - 2026-09-05
 
 **Added:**
 - **Web Console Powerwall Control card (`PW_CONTROL_SECRET`)** — the Console gains a Powerwall Control card (shown after System Health when a control secret is configured) with mode select (Self-Consumption/Backup/Time-Based), reserve slider + number (0–100), and a token field kept client-side (session-only by default, optional "Remember my token on this device" via `localStorage`). Mode + reserve changes go through the existing `POST /control/*` API with `Authorization: Bearer <token>`; a mode change together with reserve 0 is auto-split into two calls to avoid the Tesla cloud API quirk that can silently drop the mode change. Card availability is exposed by a new unauthenticated `GET /control/status` returning only `{"enabled": bool}`. (#94)

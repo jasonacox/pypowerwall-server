@@ -15,6 +15,14 @@ The **Energy** panel toggles between **Energy Summary** (current kW totals) and 
 
 <img alt="PyPowerwall Server Console - Trend" src="https://github.com/user-attachments/assets/3fac475e-aebd-46a8-8c2d-8c4d294b2360" />
 
+The **Control** panel allows you to manage the Powerwall's operation mode, reserve percentage, and grid charging settings. Requires setting the `PW_CONTROL_SECRET` environment variable.
+
+<img alt="PyPowerwall Server Console - Control" src="https://github.com/user-attachments/assets/5a2bb9ee-78f6-440e-97e6-407fbfa720f7" />
+
+The **MQTT** panel shows the live MQTT settings if the `PW_MQTT_BROKER` environment variable is set.
+
+<img alt="PyPowerwall Server Console - MQTT" src="https://github.com/user-attachments/assets/f57aff54-5e6e-4a85-a3dc-ec7892a2369d" />
+
 ## Features
 
 - **Multi-Gateway Support** - Monitor multiple Powerwall installations from a single server with per-gateway configuration and aggregated metrics
@@ -22,6 +30,7 @@ The **Energy** panel toggles between **Energy Summary** (current kW totals) and 
 - **Real-Time Updates** - WebSocket streaming with 1-second updates and background polling with intelligent caching
 - **Complete API** - Full backward compatibility with pypowerwall proxy plus new multi-gateway and aggregate endpoints
 - **Console Web UI** - Tesla Power Flow animation, management console, and auto-generated API documentation at /docs
+- **Optional Control Mode** - Token-protected `/control/*` API to set backup reserve and operating mode, plus a Powerwall Control card in the web Console (enabled by `PW_CONTROL_SECRET`; read-only by default)
 - **MQTT Integration** - Publish live Powerwall metrics to any MQTT broker; built-in Home Assistant auto-discovery; see [mqtt-tools/README.md](mqtt-tools/README.md)
 
 ## Quick Start
@@ -258,6 +267,16 @@ tracks SolarOnly fallback as a distinct state and retries reconnection with
 exponential backoff (60s → 300s max). Fallback state is exposed in `/health`
 and `/stats`. `POST /health/reset` clears fallback state (requires
 `PW_CONTROL_SECRET`). Only active in TEDAPI mode — no overhead for Cloud/FleetAPI.
+
+**Logging & Diagnostics:**
+```bash
+PW_DEBUG=no                # Enable debug logging (default: no)
+```
+HTTP access logs (one line per request) are only emitted when `PW_DEBUG` is
+enabled — production logs stay quiet. The gateway **firmware version** is
+logged at the first successful poll and again on every change
+(`Gateway <id> firmware changed: X -> Y`), so `docker logs pypowerwall-server`
+answers "when did my Powerwall firmware update?" without extra tooling.
 
 **Time-Series Storage (Daily Energy Stats):**
 ```bash
@@ -547,6 +566,7 @@ All existing proxy endpoints work unchanged:
 - `GET /stats` - Server statistics (uptime, requests, errors)
 
 **Control Operations (requires authentication):**
+- `GET /control/status` - Control availability for the Console (`{"enabled": bool}`, unauthenticated)
 - `POST /control/{path}` - Control operations (reserve, mode, etc.)
 
 ### Multi-Gateway Endpoints
@@ -780,6 +800,12 @@ pytest --cov=app --cov-report=html
 # Run specific test file
 pytest tests/test_api.py -v
 ```
+
+CI (GitHub Actions) runs the pytest suite on Python 3.10–3.12 and a
+`js-syntax` job that extracts every inline `<script>` block from
+`app/static/**/*.html` and validates it with `node --check`, so a syntax
+error in the Console's inline JavaScript fails the build instead of silently
+breaking the web UI.
 
 ### Building Docker Image
 
