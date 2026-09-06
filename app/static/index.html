@@ -755,6 +755,27 @@
             color: var(--text-primary);
         }
 
+        .powerwall-expansion-row td {
+            color: var(--text-secondary);
+        }
+
+        .powerwall-expansion-row td:first-child {
+            position: relative;
+            padding-left: 32px;
+        }
+
+        .powerwall-expansion-row td:first-child::before {
+            content: "↳";
+            position: absolute;
+            left: 12px;
+            color: var(--accent-blue);
+            font-weight: 600;
+        }
+
+        .powerwall-expansion-name {
+            font-weight: 500;
+        }
+
         .powerwall-model {
             font-size: 1.0em;
             color: var(--text-secondary);
@@ -2489,6 +2510,7 @@
         // isPw3System: gateway-level flag derived from /stats pw3:true (most reliable).
         // Falls back to PackagePartNumber prefix heuristics, then rated capacity.
         function pwModel(partNum, blockType, nomCapWh, isPw3System) {
+            if (blockType === 'BatteryExpansion') return 'Powerwall 3 (Expansion)';
             if (blockType === 'Powerwall3Follower') return 'Powerwall 3 (Follower)';
             if (isPw3System) return 'Powerwall 3';
             if (blockType === 'Powerwall3' || blockType === 'LFPV') return 'Powerwall 3';
@@ -2497,6 +2519,102 @@
             // Powerwall+ part numbers (integrated inverter, ~13.5 kWh)
             if (partNum && /^(1114932|2012170|2849923|3012170-25-)/.test(partNum)) return 'Powerwall +';
             return 'Powerwall 2';
+        }
+
+        function isBatteryExpansion(block, expansionParentBySerial) {
+            return block?.Type === 'BatteryExpansion' ||
+                block?.type === 'BatteryExpansion' ||
+                block?.attached_to != null ||
+                (expansionParentBySerial?.has(deviceSerial(block?.PackageSerialNumber)) ?? false);
+        }
+
+        function deviceSerial(value) {
+            if (typeof value !== 'string' || !value) return null;
+            const parts = value.split('--');
+            return parts[parts.length - 1];
+        }
+
+        // Return rows in the physical hierarchy: each expansion follows its
+        // Powerwall 3 leader, even when system_status lists it later.
+        function arrangePowerwallRows(items, tedapiConfig) {
+            const serialToName = new Map();
+            for (const item of items) {
+                const serial = deviceSerial(item.PackageSerialNumber);
+                if (serial) serialToName.set(serial, item.name);
+            }
+
+            const expansionParentBySerial = new Map();
+            for (const configBlock of (tedapiConfig?.battery_blocks || [])) {
+                const leaderSerial = deviceSerial(configBlock?.vin || configBlock?.din);
+                for (const expansion of (configBlock?.battery_expansions || [])) {
+                    const expansionSerial = deviceSerial(expansion?.din || expansion?.vin);
+                    if (leaderSerial && expansionSerial) {
+                        expansionParentBySerial.set(expansionSerial, leaderSerial);
+                    }
+                }
+            }
+
+            const childrenByParent = new Map();
+            const unmatched = [];
+            for (const item of items) {
+                const configuredParentSerial = expansionParentBySerial.get(
+                    deviceSerial(item.PackageSerialNumber)
+                );
+                const isExpansion = isBatteryExpansion(item, expansionParentBySerial);
+                if (!isExpansion) continue;
+                const parentName = item.attached_to ||
+                    serialToName.get(configuredParentSerial);
+                if (parentName && items.some(candidate =>
+                    candidate.name === parentName &&
+                    !isBatteryExpansion(candidate, expansionParentBySerial))) {
+                    if (!childrenByParent.has(parentName)) childrenByParent.set(parentName, []);
+                    childrenByParent.get(parentName).push(item);
+                } else {
+                    unmatched.push(item);
+                }
+            }
+
+            const rows = [];
+            for (const item of items) {
+                if (isBatteryExpansion(item, expansionParentBySerial)) continue;
+                rows.push({ item, isExpansion: false });
+                for (const child of (childrenByParent.get(item.name) || [])) {
+                    rows.push({ item: child, isExpansion: true });
+                }
+            }
+            for (const item of unmatched) {
+                rows.push({ item, isExpansion: true });
+            }
+            return rows;
+        }
+
+        function powerwallRowHtml(pw, displayName, isExpansion, isPw3System) {
+            const capacity = pw.POD_nom_full_pack_energy || pw.nominal_full_pack_energy;
+            const capacityKwh = capacity ? (capacity / 1000).toFixed(2) : '--';
+            const capacityNum = capacity ? capacity / 1000 : 0;
+            const capacityPct = capacityNum > 0 ? ((capacityNum / 13.5) * 100).toFixed(1) : '--';
+            const capacityClass = capacityNum >= 13.5 ? 'spec-good' : 'spec-warning';
+            const voltage = pw.v_out ? pw.v_out.toFixed(1) : '--';
+            const powerNum = pw.p_out || 0;
+            const power = powerNum !== 0 ? Math.abs(powerNum).toFixed(2) : '--';
+            const powerArrow = powerNum > 0 ? ' ↓' : powerNum < 0 ? ' ↑' : '';
+            const powerArrowClass = powerNum > 0 ? 'arrow-down' : powerNum < 0 ? 'arrow-up' : '';
+            const frequency = pw.f_out ? pw.f_out.toFixed(2) : '--';
+            const model = isExpansion
+                ? 'Powerwall 3 (Expansion)'
+                : pwModel(pw.PackagePartNumber, pw.Type, capacity, isPw3System);
+            const rowClass = isExpansion ? ' class="powerwall-expansion-row"' : '';
+            const nameClass = isExpansion
+                ? 'powerwall-name powerwall-expansion-name'
+                : 'powerwall-name';
+            const name = isExpansion ? 'Expansion' : displayName;
+
+            return `<tr${rowClass}><td class="${nameClass}">${name}</td>` +
+                `<td class="powerwall-model">${model}</td>` +
+                `<td>${capacityKwh} kWh <span class="${capacityClass}">(${capacityPct}%)</span></td>` +
+                `<td>${voltage} V</td>` +
+                `<td>${power} kW<span class="energy-arrow ${powerArrowClass}">${powerArrow}</span></td>` +
+                `<td>${frequency} Hz</td></tr>`;
         }
 
         async function loadPowerwalls() {
@@ -2511,7 +2629,7 @@
                 
                 // Extract Powerwall data
                 const powerwalls = [];
-                const pwRegex = /^(PW\d+)_(POD_nom_full_pack_energy|v_out|p_out|f_out|PackagePartNumber|Type)$/;
+                const pwRegex = /^(PW\d+)_(POD_nom_full_pack_energy|v_out|p_out|f_out|PackagePartNumber|PackageSerialNumber|Type|attached_to)$/;
                 const pwData = {};
                 
                 for (const [key, value] of Object.entries(pod)) {
@@ -2527,6 +2645,7 @@
                 // Convert to array and sort
                 const pwList = Object.entries(pwData).map(([name, data]) => ({ name, ...data }));
                 pwList.sort((a, b) => a.name.localeCompare(b.name));
+                const pwRows = arrangePowerwallRows(pwList);
                 
                 if (pwList.length === 0) {
                     container.innerHTML = '<div class="no-strings">No Powerwall data available</div>';
@@ -2545,29 +2664,13 @@
                 
                 const SPEC_CAPACITY = 13.5; // kWh per Powerwall
                 
-                pwList.forEach(pw => {
-                    const capacity = pw.POD_nom_full_pack_energy ? (pw.POD_nom_full_pack_energy / 1000).toFixed(2) : '--';
-                    const capacityNum = pw.POD_nom_full_pack_energy ? pw.POD_nom_full_pack_energy / 1000 : 0;
-                    const capacityPct = capacityNum > 0 ? ((capacityNum / SPEC_CAPACITY) * 100).toFixed(1) : '--';
-                    const capacityClass = capacityNum >= SPEC_CAPACITY ? 'spec-good' : 'spec-warning';
-                    
-                    const voltage = pw.v_out ? pw.v_out.toFixed(1) : '--';
-                    const powerNum = pw.p_out || 0;
-                    const power = powerNum !== 0 ? Math.abs(powerNum).toFixed(2) : '--';
-                    const powerArrow = powerNum > 0 ? ' ↓' : powerNum < 0 ? ' ↑' : '';
-                    const powerArrowClass = powerNum > 0 ? 'arrow-down' : powerNum < 0 ? 'arrow-up' : '';
-                    const frequency = pw.f_out ? pw.f_out.toFixed(2) : '--';
-                    const model = pwModel(pw.PackagePartNumber, pw.Type, pw.POD_nom_full_pack_energy,
-                        gatewayMeta['default']?.pw3 || window._systemPw3 || false);
-
-                    html += '<tr>';
-                    html += `<td class="powerwall-name">${pw.name}</td>`;
-                    html += `<td class="powerwall-model">${model}</td>`;
-                    html += `<td>${capacity} kWh <span class="${capacityClass}">(${capacityPct}%)</span></td>`;
-                    html += `<td>${voltage} V</td>`;
-                    html += `<td>${power} kW<span class="energy-arrow ${powerArrowClass}">${powerArrow}</span></td>`;
-                    html += `<td>${frequency} Hz</td>`;
-                    html += '</tr>';
+                pwRows.forEach(({ item: pw, isExpansion }) => {
+                    html += powerwallRowHtml(
+                        pw,
+                        pw.name,
+                        isExpansion,
+                        gatewayMeta['default']?.pw3 || window._systemPw3 || false
+                    );
                 });
                 
                 html += '</tbody></table>';
@@ -2761,20 +2864,17 @@
                     if (!blocks.length) { html += '<div class="no-strings">No Powerwall data</div>'; continue; }
                     // Battery table (same columns as single-gateway view)
                     html += '<table class="powerwall-table"><thead><tr><th>Powerwall</th><th>Model</th><th>Capacity</th><th>Voltage</th><th>Power</th><th>Frequency</th></tr></thead><tbody>';
-                    blocks.forEach((block, i) => {
-                        const cap = block.nominal_full_pack_energy;
-                        const capKwh = cap ? (cap / 1000).toFixed(2) : '--';
-                        const capPct = cap ? ((cap / 1000 / SPEC_CAPACITY) * 100).toFixed(1) : '--';
-                        const capClass = cap && cap / 1000 >= SPEC_CAPACITY ? 'spec-good' : 'spec-warning';
-                        const voltage = block.v_out ? block.v_out.toFixed(1) : '--';
-                        const pwr = block.p_out || 0;
-                        const pwrStr = pwr !== 0 ? Math.abs(pwr).toFixed(2) : '--';
-                        const arrow = pwr > 0 ? ' ↓' : pwr < 0 ? ' ↑' : '';
-                        const arrowClass = pwr > 0 ? 'arrow-down' : pwr < 0 ? 'arrow-up' : '';
-                        const freq = block.f_out ? block.f_out.toFixed(2) : '--';
-                        const model = pwModel(block.PackagePartNumber, block.Type, cap,
-                            gatewayMeta[gwId]?.pw3 || false);
-                        html += `<tr><td class="powerwall-name">PW${i + 1}</td><td class="powerwall-model">${model}</td><td>${capKwh} kWh <span class="${capClass}">(${capPct}%)</span></td><td>${voltage} V</td><td>${pwrStr} kW<span class="energy-arrow ${arrowClass}">${arrow}</span></td><td>${freq} Hz</td></tr>`;
+                    const rows = arrangePowerwallRows(
+                        blocks.map((block, i) => ({ ...block, name: `PW${i + 1}` })),
+                        status.data.tedapi_config
+                    );
+                    rows.forEach(({ item: block, isExpansion }) => {
+                        html += powerwallRowHtml(
+                            block,
+                            block.name,
+                            isExpansion,
+                            gatewayMeta[gwId]?.pw3 || false
+                        );
                     });
                     html += '</tbody></table>';
                     // Compact summary row

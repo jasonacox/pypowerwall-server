@@ -65,6 +65,64 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _device_serial(value: object) -> Optional[str]:
+    """Extract a serial number from a TEDAPI VIN/DIN or plain serial value."""
+    if not isinstance(value, str) or not value:
+        return None
+    return value.rsplit("--", 1)[-1]
+
+
+def _expansion_parent_indexes(
+    system_status: Optional[dict], tedapi_config: Optional[dict]
+) -> dict[int, int]:
+    """Map battery-expansion block indexes to their leader block indexes.
+
+    TEDAPI config stores expansions under their leader while system status exposes
+    each expansion as a separate ``battery_blocks`` entry.  The mapping lets the
+    legacy flat ``/pod`` response retain the parent relationship for the Console.
+    """
+    if not isinstance(system_status, dict) or not isinstance(tedapi_config, dict):
+        return {}
+
+    blocks = system_status.get("battery_blocks") or []
+    if not isinstance(blocks, list):
+        return {}
+
+    serial_to_index = {}
+    for index, block in enumerate(blocks, 1):
+        if not isinstance(block, dict):
+            continue
+        serial = _device_serial(block.get("PackageSerialNumber"))
+        if serial:
+            serial_to_index[serial] = index
+
+    parent_indexes: dict[int, int] = {}
+    config_blocks = tedapi_config.get("battery_blocks") or []
+    if not isinstance(config_blocks, list):
+        return parent_indexes
+
+    for config_block in config_blocks:
+        if not isinstance(config_block, dict):
+            continue
+        leader_serial = _device_serial(
+            config_block.get("vin") or config_block.get("din")
+        )
+        leader_index = serial_to_index.get(leader_serial)
+        if not leader_index:
+            continue
+        for expansion in config_block.get("battery_expansions") or []:
+            if not isinstance(expansion, dict):
+                continue
+            expansion_serial = _device_serial(
+                expansion.get("din") or expansion.get("vin")
+            )
+            expansion_index = serial_to_index.get(expansion_serial)
+            if expansion_index:
+                parent_indexes[expansion_index] = leader_index
+
+    return parent_indexes
+
+
 @router.post("/control/{path:path}")
 async def control_api(
     path: str, data: dict, authorization: Optional[str] = Header(None)
@@ -781,6 +839,9 @@ async def get_pod():
 
     # Get Individual Powerwall Battery Data from cached system_status
     system_status = status.data.system_status
+    expansion_parent_indexes = _expansion_parent_indexes(
+        system_status, status.data.tedapi_config
+    )
     if system_status and "battery_blocks" in system_status:
         idx = 1
         for block in system_status["battery_blocks"]:
@@ -798,6 +859,10 @@ async def get_pod():
             pod[f"PW{idx}_POD_nom_energy_remaining"] = None
             pod[f"PW{idx}_POD_nom_energy_to_be_charged"] = None
             pod[f"PW{idx}_POD_nom_full_pack_energy"] = None
+
+            parent_idx = expansion_parent_indexes.get(idx)
+            if parent_idx:
+                pod[f"PW{idx}_attached_to"] = f"PW{parent_idx}"
 
             # System Status Data
             pod[f"PW{idx}_POD_nom_energy_remaining"] = block.get(
@@ -1804,6 +1869,7 @@ async def pw_version():
     return {"version": version, "vint": vint}
 
 
+
 @router.get("/pw/status")
 async def pw_status():
     """Status summary.
@@ -2168,4 +2234,3 @@ async def get_version():
         pass
 
     return {"version": version, "vint": vint}
-
