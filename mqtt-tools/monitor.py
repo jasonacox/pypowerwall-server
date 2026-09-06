@@ -69,7 +69,7 @@ T = {
 }
 
 # (label, unit, color-key, formatter)
-#   formatter: "pct" | "watt" | "text"
+#   formatter: "pct" | "watt" | "energy" | "text"
 SENSORS: list[tuple[str, str, str, str, str]] = [
     # key            label          unit   color      fmt
     ("battery",      "Battery",     "%",   "green",   "pct"),
@@ -78,6 +78,8 @@ SENSORS: list[tuple[str, str, str, str, str]] = [
     ("home",         "Home Load",   "W",   "blue",    "watt"),
     ("powerwall",    "Powerwall",   "W",   "orange",  "watt"),
     ("reserve",      "Reserve",     "%",   "cyan",    "pct"),
+    ("total_capacity", "Capacity",   "Wh",  "blue",    "energy"),
+    ("current_charge", "Charge",     "Wh",  "green",   "energy"),
     ("grid_status",  "Grid Status", "",    "value_fg","text"),
     ("mode",         "Mode",        "",    "value_fg","text"),
     ("version",      "Firmware",    "",    "grey",    "text"),
@@ -108,6 +110,8 @@ def fmt_value(key: str, fmt: str, raw: str) -> str:
         if fmt == "pct":
             return f"{f:.1f}"
         if fmt == "watt":
+            return f"{f:,.0f}"
+        if fmt == "energy":
             return f"{f:,.0f}"
     except ValueError:
         pass

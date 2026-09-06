@@ -20,6 +20,8 @@ Sensors (numeric):
     home        — Home load (W, device_class=power)
     powerwall   — Powerwall power (W, device_class=power, positive=discharging)
     reserve     — Backup reserve target (%)
+    total_capacity — Total battery capacity (Wh)
+    current_charge — Current battery charge (Wh)
 
 Solar string sensors (when string_ids provided):
     strings/{id}/voltage  — String voltage (V, per string A–F or multi-PW3 A1–F2…)
@@ -230,6 +232,22 @@ def build_discovery_payloads(
             unit="%",
             state_class="measurement",
             icon="mdi:battery-lock",
+        ),
+        sensor(
+            "total_capacity", "Total Battery Capacity",
+            f"{data_prefix}/total_capacity",
+            unit="Wh",
+            device_class="energy_storage",
+            state_class="measurement",
+            icon="mdi:battery-high",
+        ),
+        sensor(
+            "current_charge", "Current Battery Charge",
+            f"{data_prefix}/current_charge",
+            unit="Wh",
+            device_class="energy_storage",
+            state_class="measurement",
+            icon="mdi:battery-medium",
         ),
         # --- Lifetime energy sensors (Wh, total_increasing) ---
         # Lifetime accumulators from /api/meters/aggregates — on PW3/TEDAPI

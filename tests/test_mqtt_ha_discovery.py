@@ -72,8 +72,8 @@ class TestBuildDiscoveryPayloads:
 
     def test_returns_expected_count(self):
         results = self._payloads()
-        # 16 sensors + 1 binary sensor = 17
-        assert len(results) == 17
+        # 18 sensors + 1 binary sensor = 19
+        assert len(results) == 19
 
     def test_all_topics_start_with_ha_prefix(self):
         results = self._payloads(ha_prefix="homeassistant")
@@ -134,6 +134,20 @@ class TestBuildDiscoveryPayloads:
         p = results[topic]
         assert p["unit_of_measurement"] == "W"
         assert p["device_class"] == "power"
+
+    def test_battery_energy_sensor_fields(self):
+        results = dict(self._payloads())
+        checks = {
+            "total_capacity": "pypowerwall/home/total_capacity",
+            "current_charge": "pypowerwall/home/current_charge",
+        }
+        for uid, state_topic in checks.items():
+            p = results[f"homeassistant/sensor/pypowerwall_home_{uid}/config"]
+            assert p["unit_of_measurement"] == "Wh"
+            assert p["device_class"] == "energy_storage"
+            assert p["state_class"] == "measurement"
+            assert p["state_topic"] == state_topic
+            assert p["unique_id"] == f"pypowerwall_home_{uid}"
 
     def test_lifetime_energy_sensors_present(self):
         """All six lifetime energy sensors are discovered."""
@@ -223,7 +237,7 @@ class TestBuildDiscoveryPayloads:
             ha_prefix="homeassistant",
             version=None,
         )
-        assert len(results) == 17
+        assert len(results) == 19
         for _, payload_str in results:
             p = json.loads(payload_str)
             assert p["device"]["sw_version"] == "unknown"
@@ -238,7 +252,7 @@ class TestBuildDiscoveryPayloads:
         )
         string_topics = [t for t, _ in results if "_string_" in t]
         assert string_topics == []
-        assert len(results) == 17
+        assert len(results) == 19
 
     def test_string_sensors_single_pw3(self):
         """Six strings A–F → 6×3 per-string + 3×3 paired rollup = 27 extra entries."""
@@ -251,8 +265,8 @@ class TestBuildDiscoveryPayloads:
             string_ids=string_ids,
         )
         payloads = {t: json.loads(p) for t, p in results}
-        # 17 base + 6 strings × 3 metrics + 3 pairs × 3 metrics = 17 + 18 + 9 = 44
-        assert len(results) == 44
+        # 19 base + 6 strings × 3 metrics + 3 pairs × 3 metrics = 19 + 18 + 9 = 46
+        assert len(results) == 46
 
         # Spot-check string A voltage
         topic = "homeassistant/sensor/pypowerwall_home_string_a_voltage/config"
@@ -282,8 +296,8 @@ class TestBuildDiscoveryPayloads:
             string_ids=string_ids,
         )
         payloads = {t: json.loads(p) for t, p in results}
-        # 17 base + 2×3 per-string + 1 pair (AB) × 3 = 17 + 6 + 3 = 26
-        assert len(results) == 26
+        # 19 base + 2×3 per-string + 1 pair (AB) × 3 = 19 + 6 + 3 = 28
+        assert len(results) == 28
         # AB pair present
         assert "homeassistant/sensor/pypowerwall_home_string_ab_voltage/config" in payloads
         # CD and EF pairs must NOT be present (C/D/E/F not in string_ids)
@@ -301,8 +315,8 @@ class TestBuildDiscoveryPayloads:
             string_ids=string_ids,
         )
         payloads = {t: json.loads(p) for t, p in results}
-        # 17 base + 12×3 per-string + 6 pairs × 3 = 17 + 36 + 18 = 71
-        assert len(results) == 71
+        # 19 base + 12×3 per-string + 6 pairs × 3 = 19 + 36 + 18 = 73
+        assert len(results) == 73
         # Spot-check numbered pair AB1
         assert "homeassistant/sensor/pypowerwall_home_string_ab1_voltage/config" in payloads
         assert "homeassistant/sensor/pypowerwall_home_string_ab2_power/config" in payloads
@@ -336,7 +350,7 @@ class TestPublisherHaDiscovery:
 
         topics = [c.args[0] for c in mock_client.publish.call_args_list]
         disc_topics = [t for t in topics if "homeassistant" in t]
-        assert len(disc_topics) == 17  # one per sensor/binary_sensor
+        assert len(disc_topics) == 19  # one per sensor/binary_sensor
 
     @pytest.mark.asyncio
     async def test_discovery_sent_only_once_per_connection(self, monkeypatch):
@@ -383,7 +397,7 @@ class TestPublisherHaDiscovery:
             for c in mock_client.publish.call_args_list
             if "homeassistant" in c.args[0]
         ]
-        assert len(disc_topics) == 17
+        assert len(disc_topics) == 19
 
     @pytest.mark.asyncio
     async def test_discovery_skipped_when_ha_discovery_false(self, monkeypatch):

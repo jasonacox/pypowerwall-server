@@ -138,6 +138,8 @@ Base path: `{MQTT_TOPIC_PREFIX}/{gateway_id}/`
 | `pypowerwall/{gw}/grid_status` | `UP` or `DOWN` | — |
 | `pypowerwall/{gw}/mode` | `self_consumption` | — |
 | `pypowerwall/{gw}/reserve` | `20.0` | `%` |
+| `pypowerwall/{gw}/total_capacity` | `13500` | `Wh` (total battery capacity) |
+| `pypowerwall/{gw}/current_charge` | `11547` | `Wh` (current battery charge) |
 | `pypowerwall/{gw}/online` | `true` or `false` | — |
 
 ### Lifetime energy topics (Wh accumulators)
@@ -241,6 +243,7 @@ Sensors to auto-discover per gateway:
 | Sensor | HA device_class | Unit | Icon |
 |--------|----------------|------|------|
 | Battery SOE | `battery` | `%` | — |
+| Battery Raw SOE | — | `%` | `mdi:battery-medium` |
 | Solar Power | `power` | `W` | `mdi:solar-power` |
 | Grid Power | `power` | `W` | `mdi:transmission-tower` |
 | Home Power | `power` | `W` | `mdi:home-lightning-bolt` |
@@ -248,6 +251,9 @@ Sensors to auto-discover per gateway:
 | Grid Status | — | — | `mdi:transmission-tower` |
 | Operation Mode | — | — | `mdi:cog` |
 | Backup Reserve | — | `%` | `mdi:battery-lock` |
+| Total Battery Capacity | `energy_storage` | `Wh` | `mdi:battery-high` |
+| Current Battery Charge | `energy_storage` | `Wh` | `mdi:battery-medium` |
+| Lifetime Energy (6 sensors) | `energy` | `Wh` | — |
 
 Binary sensors:
 | Sensor | HA device_class |
@@ -488,7 +494,7 @@ pip install paho-mqtt
 python mqtt-tools/monitor.py --host localhost
 ```
 
-The GUI shows live battery %, power flows, grid status, and mode, updating every poll cycle. Close the window to exit.
+The GUI shows live battery %, capacity, charge, power flows, grid status, and mode, updating every poll cycle. Close the window to exit.
 
 ---
 
@@ -504,6 +510,8 @@ pypowerwall/default/powerwall        1200
 pypowerwall/default/grid_status      UP
 pypowerwall/default/mode             self_consumption
 pypowerwall/default/reserve          20.0
+pypowerwall/default/total_capacity   13500
+pypowerwall/default/current_charge   11547
 pypowerwall/default/online           true
 pypowerwall/default/aggregates       {...}
 pypowerwall/default/status           {...}
@@ -521,4 +529,3 @@ pypowerwall/default/strings/AB/current  2.75
 pypowerwall/default/strings/AB/power    661.06
 ...
 ```
-
