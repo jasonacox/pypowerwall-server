@@ -243,7 +243,7 @@ Sensors to auto-discover per gateway:
 | Sensor | HA device_class | Unit | Icon |
 |--------|----------------|------|------|
 | Battery SOE | `battery` | `%` | — |
-| Battery Raw SOE | — | `%` | `mdi:battery-medium` |
+| Battery Raw | — | `%` | `mdi:battery-medium` |
 | Solar Power | `power` | `W` | `mdi:solar-power` |
 | Grid Power | `power` | `W` | `mdi:transmission-tower` |
 | Home Power | `power` | `W` | `mdi:home-lightning-bolt` |

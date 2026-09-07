@@ -6,6 +6,7 @@
 
 **Added:**
 - **Powerwall 3 expansion packs shown under their leader** — the Console's Powerwall Status table now nests PW3 battery expansions beneath their leader unit (indented `↳` row, model shown as `Powerwall 3 (Expansion)`) instead of listing them as separate Powerwalls. The leader/expansion relationship comes from the cached TEDAPI config and is exposed in `/pod` as `PW{n}_attached_to` (e.g. `"PW1"`) plus `PW{n}_PackageSerialNumber`. Works in both single- and multi-gateway views. (#98)
+- **MQTT battery capacity and charge topics** — the MQTT publisher now emits `{prefix}/{gw}/total_capacity` and `{prefix}/{gw}/current_charge` (whole-system Wh, from cached `system_status`; falls back to summing `battery_blocks` when the top-level totals are absent), includes both in the `status` summary JSON, and adds matching Home Assistant auto-discovery sensors (`device_class: energy_storage`). The mqtt-tools monitor GUI shows the new Capacity/Charge values. (#97)
 
 ### [0.6.2] - 2026-09-05
 

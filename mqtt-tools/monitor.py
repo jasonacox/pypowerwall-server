@@ -68,7 +68,7 @@ T = {
     "grey":         "#4B5563",
 }
 
-# (label, unit, color-key, formatter)
+# (key, label, unit, color-key, formatter)
 #   formatter: "pct" | "watt" | "energy" | "text"
 SENSORS: list[tuple[str, str, str, str, str]] = [
     # key            label          unit   color      fmt
