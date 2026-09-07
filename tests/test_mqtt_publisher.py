@@ -20,7 +20,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.models.gateway import Gateway, GatewayStatus, PowerwallData
-from app.mqtt.publisher import MqttPublisher, _extract_energy, _extract_power
+from app.mqtt.publisher import (
+    MqttPublisher,
+    _extract_battery_energy,
+    _extract_energy,
+    _extract_power,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +74,16 @@ def make_status(
     )
 
 
+def _status_with_battery_energy() -> GatewayStatus:
+    """Build a status with whole-system battery capacity and charge values."""
+    status = make_status()
+    status.data.system_status = {
+        "nominal_full_pack_energy": 13_500,
+        "nominal_energy_remaining": 11_547,
+    }
+    return status
+
+
 # ---------------------------------------------------------------------------
 # _extract_power unit tests (pure function — no async needed)
 # ---------------------------------------------------------------------------
@@ -94,6 +109,33 @@ class TestExtractPower:
 
     def test_none_aggregates(self):
         assert _extract_power(None, "solar") is None  # type: ignore[arg-type]
+
+
+class TestExtractBatteryEnergy:
+    def test_total_from_system_status(self):
+        status = {"nominal_full_pack_energy": 13_500}
+        assert _extract_battery_energy(status, "nominal_full_pack_energy") == 13_500
+
+    def test_zero_is_valid(self):
+        status = {"nominal_energy_remaining": 0}
+        assert _extract_battery_energy(status, "nominal_energy_remaining") == 0.0
+
+    def test_sums_battery_blocks_when_total_missing(self):
+        status = {
+            "battery_blocks": [
+                {"nominal_full_pack_energy": 13_500},
+                {"nominal_full_pack_energy": 13_500},
+            ]
+        }
+        assert _extract_battery_energy(status, "nominal_full_pack_energy") == 27_000
+
+    def test_missing_or_invalid_values(self):
+        assert _extract_battery_energy({}, "nominal_full_pack_energy") is None
+        assert _extract_battery_energy(None, "nominal_full_pack_energy") is None
+        assert _extract_battery_energy(
+            {"nominal_full_pack_energy": "bad"},
+            "nominal_full_pack_energy",
+        ) is None
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +279,35 @@ class TestMqttPublisherEnabled:
         assert "pypowerwall/test-gw/aggregates" in published
         agg = json.loads(published["pypowerwall/test-gw/aggregates"])
         assert agg["solar"]["instant_power"] == 1500.0
+
+    @pytest.mark.asyncio
+    async def test_battery_energy_topics_published(self, monkeypatch):
+        """Total capacity and current charge are published in whole Wh."""
+        pub = self._make_publisher(monkeypatch)
+        mock_client = AsyncMock()
+        pub._client = mock_client
+        pub._connected = True
+
+        await pub.publish_gateway("test-gw", _status_with_battery_energy())
+
+        published = {c.args[0]: c.args[1] for c in mock_client.publish.call_args_list}
+        assert published["pypowerwall/test-gw/total_capacity"] == "13500"
+        assert published["pypowerwall/test-gw/current_charge"] == "11547"
+
+    @pytest.mark.asyncio
+    async def test_battery_energy_is_in_summary(self, monkeypatch):
+        """The status JSON includes the same battery energy metrics."""
+        pub = self._make_publisher(monkeypatch)
+        mock_client = AsyncMock()
+        pub._client = mock_client
+        pub._connected = True
+
+        await pub.publish_gateway("test-gw", _status_with_battery_energy())
+
+        published = {c.args[0]: c.args[1] for c in mock_client.publish.call_args_list}
+        summary = json.loads(published["pypowerwall/test-gw/status"])
+        assert summary["total_capacity"] == 13_500.0
+        assert summary["current_charge"] == 11_547.0
 
     @pytest.mark.asyncio
     async def test_status_summary_json_topic_published(self, monkeypatch):

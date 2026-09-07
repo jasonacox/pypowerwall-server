@@ -180,6 +180,8 @@ All topics are published under `{MQTT_TOPIC_PREFIX}/{gateway_id}/`:
 | `home` | float | `2720.0` | Home load W |
 | `powerwall` | float | `0.0` | Powerwall power W (positive = discharging) |
 | `reserve` | float | `20.0` | Backup reserve % |
+| `total_capacity` | int | `13500` | Total battery capacity Wh |
+| `current_charge` | int | `11547` | Current battery charge Wh |
 | `grid_status` | string | `UP` | `UP`, `DOWN`, or `unknown` |
 | `mode` | string | `self_consumption` | Operation mode |
 | `version` | string | `23.44.0` | Powerwall firmware version |
@@ -195,6 +197,9 @@ pypowerwall/default/solar       → 3120.0
 pypowerwall/default/grid        → -400.0
 pypowerwall/default/home        → 2720.0
 pypowerwall/default/powerwall   → 0.0
+pypowerwall/default/reserve     → 20.0
+pypowerwall/default/total_capacity → 13500
+pypowerwall/default/current_charge → 11547
 pypowerwall/default/grid_status → UP
 pypowerwall/default/mode        → self_consumption
 pypowerwall/default/online      → true
@@ -306,23 +311,28 @@ When the server starts you will see in its log:
 
 ```
 INFO  MQTT connected to 192.168.1.100:1883
-INFO  MQTT HA discovery published for gateway 'default' (10 entities)
+INFO  MQTT HA discovery published for gateway 'default' (19 entities)
 ```
 
 #### Step 3 - Find the device in Home Assistant
 
 - Go to **Settings → Devices & Services → MQTT → Devices**.
 - Look for a device named after your gateway (e.g. "Home Powerwall").
-- All 10 entities appear grouped on the device card:
+- All 19 entities appear grouped on the device card:
 
   | Entity | Device Class | Unit |
   |--------|-------------|------|
   | Battery | battery | % |
+  | Battery Raw | diagnostic | % |
   | Solar Power | power | W |
   | Grid Power | power | W |
   | Home Load | power | W |
   | Powerwall Power | power | W |
   | Backup Reserve | - | % |
+  | Total Battery Capacity | energy_storage | Wh |
+  | Current Battery Charge | energy_storage | Wh |
+  | Grid Energy Imported/Exported | energy | Wh |
+  | Home/Solar/Battery Lifetime Energy | energy | Wh |
   | Grid Status | - | text |
   | Operation Mode | - | text |
   | Firmware Version | diagnostic | text |

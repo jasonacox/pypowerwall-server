@@ -40,6 +40,8 @@ Topic layout
     {prefix}/{gateway_id}/grid_status     str    — "UP" | "DOWN" | "unknown"
     {prefix}/{gateway_id}/mode            str    — operation mode
     {prefix}/{gateway_id}/reserve         float  — backup reserve %
+    {prefix}/{gateway_id}/total_capacity  int    — total battery capacity (Wh)
+    {prefix}/{gateway_id}/current_charge  int    — current battery charge (Wh)
     {prefix}/{gateway_id}/online          str    — "true" | "false"
     {prefix}/{gateway_id}/aggregates      JSON   — full aggregates dict
     {prefix}/{gateway_id}/status          JSON   — summary dict
@@ -238,6 +240,30 @@ class MqttPublisher:
                         f"{prefix}/battery_raw", f"{data.soe_raw:.1f}", retain, qos
                     )
 
+                # Battery energy state from the cached system status.  These
+                # values are in Wh and represent the whole battery system for
+                # this gateway (not an individual battery block).
+                total_capacity = _extract_battery_energy(
+                    data.system_status, "nominal_full_pack_energy"
+                )
+                current_charge = _extract_battery_energy(
+                    data.system_status, "nominal_energy_remaining"
+                )
+                if total_capacity is not None:
+                    await self._safe_publish(
+                        f"{prefix}/total_capacity",
+                        f"{total_capacity:.0f}",
+                        retain,
+                        qos,
+                    )
+                if current_charge is not None:
+                    await self._safe_publish(
+                        f"{prefix}/current_charge",
+                        f"{current_charge:.0f}",
+                        retain,
+                        qos,
+                    )
+
                 # Power flow from aggregates
                 if data.aggregates:
                     agg = data.aggregates
@@ -395,6 +421,8 @@ class MqttPublisher:
                     "online": status.online,
                     "soe": data.soe,
                     "soe_raw": data.soe_raw,
+                    "total_capacity": total_capacity,
+                    "current_charge": current_charge,
                     "solar": solar if data.aggregates else None,
                     "grid": grid if data.aggregates else None,
                     "home": home if data.aggregates else None,
@@ -583,6 +611,35 @@ def _extract_energy(aggregates: Optional[dict], section: str, field: str) -> Opt
     except (KeyError, TypeError):
         return None
     return _safe_float(val)
+
+
+def _extract_battery_energy(
+    system_status: Optional[dict], field: str
+) -> Optional[float]:
+    """Extract a total battery energy value (Wh) from cached system status.
+
+    TEDAPI normally provides the total at the top level.  Some gateway
+    responses only include per-battery values, so sum those as a fallback.
+    """
+    if not isinstance(system_status, dict):
+        return None
+
+    value = _safe_float(system_status.get(field))
+    if value is not None:
+        return value
+
+    blocks = system_status.get("battery_blocks")
+    if not isinstance(blocks, list):
+        return None
+
+    block_values = [
+        block_value
+        for block in blocks
+        if isinstance(block, dict)
+        for block_value in [_safe_float(block.get(field))]
+        if block_value is not None
+    ]
+    return sum(block_values) if block_values else None
 
 
 # Module-level singleton — imported by gateway_manager and main.py
