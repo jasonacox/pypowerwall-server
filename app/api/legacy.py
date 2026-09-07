@@ -24,7 +24,8 @@ Key Routes (all cache-backed for graceful degradation):
 Auth Routes (powerflow web app compatibility):
     - POST /api/login/Basic -> Fake login; sets long-lived AuthCookie/UserRecord
 
-Control Routes (require authentication):
+Control Routes (require authentication, except status):
+    - GET /control/status -> Control availability (unauthenticated, {"enabled": bool})
     - POST /control/{path} -> Control operations (reserve, mode, etc.)
 
 Design Principles:
@@ -121,6 +122,20 @@ def _expansion_parent_indexes(
                 parent_indexes[expansion_index] = leader_index
 
     return parent_indexes
+
+
+@router.get("/control/status")
+async def control_status():
+    """Control availability for the Console WebGUI (unauthenticated).
+
+    Returns only ``{"enabled": bool}`` derived from
+    ``settings.control_enabled`` (i.e. ``PW_CONTROL_SECRET`` is set).
+    Deliberately contains no secret and no gateway details because
+    ``/console`` and ``/stats`` are unauthenticated — the browser needs
+    to know *whether* to show the Control card without learning the token.
+    All actual writes stay behind ``verify_control_token``.
+    """
+    return {"enabled": settings.control_enabled}
 
 
 @router.post("/control/{path:path}")

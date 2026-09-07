@@ -485,6 +485,35 @@ def test_control_rejects_wrong_token(control_client, connected_gateway):
 
 
 # ---------------------------------------------------------------------------
+# GET /control/status tests (Console WebGUI availability check)
+# ---------------------------------------------------------------------------
+
+
+def test_control_status_enabled_when_secret_set(control_client):
+    """GET /control/status returns enabled=true without auth when secret is set."""
+    response = control_client.get("/control/status")
+    assert response.status_code == 200
+    assert response.json() == {"enabled": True}
+
+
+def test_control_status_disabled_without_secret(client):
+    """GET /control/status returns enabled=false when no secret is configured."""
+    from app.config import settings
+
+    assert not settings.control_secret
+    response = client.get("/control/status")
+    assert response.status_code == 200
+    assert response.json() == {"enabled": False}
+
+
+def test_control_status_leaks_no_secret(control_client):
+    """GET /control/status must not expose the secret value."""
+    response = control_client.get("/control/status")
+    assert response.status_code == 200
+    assert _CONTROL_TOKEN not in response.text
+
+
+# ---------------------------------------------------------------------------
 # /control companion parameter tests (ported from pypowerwall PR #308)
 # ---------------------------------------------------------------------------
 

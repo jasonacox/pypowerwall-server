@@ -2,6 +2,16 @@
 
 ## Version History
 
+### [0.6.3] - Upcoming
+
+**Added:**
+- **Powerwall 3 expansion packs shown under their leader** — the Console's Powerwall Status table now nests PW3 battery expansions beneath their leader unit (indented `↳` row, model shown as `Powerwall 3 (Expansion)`) instead of listing them as separate Powerwalls. The leader/expansion relationship comes from the cached TEDAPI config and is exposed in `/pod` as `PW{n}_attached_to` (e.g. `"PW1"`) plus `PW{n}_PackageSerialNumber`. Works in both single- and multi-gateway views. (#98)
+
+### [0.6.2] - 2026-09-05
+
+**Added:**
+- **Web Console Powerwall Control card (`PW_CONTROL_SECRET`)** — the Console gains a Powerwall Control card (shown after System Health when a control secret is configured) with mode select (Self-Consumption/Backup/Time-Based), reserve slider + number (0–100), and a token field kept client-side (session-only by default, optional "Remember my token on this device" via `localStorage`). Mode + reserve changes go through the existing `POST /control/*` API with `Authorization: Bearer <token>`; a mode change together with reserve 0 is auto-split into two calls to avoid the Tesla cloud API quirk that can silently drop the mode change. Card availability is exposed by a new unauthenticated `GET /control/status` returning only `{"enabled": bool}`. (#94)
+
 ### [0.6.1] - 2026-09-04
 
 **Added:**
