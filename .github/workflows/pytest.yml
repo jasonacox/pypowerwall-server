@@ -44,3 +44,26 @@ jobs:
 
       - name: Run pytest
         run: pytest -q
+
+  js-syntax:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check inline JS syntax in static HTML
+        run: |
+          python3 - <<'EOF'
+          import re, subprocess, sys, glob
+          failed = False
+          for path in sorted(glob.glob('app/static/**/*.html', recursive=True)):
+              html = open(path).read()
+              for i, s in enumerate(re.findall(r'<script(?![^>]*src)[^>]*>(.*?)</script>', html, re.S)):
+                  tmp = f'/tmp/{path.replace("/", "_")}.{i}.js'
+                  open(tmp, 'w').write(s)
+                  r = subprocess.run(['node', '--check', tmp], capture_output=True, text=True)
+                  if r.returncode != 0:
+                      print(f'{path} inline script #{i}: SYNTAX ERROR\n{r.stderr}')
+                      failed = True
+          sys.exit(1 if failed else 0)
+          EOF

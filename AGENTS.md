@@ -390,12 +390,26 @@ The `track_requests` middleware in `app/main.py` does double duty: request stati
 
 ## Version Management
 
+### Release Notes (required for every change)
+
+Every PR or change that affects user-facing behavior (features, fixes, config
+options, API changes) **must** add an entry to `RELEASE.md` under the current
+`### [x.y.z] - Upcoming` section (create it above the latest released version
+if it doesn't exist yet), in the appropriate **Added** / **Fixed** subsection.
+When referencing GitHub issues, use `(#N)` format at the end of the relevant
+line. Internal-only changes (tests, CI, docs) don't need an entry.
+
+Do **not** bump the version number in feature/fix PRs — multiple changes
+accumulate under the same "Upcoming" version.
+
+### Releasing
+
 Update version in **both** files when releasing:
 
 1. `app/config.py`: `SERVER_VERSION = "x.y.z"`
 2. `pyproject.toml`: `version = "x.y.z"`
 
-Then update `RELEASE.md` with changes. When referencing GitHub issues, use `(#N)` format at the end of the relevant line.
+Then change the `Upcoming` label in `RELEASE.md` to the release date.
 
 ## Issues Knowledge Base
 
