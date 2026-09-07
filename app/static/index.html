@@ -3069,6 +3069,7 @@
         const CONTROL_EYE_CLOSED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
         let controlEnabled = false;
         let controlInitial = { mode: null, reserve: null };
+        let controlTouched = { mode: false, reserve: false };
         let controlDirty = false;
         let controlSaving = false;
 
@@ -3119,13 +3120,26 @@
             if (row) row.style.display = controlDirty ? '' : 'none';
         }
 
+        // Which fields differ from the server state. With a null initial
+        // state (values not loaded yet) only fields the user actually
+        // touched count as changed — never send an untouched HTML default.
+        function controlChanges() {
+            const modeVal = document.getElementById('control-mode')?.value;
+            const reserveVal = parseInt(document.getElementById('control-reserve-number')?.value, 10);
+            const mChanged = controlInitial.mode === null
+                ? controlTouched.mode
+                : modeVal !== controlInitial.mode;
+            const rChanged = controlInitial.reserve === null
+                ? controlTouched.reserve
+                : reserveVal !== controlInitial.reserve;
+            return { modeVal, reserveVal, mChanged, rChanged };
+        }
+
         function updateReserve0Warning() {
             const warn = document.getElementById('control-reserve0-warning');
             if (!warn) return;
-            const reserveVal = parseInt(document.getElementById('control-reserve-number')?.value, 10);
-            const modeVal = document.getElementById('control-mode')?.value;
-            const modeChanged = controlInitial.mode !== null && modeVal !== controlInitial.mode;
-            if (Number.isInteger(reserveVal) && reserveVal === 0 && modeChanged) {
+            const { reserveVal, mChanged, rChanged } = controlChanges();
+            if (Number.isInteger(reserveVal) && reserveVal === 0 && mChanged && rChanged) {
                 warn.style.display = '';
                 warn.textContent = 'Tip: reserve 0 plus a new mode is saved in two steps, so nothing gets lost.';
             } else {
@@ -3199,6 +3213,7 @@
                     if (number) number.value = reserve;
                 }
                 controlInitial = { mode, reserve };
+                controlTouched = { mode: false, reserve: false };
                 controlDirty = false;
                 updateReserve0Warning();
                 updateDirtyHint();
@@ -3239,8 +3254,7 @@
                 return;
             }
             setControlToken(token);
-            const modeVal = document.getElementById('control-mode')?.value;
-            const reserveVal = parseInt(document.getElementById('control-reserve-number')?.value, 10);
+            const { modeVal, reserveVal, mChanged, rChanged } = controlChanges();
             if (!['self_consumption', 'backup', 'autonomous'].includes(modeVal)) {
                 setControlMessage('That mode is unknown.', 'error');
                 return;
@@ -3249,9 +3263,6 @@
                 setControlMessage('Reserve must be 0–100.', 'error');
                 return;
             }
-            // A null initial state (e.g. values not loaded yet) counts as changed
-            const mChanged = modeVal !== controlInitial.mode;
-            const rChanged = reserveVal !== controlInitial.reserve;
             if (!mChanged && !rChanged) {
                 setControlMessage('Nothing to save.', '');
                 return;
@@ -3315,6 +3326,7 @@
                     }
                 }
                 setControlMessage('Saved. Takes a few seconds to apply.', 'success');
+                controlTouched = { mode: false, reserve: false };
                 controlDirty = false;
                 updateDirtyHint();
                 await loadControlValues(false);
@@ -3379,6 +3391,7 @@
             if (slider && number) {
                 slider.addEventListener('input', () => {
                     number.value = slider.value;
+                    controlTouched.reserve = true;
                     controlDirty = true;
                     updateReserve0Warning();
                     updateDirtyHint();
@@ -3386,6 +3399,7 @@
                 number.addEventListener('input', () => {
                     const v = parseInt(number.value, 10);
                     if (Number.isInteger(v) && v >= 0 && v <= 100) slider.value = v;
+                    controlTouched.reserve = true;
                     controlDirty = true;
                     updateReserve0Warning();
                     updateDirtyHint();
@@ -3393,6 +3407,7 @@
             }
             if (modeSel) {
                 modeSel.addEventListener('change', () => {
+                    controlTouched.mode = true;
                     controlDirty = true;
                     updateReserve0Warning();
                     updateDirtyHint();
