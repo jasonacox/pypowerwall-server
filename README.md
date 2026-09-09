@@ -684,6 +684,36 @@ curl -X POST http://localhost:8675/control/mode \
 > stick). If you need mode + reserve 0, set the mode with the *current* reserve
 > level first, then set the reserve to `0` in a separate call.
 
+**Islanding (local PW3 v1r/TEDAPI):** `POST /control/islanding` uses the same
+control token and targets the default gateway (the gateway named `default`,
+otherwise the first configured gateway). It requires a registered v1r RSA key
+and pypowerwall 0.17.3 or later. It uses the gateway's local connection even in
+hybrid mode; it does not fall back to cloud control. Other control routes are
+unchanged.
+
+| JSON body | Library call |
+|-----------|--------------|
+| `{"value": "off_grid", "confirm": true}` | `go_off_grid(confirm=True)` |
+| `{"value": "on_grid"}` | `reconnect_grid()` |
+
+`value` must match exactly. Off-grid requires the JSON boolean `true` for
+`confirm`, not a string or number. If supplied for either operation, `confirm`
+must be a boolean. Invalid values return HTTP 400; malformed JSON or a body
+that is not an object returns FastAPI's HTTP 422 validation error.
+
+The response preserves the library's `mode`, `force`, and `result` fields.
+HTTP 200 requires `result: 1`, the acknowledgement observed on real PW3
+hardware. Other or missing result codes return HTTP 502 with the library
+response in `detail.response`; unavailable/unsupported connections, exceptions,
+or no response within the existing control timeout return HTTP 503.
+
+**Warning:** these commands operate the physical grid contactor and can interrupt
+power. An acknowledgement is **not** confirmation that the home changed grid
+state. Check `GET /api/system_status/grid_status` after the transition, allowing
+for the configured polling interval. After an error or timeout, the outcome may
+be unknown and the command may still complete; do not automatically retry or
+send the opposite command. No islanding buttons are added to the Console.
+
 **Web Console (`/console`):** when `PW_CONTROL_SECRET` is set, the Console shows
 a *Powerwall Control* card (after System Health) with mode select
 (Self-Consumption/Backup/Time-Based), reserve slider + number (0–100) and a

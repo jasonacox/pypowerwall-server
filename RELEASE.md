@@ -2,6 +2,11 @@
 
 ## Version History
 
+### [0.6.5] - Upcoming
+
+**Added:**
+- **Authenticated local PW3 v1r islanding control** — `POST /control/islanding` routes `off_grid` (with explicit `confirm: true`) and `on_grid` to the released pypowerwall library methods, using the existing write lock and timeout handling. Unacknowledged or failed commands return HTTP errors; callers must verify grid status. Updates pypowerwall to 0.17.3. (#103)
+
 ### [0.6.4] - 2026-09-07
 
 **Added:**

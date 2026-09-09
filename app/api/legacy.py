@@ -138,6 +138,54 @@ async def control_status():
     return {"enabled": settings.control_enabled}
 
 
+@router.post("/control/islanding")
+async def control_islanding(
+    data: dict, authorization: Optional[str] = Header(None)
+) -> dict:
+    """Request a grid transition on the default gateway via local v1r/TEDAPI.
+
+    Acknowledgement is not proof of grid state. Check grid status afterward;
+    a timeout can leave the outcome unknown, so do not automatically retry.
+    """
+    verify_control_token(authorization)
+    value = data.get("value")
+    if value not in ("off_grid", "on_grid"):
+        raise HTTPException(
+            status_code=400, detail="'value' must be 'off_grid' or 'on_grid'"
+        )
+    if "confirm" in data and not isinstance(data["confirm"], bool):
+        raise HTTPException(status_code=400, detail="'confirm' must be a boolean")
+    if value == "off_grid" and data.get("confirm") is not True:
+        raise HTTPException(status_code=400, detail="Off-grid requires 'confirm': true")
+
+    # Do not use the hybrid cloud connection: the released islanding backend
+    # requires local v1r/TEDAPI. Unsupported connections return None.
+    gateway_id = get_default_gateway()
+    method = "go_off_grid" if value == "off_grid" else "reconnect_grid"
+    kwargs = {"confirm": True} if value == "off_grid" else {}
+    result = await gateway_manager.local_control(
+        gateway_id, method, timeout=10.0, **kwargs
+    )
+    if not isinstance(result, dict):
+        raise HTTPException(
+            status_code=503,
+            detail="No islanding response: local v1r/TEDAPI may be unavailable or "
+            "unsupported, or the request failed or timed out. Check grid status "
+            "before retrying.",
+        )
+    # 1 is the hardware-observed acknowledgement. The library returns other
+    # or absent results too; do not present those as a successful command.
+    if result.get("result") != 1:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Islanding was not acknowledged; check grid status.",
+                "response": result,
+            },
+        )
+    return result
+
+
 @router.post("/control/{path:path}")
 async def control_api(
     path: str, data: dict, authorization: Optional[str] = Header(None)
