@@ -176,6 +176,8 @@ async def control_islanding(
     # 1 is the hardware-observed acknowledgement. The library returns other
     # or absent results too; do not present those as a successful command.
     if result.get("result") != 1:
+        # Unlike the 503 string detail, this object preserves the library response
+        # so callers can inspect an unacknowledged result.
         raise HTTPException(
             status_code=502,
             detail={

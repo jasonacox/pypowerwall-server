@@ -25,7 +25,7 @@ def islanding_client(client, connected_gateway, mock_pypowerwall, monkeypatch):
     }
     # Hybrid credentials must not redirect islanding to the cloud connection.
     cloud = Mock()
-    gateway_manager._cloud_control = cloud
+    monkeypatch.setattr(gateway_manager, "_cloud_control", cloud)
     yield client
     assert cloud.mock_calls == []
     mock_pypowerwall.post.assert_not_called()
