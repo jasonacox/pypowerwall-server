@@ -707,12 +707,24 @@ hardware. Other or missing result codes return HTTP 502 with the library
 response in `detail.response`; unavailable/unsupported connections, exceptions,
 or no response within the existing control timeout return HTTP 503.
 
-**Warning:** these commands operate the physical grid contactor and can interrupt
-power. An acknowledgement is **not** confirmation that the home changed grid
-state. Check `GET /api/system_status/grid_status` after the transition, allowing
-for the configured polling interval. After an error or timeout, the outcome may
-be unknown and the command may still complete; do not automatically retry or
-send the opposite command. No islanding buttons are added to the Console.
+⚠️ **WARNING — Grid island control physically operates your home's grid
+contactor. Use with extreme care.** Going off-grid can interrupt power and
+temporarily interrupt solar production. While islanded, Powerwall may raise the
+home's electrical frequency to limit or stop solar production, particularly
+when the battery is near full or available charging capacity is limited. This
+can cause lights to flicker and affect frequency-sensitive equipment.
+
+Your home depends on available battery and solar power while disconnected from
+the grid; if those cannot support the load, your home can lose power. Do not
+assume that a nearly full battery guarantees a seamless transition.
+
+Do not automate these commands without understanding the failure modes; test
+only when someone is present. An acknowledgement is not confirmation that the
+home changed grid state: check `GET /api/system_status/grid_status` after the
+transition, allowing for the configured polling interval. After an error or
+timeout, the outcome may be unknown and the command may still complete; do not
+automatically retry or send the opposite command. No islanding buttons are
+added to the Console.
 
 **Web Console (`/console`):** when `PW_CONTROL_SECRET` is set, the Console shows
 a *Powerwall Control* card (after System Health) with mode select
