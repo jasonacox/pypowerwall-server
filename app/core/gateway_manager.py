@@ -99,6 +99,14 @@ _WRITE_METHODS = frozenset(
     }
 )
 
+
+_ISLANDING_METHODS = frozenset({"go_off_grid", "reconnect_grid"})
+
+
+class IslandingCommandInProgressError(RuntimeError):
+    """Raised when an earlier islanding command is still running after timeout."""
+
+
 class GatewayManager:
     """Manages multiple Powerwall gateway connections."""
 
@@ -157,6 +165,11 @@ class GatewayManager:
         # Serializes concurrent write operations to prevent set_operation()
         # from reading stale cache when two control calls race.
         self._write_lock: asyncio.Lock = asyncio.Lock()
+
+        # Executor threads cannot be cancelled after a timeout. Keep each
+        # islanding call visible until its thread actually finishes so an
+        # opposite grid-contactor command can be rejected rather than queued.
+        self._islanding_futures: Dict[str, asyncio.Future] = {}
 
         # Cloud connection for control operations (set_reserve, set_mode).
         # TEDAPI doesn't support POST/write APIs, so a separate cloud-mode
@@ -1882,6 +1895,13 @@ class GatewayManager:
         Returns:
             Result of the method call, or None on error/timeout
         """
+        if method in _ISLANDING_METHODS:
+            in_flight = self._islanding_futures.get(gateway_id)
+            if in_flight is not None:
+                raise IslandingCommandInProgressError(
+                    "An islanding command is still in progress"
+                )
+
         pw = self.connections.get(gateway_id)
         if not pw:
             logger.error(
@@ -1892,13 +1912,40 @@ class GatewayManager:
             method_func = getattr(pw, method)
             loop = asyncio.get_running_loop()
             if method in _WRITE_METHODS:
-                async with self._write_lock:
-                    result = await asyncio.wait_for(
-                        loop.run_in_executor(
-                            self._executor, lambda: method_func(*args, **kwargs)
-                        ),
-                        timeout=timeout,
+                lock = self._write_lock
+                await lock.acquire()
+                release_lock = True
+                try:
+                    future = loop.run_in_executor(
+                        self._executor, lambda: method_func(*args, **kwargs)
                     )
+                    if method in _ISLANDING_METHODS:
+                        self._islanding_futures[gateway_id] = future
+
+                        def clear_after_completion(completed_future):
+                            if (
+                                self._islanding_futures.get(gateway_id)
+                                is completed_future
+                            ):
+                                self._islanding_futures.pop(gateway_id, None)
+
+                        future.add_done_callback(clear_after_completion)
+                    try:
+                        result = await asyncio.wait_for(
+                            asyncio.shield(future), timeout=timeout
+                        )
+                    except asyncio.TimeoutError:
+                        if method in _ISLANDING_METHODS:
+                            release_lock = False
+
+                            def release_after_completion(_completed_future):
+                                lock.release()
+
+                            future.add_done_callback(release_after_completion)
+                        raise
+                finally:
+                    if release_lock:
+                        lock.release()
             else:
                 result = await asyncio.wait_for(
                     loop.run_in_executor(

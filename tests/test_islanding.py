@@ -1,12 +1,13 @@
 """Non-actuating tests for the authenticated local islanding endpoint."""
 
 import asyncio
+import threading
 from unittest.mock import Mock
 
 import pytest
 
 from app.config import settings
-from app.core.gateway_manager import gateway_manager
+from app.core.gateway_manager import IslandingCommandInProgressError, gateway_manager
 
 
 @pytest.fixture
@@ -180,7 +181,9 @@ def test_islanding_failures_are_http_errors(
     assert control.call_count == 1  # No automatic retry or raw/cloud fallback.
 
 
-@pytest.mark.parametrize("result", [{}, {"result": None}, {"result": 0}, {"result": 2}])
+@pytest.mark.parametrize(
+    "result", [{}, {"result": None}, {"result": 0}, {"result": 2}, {"result": True}]
+)
 def test_unacknowledged_islanding_is_not_success(
     islanding_client, mock_pypowerwall, result
 ) -> None:
@@ -190,6 +193,73 @@ def test_unacknowledged_islanding_is_not_success(
     )
     assert response.status_code == 502
     assert response.json()["detail"]["response"] == result
+
+
+def test_islanding_in_progress_is_conflict(islanding_client, monkeypatch) -> None:
+    """A second islanding request must not queue behind a timed-out command."""
+
+    async def blocked_islanding(*args, **kwargs):
+        raise IslandingCommandInProgressError(
+            "An islanding command is still in progress"
+        )
+
+    monkeypatch.setattr(gateway_manager, "local_control", blocked_islanding)
+    response = islanding_client.post(
+        "/control/islanding", json={"value": "on_grid"}, headers=_HEADERS
+    )
+
+    assert response.status_code == 409
+    assert "check grid status" in response.json()["detail"].lower()
+    assert "opposite command" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_timed_out_islanding_holds_write_lock_until_completion(
+    connected_gateway, mock_pypowerwall
+) -> None:
+    """A timed-out islanding call blocks writes and rejects the opposite command."""
+    started = threading.Event()
+    complete = threading.Event()
+
+    def slow_go_off_grid(**kwargs):
+        started.set()
+        complete.wait(timeout=2)
+        return {"result": 1}
+
+    mock_pypowerwall.go_off_grid.side_effect = slow_go_off_grid
+    first = asyncio.create_task(
+        gateway_manager.local_control(
+            connected_gateway.gateway.id,
+            "go_off_grid",
+            confirm=True,
+            timeout=0.01,
+        )
+    )
+    for _ in range(100):
+        if started.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert started.is_set()
+    assert await first is None
+
+    with pytest.raises(IslandingCommandInProgressError):
+        await gateway_manager.local_control(
+            connected_gateway.gateway.id, "reconnect_grid", timeout=0.01
+        )
+    mock_pypowerwall.reconnect_grid.assert_not_called()
+
+    queued_write = asyncio.create_task(
+        gateway_manager.local_control(
+            connected_gateway.gateway.id, "set_mode", "backup", timeout=1
+        )
+    )
+    await asyncio.sleep(0)
+    mock_pypowerwall.set_mode.assert_not_called()
+
+    complete.set()
+    assert await asyncio.wait_for(queued_write, timeout=1) == (
+        mock_pypowerwall.set_mode.return_value
+    )
 
 
 @pytest.mark.asyncio

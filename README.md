@@ -53,12 +53,12 @@ Not sure which mode to run? Pick the row that matches your setup — then follow
 | Mode | Use when | Required settings | Data | Control |
 |------|----------|-------------------|------|---------|
 | **TEDAPI** *(default)* | You can reach the gateway from your local network (`192.168.91.1`) | `PW_HOST` + `PW_GW_PWD` | Full local metrics — power flows, vitals, strings, per-Powerwall detail | Add `PW_EMAIL` + `PW_AUTH_PATH` for hybrid cloud control |
-| **TEDAPI v1r** | Same, but connecting over wired LAN with a registered RSA key | `PW_HOST` + `PW_GW_PWD` + `PW_RSA_KEY_PATH` (add `PW_WIFI_HOST` for follower Powerwall data) | Full local metrics | Add `PW_EMAIL` + `PW_AUTH_PATH` for hybrid cloud control |
+| **TEDAPI v1r** | Same, but connecting over wired LAN with a registered RSA key | `PW_HOST` + `PW_GW_PWD` + `PW_RSA_KEY_PATH` (add `PW_WIFI_HOST` for follower Powerwall data) | Full local metrics | Authenticated local islanding with `PW_CONTROL_SECRET`; add `PW_EMAIL` + `PW_AUTH_PATH` for other hybrid cloud control |
 | **Basic LAN** *(Powerwall 3)* | PW3 reachable on its wired vendor subnet — no gateway password or RSA key needed | `PW_HOST` + `PW_PASSWORD` (customer password = last 5 chars of the gateway password) | Core metrics only — power flows, battery SoC, grid status | Add `PW_EMAIL` + `PW_AUTH_PATH` for hybrid cloud control (local reads + cloud writes) |
 | **Cloud** | No local network access to the system | `PW_EMAIL` + `PW_AUTH_PATH` (one-time `python -m pypowerwall setup`) | Standard cloud metrics | Yes |
 | **FleetAPI** | Remote access via Tesla's official Fleet API | `PW_GATEWAYS` (or `gateways.yaml`) entry with `email` + `authpath` + `fleetapi: true` | Standard cloud metrics | Yes |
 
-All local modes are read-only unless cloud credentials are provided (hybrid mode).
+Local v1r and Basic LAN modes can perform supported control operations when `PW_CONTROL_SECRET` is set. Without cloud credentials, `/control/reserve`, `/control/mode`, and `/control/grid_charging` use the gateway's local connection. With `PW_EMAIL` and `PW_AUTH_PATH` configured (hybrid mode), those operations use the cloud connection while monitoring remains local. `POST /control/islanding` is different: it is available only in TEDAPI v1r mode, requires a registered RSA key, always uses the local gateway connection, and does not fall back to cloud control.
 
 #### TEDAPI Mode (Local Access)
 ```bash

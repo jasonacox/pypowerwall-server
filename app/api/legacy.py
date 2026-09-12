@@ -57,7 +57,7 @@ import pypowerwall
 from fastapi import APIRouter, HTTPException, Response, Header
 
 from app.api.auth import verify_control_token
-from app.core.gateway_manager import gateway_manager
+from app.core.gateway_manager import IslandingCommandInProgressError, gateway_manager
 from app.config import settings, SERVER_VERSION
 from app.utils.stats_tracker import stats_tracker
 
@@ -163,9 +163,16 @@ async def control_islanding(
     gateway_id = get_default_gateway()
     method = "go_off_grid" if value == "off_grid" else "reconnect_grid"
     kwargs = {"confirm": True} if value == "off_grid" else {}
-    result = await gateway_manager.local_control(
-        gateway_id, method, timeout=10.0, **kwargs
-    )
+    try:
+        result = await gateway_manager.local_control(
+            gateway_id, method, timeout=10.0, **kwargs
+        )
+    except IslandingCommandInProgressError:
+        raise HTTPException(
+            status_code=409,
+            detail="An islanding command is still in progress; check grid status. "
+            "Do not retry or send the opposite command.",
+        )
     if not isinstance(result, dict):
         raise HTTPException(
             status_code=503,
@@ -175,7 +182,12 @@ async def control_islanding(
         )
     # 1 is the hardware-observed acknowledgement. The library returns other
     # or absent results too; do not present those as a successful command.
-    if result.get("result") != 1:
+    acknowledgement = result.get("result")
+    if (
+        not isinstance(acknowledgement, int)
+        or isinstance(acknowledgement, bool)
+        or acknowledgement != 1
+    ):
         # Unlike the 503 string detail, this object preserves the library response
         # so callers can inspect an unacknowledged result.
         raise HTTPException(
