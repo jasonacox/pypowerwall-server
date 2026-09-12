@@ -723,8 +723,7 @@ only when someone is present. An acknowledgement is not confirmation that the
 home changed grid state: check `GET /api/system_status/grid_status` after the
 transition, allowing for the configured polling interval. After an error or
 timeout, the outcome may be unknown and the command may still complete; do not
-automatically retry or send the opposite command. No islanding buttons are
-added to the Console.
+automatically retry or send the opposite command.
 
 **Web Console (`/console`):** when `PW_CONTROL_SECRET` is set, the Console shows
 a *Powerwall Control* card (after System Health) with mode select
@@ -738,6 +737,14 @@ button sends a single combined `POST /control/mode {"value": mode, "level":
 reserve}` when both changed (reserve 0 + mode change is auto-split into two
 calls, see note above), otherwise a single `/control/reserve` or `/control/mode`
 call. Controls the default gateway.
+
+For a local PW3 v1r/TEDAPI gateway, the card also shows the cached grid state
+and enables exactly one islanding action: **Go Off Grid** while connected or
+**Reconnect Grid** while islanded. Each action requires a browser confirmation.
+After any request, both islanding controls are locked for one minute, including
+after an error or timeout, because the outcome may be unknown. Use **Refresh
+Grid Status** and verify the reported state after the polling interval; an
+acknowledgement is not proof that the contactor changed state.
 
 ### Data Aggregation Strategy
 Multi-gateway aggregation uses **smart aggregation** that will evolve over time:

@@ -866,6 +866,27 @@
         }
         .control-message.success { color: var(--accent-green); }
         .control-message.error { color: var(--accent-red); }
+        .control-islanding-panel {
+            margin-top: 16px;
+            padding: 16px;
+            border: 1px solid rgba(210, 153, 34, 0.5);
+            border-radius: 8px;
+            background: rgba(210, 153, 34, 0.08);
+        }
+        .control-islanding-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        .control-btn.danger {
+            border-color: var(--accent-red);
+            color: var(--accent-red);
+        }
+        .control-btn.danger:hover:not(:disabled) {
+            background: rgba(248, 81, 73, 0.15);
+            color: var(--accent-red);
+        }
         
         /* Powerwall Health Card */
         .powerwall-card {
@@ -1624,6 +1645,22 @@
                         </div>
                         <label class="control-remember"><input type="checkbox" id="control-remember"> Remember my token on this device</label>
                     </div>
+                </div>
+                <div class="control-islanding-panel">
+                    <div class="control-label">Grid Islanding</div>
+                    <div class="control-hint" id="control-grid-status">Grid status: checking…</div>
+                    <div class="control-islanding-actions">
+                        <button type="button" class="control-btn danger" id="control-go-off-grid" disabled>Go Off Grid</button>
+                        <button type="button" class="control-btn" id="control-reconnect-grid" disabled>Reconnect Grid</button>
+                        <button type="button" class="control-btn" id="control-refresh-grid">Refresh Grid Status</button>
+                    </div>
+                    <div class="control-hint" id="control-islanding-cooldown"></div>
+                    <div class="control-warning" style="display:block; margin-top:12px">
+                        This physically operates the home's grid contactor. A confirmation is required.
+                        After any request, verify grid status; an acknowledgement or error does not
+                        prove the outcome.
+                    </div>
+                    <div class="control-message" id="control-islanding-message" style="display:none"></div>
                 </div>
                 <div class="control-save-row" id="control-save-row" style="display:none">
                     <button type="button" class="control-btn primary" id="control-save">Save</button>
@@ -2590,6 +2627,9 @@
                 const response = await fetch('/stats');
                 if (!response.ok) throw new Error('Failed to load stats');
                 const stats = await response.json();
+                controlIslandingAvailable = stats.pw3 === true
+                    && stats.tedapi === true && stats.tedapi_mode === 'v1r';
+                updateIslandingControls();
                 
                 // Site Name
                 const siteName = stats.site_name || 'My Powerwall';
@@ -2735,6 +2775,8 @@
                     console.log('Firmware version not available:', e.message);
                 }
             } catch (e) {
+                controlIslandingAvailable = false;
+                updateIslandingControls();
                 console.log('Stats not available:', e.message);
             }
         }
@@ -3203,6 +3245,8 @@
         // Powerwall Control (GET /control/status → enabled, writes via POST /control/*)
         const CONTROL_TOKEN_KEY = 'pw_control_token';
         const CONTROL_REMEMBER_KEY = 'pw_control_remember';
+        const ISLANDING_COOLDOWN_KEY = 'pw_islanding_cooldown_until';
+        const ISLANDING_COOLDOWN_MS = 60 * 1000;
         const CONTROL_EYE_OPEN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
         const CONTROL_EYE_CLOSED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
         let controlEnabled = false;
@@ -3210,6 +3254,10 @@
         let controlTouched = { mode: false, reserve: false };
         let controlDirty = false;
         let controlSaving = false;
+        let controlIslandingBusy = false;
+        let controlIslandingAvailable = false;
+        let controlGridState = 'unknown';
+        let controlIslandingCooldownTimer = null;
 
         function isRememberToken() {
             return document.getElementById('control-remember')?.checked === true;
@@ -3251,6 +3299,149 @@
             el.textContent = text || '';
             el.className = 'control-message' + (type ? ' ' + type : '');
             el.style.display = text ? '' : 'none';
+        }
+
+        function setIslandingMessage(text, type) {
+            const el = document.getElementById('control-islanding-message');
+            if (!el) return;
+            el.textContent = text || '';
+            el.className = 'control-message' + (type ? ' ' + type : '');
+            el.style.display = text ? '' : 'none';
+        }
+
+        function islandingCooldownUntil() {
+            try {
+                return Math.max(0, Number(localStorage.getItem(ISLANDING_COOLDOWN_KEY)) || 0);
+            } catch (e) {
+                return 0;
+            }
+        }
+
+        function startIslandingCooldown() {
+            try {
+                localStorage.setItem(
+                    ISLANDING_COOLDOWN_KEY,
+                    String(Date.now() + ISLANDING_COOLDOWN_MS),
+                );
+            } catch (e) { /* private browsing — the in-page busy state remains */ }
+        }
+
+        function updateIslandingControls() {
+            const offGridBtn = document.getElementById('control-go-off-grid');
+            const reconnectBtn = document.getElementById('control-reconnect-grid');
+            const cooldownEl = document.getElementById('control-islanding-cooldown');
+            const remainingMs = islandingCooldownUntil() - Date.now();
+            const cooldownActive = remainingMs > 0;
+
+            if (offGridBtn) {
+                offGridBtn.disabled = !controlEnabled || !controlIslandingAvailable || controlIslandingBusy
+                    || cooldownActive || controlGridState !== 'connected';
+            }
+            if (reconnectBtn) {
+                reconnectBtn.disabled = !controlEnabled || !controlIslandingAvailable || controlIslandingBusy
+                    || cooldownActive || controlGridState !== 'islanded';
+            }
+
+            if (cooldownEl) {
+                if (!controlIslandingAvailable) {
+                    cooldownEl.textContent = 'Islanding requires a local PW3 v1r/TEDAPI connection; controls are locked.';
+                } else if (controlIslandingBusy) {
+                    cooldownEl.textContent = 'Request in progress — do not retry or send the opposite command.';
+                } else if (cooldownActive) {
+                    const seconds = Math.ceil(remainingMs / 1000);
+                    cooldownEl.textContent = `Both islanding controls are locked for ${seconds}s after a request.`;
+                } else {
+                    cooldownEl.textContent = 'Only the action matching the reported grid state is enabled.';
+                }
+            }
+
+            if (controlIslandingCooldownTimer) {
+                clearTimeout(controlIslandingCooldownTimer);
+                controlIslandingCooldownTimer = null;
+            }
+            if (cooldownActive) {
+                controlIslandingCooldownTimer = setTimeout(updateIslandingControls, 1000);
+            }
+        }
+
+        function islandingErrorText(status, payload) {
+            if (payload?.detail && typeof payload.detail === 'object') {
+                return payload.detail.message || 'Islanding was not acknowledged.';
+            }
+            return controlErrorText(status, payload, 'Islanding request failed.');
+        }
+
+        async function loadGridStatus() {
+            const statusEl = document.getElementById('control-grid-status');
+            try {
+                const resp = await fetch('/api/system_status/grid_status');
+                if (!resp.ok) throw new Error('status ' + resp.status);
+                const data = await resp.json();
+                const gridStatus = data.grid_status || 'Unknown';
+                const normalized = String(gridStatus).toUpperCase();
+                if (normalized === 'SYSTEMGRIDCONNECTED' || normalized === 'UP') {
+                    controlGridState = 'connected';
+                    if (statusEl) statusEl.textContent = 'Grid status: connected';
+                } else if (normalized === 'SYSTEMISLANDEDACTIVE' || normalized === 'DOWN') {
+                    controlGridState = 'islanded';
+                    if (statusEl) statusEl.textContent = 'Grid status: islanded';
+                } else {
+                    controlGridState = 'unknown';
+                    if (statusEl) statusEl.textContent = 'Grid status: ' + gridStatus + ' (controls locked)';
+                }
+            } catch (e) {
+                controlGridState = 'unknown';
+                if (statusEl) statusEl.textContent = 'Grid status unavailable (controls locked)';
+            }
+            updateIslandingControls();
+        }
+
+        async function requestIslanding(value) {
+            if (controlIslandingBusy) return;
+            await loadGridStatus();
+            const neededState = value === 'off_grid' ? 'connected' : 'islanded';
+            if (controlGridState !== neededState) {
+                setIslandingMessage('Reported grid state does not permit that action. Refresh and verify it first.', 'error');
+                return;
+            }
+            const tokenInput = document.getElementById('control-token');
+            const token = (tokenInput?.value || getControlToken() || '').trim();
+            if (!token) {
+                setIslandingMessage('Enter your control token first.', 'error');
+                return;
+            }
+            const goingOffGrid = value === 'off_grid';
+            const confirmation = goingOffGrid
+                ? 'Go off grid? This physically opens your home\'s grid contactor. Power and solar may be interrupted. Continue only when someone is present.'
+                : 'Reconnect to the grid? Verify this is the intended action before continuing.';
+            if (!window.confirm(confirmation)) return;
+
+            setControlToken(token);
+            // Start the cooldown before dispatch. A timeout or network failure leaves
+            // the outcome unknown, so the UI must not offer a quick retry/opposite.
+            startIslandingCooldown();
+            controlIslandingBusy = true;
+            updateIslandingControls();
+            setIslandingMessage('Sending request… do not close this page or retry.', '');
+            try {
+                const body = goingOffGrid
+                    ? { value: 'off_grid', confirm: true }
+                    : { value: 'on_grid' };
+                const result = await postControl('islanding', body, token);
+                if (!result.resp.ok) {
+                    if (result.resp.status === 401) {
+                        clearControlToken();
+                        if (tokenInput) tokenInput.value = '';
+                    }
+                    throw new Error(islandingErrorText(result.resp.status, result.payload));
+                }
+                setIslandingMessage('Acknowledged. This is not confirmation of grid state; refresh and verify the reported status after the polling interval.', 'success');
+            } catch (e) {
+                setIslandingMessage((e.message || 'Islanding request failed.') + ' The outcome may be unknown: verify grid status and do not retry or send the opposite command.', 'error');
+            } finally {
+                controlIslandingBusy = false;
+                updateIslandingControls();
+            }
         }
 
         function updateDirtyHint() {
@@ -3553,6 +3744,13 @@
             }
             const saveBtn = document.getElementById('control-save');
             if (saveBtn) saveBtn.addEventListener('click', saveControl);
+            const offGridBtn = document.getElementById('control-go-off-grid');
+            if (offGridBtn) offGridBtn.addEventListener('click', () => requestIslanding('off_grid'));
+            const reconnectBtn = document.getElementById('control-reconnect-grid');
+            if (reconnectBtn) reconnectBtn.addEventListener('click', () => requestIslanding('on_grid'));
+            const refreshGridBtn = document.getElementById('control-refresh-grid');
+            if (refreshGridBtn) refreshGridBtn.addEventListener('click', loadGridStatus);
+            updateIslandingControls();
             updateDirtyHint();
         }
 
@@ -3608,6 +3806,7 @@
             loadStrings();
             loadStats();
             loadControlValues(true);
+            loadGridStatus();
             loadPowerwalls();
             loadGateways();
             loadMqtt();
@@ -3633,6 +3832,7 @@
             loadStrings();
             loadStats();
             loadControlStatus();
+            loadGridStatus();
             loadPowerwalls();
             loadGateways();
             loadMqtt();

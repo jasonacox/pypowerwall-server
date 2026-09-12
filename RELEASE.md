@@ -6,6 +6,7 @@
 
 **Added:**
 - **Authenticated local PW3 v1r islanding control** — `POST /control/islanding` routes `off_grid` (with explicit `confirm: true`) and `on_grid` to the released pypowerwall library methods, using the existing write lock and timeout handling. Unacknowledged or failed commands return HTTP errors; callers must verify grid status. Updates pypowerwall to 0.17.3. (#103)
+- **Console islanding controls** — the authenticated Powerwall Control card shows the cached grid state and enables only the matching Go Off Grid or Reconnect Grid action after a browser confirmation. Both actions lock for one minute after every request, including failures, and direct the user to verify grid status rather than treating acknowledgement as success. (#103)
 
 ### [0.6.4] - 2026-09-07
 
