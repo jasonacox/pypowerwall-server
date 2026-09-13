@@ -57,7 +57,11 @@ import pypowerwall
 from fastapi import APIRouter, HTTPException, Response, Header
 
 from app.api.auth import verify_control_token
-from app.core.gateway_manager import IslandingCommandInProgressError, gateway_manager
+from app.core.gateway_manager import (
+    IslandingCommandInProgressError,
+    IslandingCooldownError,
+    gateway_manager,
+)
 from app.config import settings, SERVER_VERSION
 from app.utils.stats_tracker import stats_tracker
 
@@ -172,6 +176,13 @@ async def control_islanding(
             status_code=409,
             detail="An islanding command is still in progress; check grid status. "
             "Do not retry or send the opposite command.",
+        )
+    except IslandingCooldownError as e:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Islanding is rate limited; wait {e.retry_after}s and verify "
+            "grid status before sending another command.",
+            headers={"Retry-After": str(e.retry_after)},
         )
     if not isinstance(result, dict):
         raise HTTPException(

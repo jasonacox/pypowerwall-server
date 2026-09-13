@@ -7,7 +7,11 @@ from unittest.mock import Mock
 import pytest
 
 from app.config import settings
-from app.core.gateway_manager import IslandingCommandInProgressError, gateway_manager
+from app.core.gateway_manager import (
+    IslandingCommandInProgressError,
+    IslandingCooldownError,
+    gateway_manager,
+)
 
 
 @pytest.fixture
@@ -211,6 +215,100 @@ def test_islanding_in_progress_is_conflict(islanding_client, monkeypatch) -> Non
     assert response.status_code == 409
     assert "check grid status" in response.json()["detail"].lower()
     assert "opposite command" in response.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Server-side cooldown (PW_ISLANDING_COOLDOWN) tests
+# ---------------------------------------------------------------------------
+
+
+def test_islanding_cooldown_returns_429_with_retry_after(
+    islanding_client, mock_pypowerwall
+) -> None:
+    """A second command inside the cooldown window is rejected server-side."""
+    first = islanding_client.post(
+        "/control/islanding", json=_OFF_GRID, headers=_HEADERS
+    )
+    assert first.status_code == 200
+
+    second = islanding_client.post(
+        "/control/islanding", json={"value": "on_grid"}, headers=_HEADERS
+    )
+    assert second.status_code == 429
+    retry_after = int(second.headers["Retry-After"])
+    assert 1 <= retry_after <= settings.islanding_cooldown
+    assert "verify" in second.json()["detail"].lower()
+    mock_pypowerwall.reconnect_grid.assert_not_called()
+
+
+def test_islanding_cooldown_applies_after_failure(
+    islanding_client, mock_pypowerwall
+) -> None:
+    """The cooldown clock starts at dispatch — a failed command still counts."""
+    mock_pypowerwall.go_off_grid.side_effect = RuntimeError("backend failed")
+    first = islanding_client.post(
+        "/control/islanding", json=_OFF_GRID, headers=_HEADERS
+    )
+    assert first.status_code == 503
+
+    second = islanding_client.post(
+        "/control/islanding", json={"value": "on_grid"}, headers=_HEADERS
+    )
+    assert second.status_code == 429
+    mock_pypowerwall.reconnect_grid.assert_not_called()
+
+
+def test_islanding_cooldown_expires(islanding_client, mock_pypowerwall) -> None:
+    """Commands are allowed again once the cooldown window has passed."""
+    first = islanding_client.post(
+        "/control/islanding", json=_OFF_GRID, headers=_HEADERS
+    )
+    assert first.status_code == 200
+
+    # Backdate the recorded dispatch beyond the window instead of sleeping
+    gateway_id = next(iter(gateway_manager._islanding_last_dispatch))
+    gateway_manager._islanding_last_dispatch[gateway_id] -= (
+        settings.islanding_cooldown + 1
+    )
+    second = islanding_client.post(
+        "/control/islanding", json={"value": "on_grid"}, headers=_HEADERS
+    )
+    assert second.status_code == 200
+    mock_pypowerwall.reconnect_grid.assert_called_once()
+
+
+def test_islanding_cooldown_disabled(
+    islanding_client, mock_pypowerwall, monkeypatch
+) -> None:
+    """PW_ISLANDING_COOLDOWN=0 disables the server-side cooldown."""
+    monkeypatch.setattr(settings, "islanding_cooldown", 0)
+    first = islanding_client.post(
+        "/control/islanding", json=_OFF_GRID, headers=_HEADERS
+    )
+    second = islanding_client.post(
+        "/control/islanding", json={"value": "on_grid"}, headers=_HEADERS
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_local_control_raises_cooldown_error(
+    connected_gateway, mock_pypowerwall
+) -> None:
+    """local_control() itself enforces the cooldown with retry_after set."""
+    mock_pypowerwall.go_off_grid.return_value = {"result": 1}
+    result = await gateway_manager.local_control(
+        connected_gateway.gateway.id, "go_off_grid", confirm=True
+    )
+    assert result == {"result": 1}
+
+    with pytest.raises(IslandingCooldownError) as exc:
+        await gateway_manager.local_control(
+            connected_gateway.gateway.id, "reconnect_grid"
+        )
+    assert 1 <= exc.value.retry_after <= settings.islanding_cooldown
+    mock_pypowerwall.reconnect_grid.assert_not_called()
 
 
 @pytest.mark.asyncio

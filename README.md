@@ -707,6 +707,14 @@ hardware. Other or missing result codes return HTTP 502 with the library
 response in `detail.response`; unavailable/unsupported connections, exceptions,
 or no response within the existing control timeout return HTTP 503.
 
+**Server-side cooldown:** islanding commands are rate limited per gateway —
+after any dispatch (including failures and timeouts, since the gateway may
+still have acted), further islanding commands return HTTP 429 with a
+`Retry-After` header until `PW_ISLANDING_COOLDOWN` seconds have passed
+(default: 30; `0` disables). A command still in flight returns HTTP 409.
+This is enforced for **all** clients — curl, automations, and the Console
+alike — so a misbehaving script cannot rapidly toggle the grid contactor.
+
 ⚠️ **WARNING — Grid island control physically operates your home's grid
 contactor. Use with extreme care.** Going off-grid can interrupt power and
 temporarily interrupt solar production. While islanded, Powerwall may raise the

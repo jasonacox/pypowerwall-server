@@ -35,6 +35,7 @@ def _reset_singleton_state():
     gateway_manager._executor = None
     gateway_manager._write_lock = asyncio.Lock()
     gateway_manager._islanding_futures.clear()
+    gateway_manager._islanding_last_dispatch.clear()
     gateway_manager._poll_tasks.clear()
     gateway_manager._mqtt_tasks.clear()
     gateway_manager._consecutive_failures.clear()
