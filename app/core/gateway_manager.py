@@ -63,6 +63,7 @@ Performance:
 import asyncio
 import json
 import logging
+import math
 import time
 from copy import deepcopy
 from typing import Any, Dict, List, Optional
@@ -88,6 +89,8 @@ _WRITE_METHODS = frozenset(
         "set_operation",
         "set_grid_charging",
         "set_grid_export",
+        "go_off_grid",
+        "reconnect_grid",
         # Raw POST is the control fallback for v1r/cloud-mode/FleetAPI
         # gateways (e.g. post("/api/operation", ...)). It targets the same
         # Tesla site as the set_* methods, so it must hold the same lock or
@@ -96,6 +99,29 @@ _WRITE_METHODS = frozenset(
         "post",
     }
 )
+
+
+_ISLANDING_METHODS = frozenset({"go_off_grid", "reconnect_grid"})
+
+
+class IslandingCommandInProgressError(RuntimeError):
+    """Raised when an earlier islanding command is still running after timeout."""
+
+
+class IslandingCooldownError(RuntimeError):
+    """Raised when an islanding command arrives inside the server-side cooldown.
+
+    The cooldown rate-limits physical grid-contactor operations per gateway,
+    independent of any client-side (browser) lockout — API callers and
+    automations are bound by it too.
+    """
+
+    def __init__(self, retry_after: int):
+        super().__init__(
+            f"Islanding is rate limited; retry in {retry_after} seconds"
+        )
+        self.retry_after = retry_after
+
 
 class GatewayManager:
     """Manages multiple Powerwall gateway connections."""
@@ -155,6 +181,18 @@ class GatewayManager:
         # Serializes concurrent write operations to prevent set_operation()
         # from reading stale cache when two control calls race.
         self._write_lock: asyncio.Lock = asyncio.Lock()
+
+        # Executor threads cannot be cancelled after a timeout. Keep each
+        # islanding call visible until its thread actually finishes so an
+        # opposite grid-contactor command can be rejected rather than queued.
+        self._islanding_futures: Dict[str, asyncio.Future] = {}
+
+        # Server-side islanding cooldown: monotonic timestamp of the last
+        # dispatched contactor command per gateway. Recorded at dispatch
+        # (not completion) and consulted for every islanding request,
+        # regardless of client — the browser lockout is UX, this is the
+        # enforcement.
+        self._islanding_last_dispatch: Dict[str, float] = {}
 
         # Cloud connection for control operations (set_reserve, set_mode).
         # TEDAPI doesn't support POST/write APIs, so a separate cloud-mode
@@ -1880,6 +1918,25 @@ class GatewayManager:
         Returns:
             Result of the method call, or None on error/timeout
         """
+        if method in _ISLANDING_METHODS:
+            in_flight = self._islanding_futures.get(gateway_id)
+            if in_flight is not None:
+                raise IslandingCommandInProgressError(
+                    "An islanding command is still in progress"
+                )
+            # Server-enforced cooldown between contactor commands. Late
+            # import per repo convention (avoids circular dependency).
+            from app.config import settings
+
+            cooldown = settings.islanding_cooldown
+            last_dispatch = self._islanding_last_dispatch.get(gateway_id)
+            if cooldown > 0 and last_dispatch is not None:
+                elapsed = time.monotonic() - last_dispatch
+                if elapsed < cooldown:
+                    raise IslandingCooldownError(
+                        retry_after=max(1, math.ceil(cooldown - elapsed))
+                    )
+
         pw = self.connections.get(gateway_id)
         if not pw:
             logger.error(
@@ -1890,13 +1947,44 @@ class GatewayManager:
             method_func = getattr(pw, method)
             loop = asyncio.get_running_loop()
             if method in _WRITE_METHODS:
-                async with self._write_lock:
-                    result = await asyncio.wait_for(
-                        loop.run_in_executor(
-                            self._executor, lambda: method_func(*args, **kwargs)
-                        ),
-                        timeout=timeout,
+                lock = self._write_lock
+                await lock.acquire()
+                release_lock = True
+                try:
+                    future = loop.run_in_executor(
+                        self._executor, lambda: method_func(*args, **kwargs)
                     )
+                    if method in _ISLANDING_METHODS:
+                        # Cooldown clock starts at dispatch — a failed or
+                        # timed-out contactor command still counts, because
+                        # the gateway may have acted on it.
+                        self._islanding_last_dispatch[gateway_id] = time.monotonic()
+                        self._islanding_futures[gateway_id] = future
+
+                        def clear_after_completion(completed_future):
+                            if (
+                                self._islanding_futures.get(gateway_id)
+                                is completed_future
+                            ):
+                                self._islanding_futures.pop(gateway_id, None)
+
+                        future.add_done_callback(clear_after_completion)
+                    try:
+                        result = await asyncio.wait_for(
+                            asyncio.shield(future), timeout=timeout
+                        )
+                    except asyncio.TimeoutError:
+                        if method in _ISLANDING_METHODS:
+                            release_lock = False
+
+                            def release_after_completion(_completed_future):
+                                lock.release()
+
+                            future.add_done_callback(release_after_completion)
+                        raise
+                finally:
+                    if release_lock:
+                        lock.release()
             else:
                 result = await asyncio.wait_for(
                     loop.run_in_executor(

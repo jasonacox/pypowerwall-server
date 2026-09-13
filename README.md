@@ -53,12 +53,12 @@ Not sure which mode to run? Pick the row that matches your setup — then follow
 | Mode | Use when | Required settings | Data | Control |
 |------|----------|-------------------|------|---------|
 | **TEDAPI** *(default)* | You can reach the gateway from your local network (`192.168.91.1`) | `PW_HOST` + `PW_GW_PWD` | Full local metrics — power flows, vitals, strings, per-Powerwall detail | Add `PW_EMAIL` + `PW_AUTH_PATH` for hybrid cloud control |
-| **TEDAPI v1r** | Same, but connecting over wired LAN with a registered RSA key | `PW_HOST` + `PW_GW_PWD` + `PW_RSA_KEY_PATH` (add `PW_WIFI_HOST` for follower Powerwall data) | Full local metrics | Add `PW_EMAIL` + `PW_AUTH_PATH` for hybrid cloud control |
+| **TEDAPI v1r** | Same, but connecting over wired LAN with a registered RSA key | `PW_HOST` + `PW_GW_PWD` + `PW_RSA_KEY_PATH` (add `PW_WIFI_HOST` for follower Powerwall data) | Full local metrics | Authenticated local islanding with `PW_CONTROL_SECRET`; add `PW_EMAIL` + `PW_AUTH_PATH` for other hybrid cloud control |
 | **Basic LAN** *(Powerwall 3)* | PW3 reachable on its wired vendor subnet — no gateway password or RSA key needed | `PW_HOST` + `PW_PASSWORD` (customer password = last 5 chars of the gateway password) | Core metrics only — power flows, battery SoC, grid status | Add `PW_EMAIL` + `PW_AUTH_PATH` for hybrid cloud control (local reads + cloud writes) |
 | **Cloud** | No local network access to the system | `PW_EMAIL` + `PW_AUTH_PATH` (one-time `python -m pypowerwall setup`) | Standard cloud metrics | Yes |
 | **FleetAPI** | Remote access via Tesla's official Fleet API | `PW_GATEWAYS` (or `gateways.yaml`) entry with `email` + `authpath` + `fleetapi: true` | Standard cloud metrics | Yes |
 
-All local modes are read-only unless cloud credentials are provided (hybrid mode).
+Local v1r and Basic LAN modes can perform supported control operations when `PW_CONTROL_SECRET` is set. Without cloud credentials, `/control/reserve`, `/control/mode`, and `/control/grid_charging` use the gateway's local connection. With `PW_EMAIL` and `PW_AUTH_PATH` configured (hybrid mode), those operations use the cloud connection while monitoring remains local. `POST /control/islanding` is different: it is available only in TEDAPI v1r mode, requires a registered RSA key, always uses the local gateway connection, and does not fall back to cloud control.
 
 #### TEDAPI Mode (Local Access)
 ```bash
@@ -684,6 +684,55 @@ curl -X POST http://localhost:8675/control/mode \
 > stick). If you need mode + reserve 0, set the mode with the *current* reserve
 > level first, then set the reserve to `0` in a separate call.
 
+**Islanding (local PW3 v1r/TEDAPI):** `POST /control/islanding` uses the same
+control token and targets the default gateway (the gateway named `default`,
+otherwise the first configured gateway). It requires a registered v1r RSA key
+and pypowerwall 0.17.3 or later. It uses the gateway's local connection even in
+hybrid mode; it does not fall back to cloud control. Other control routes are
+unchanged.
+
+| JSON body | Library call |
+|-----------|--------------|
+| `{"value": "off_grid", "confirm": true}` | `go_off_grid(confirm=True)` |
+| `{"value": "on_grid"}` | `reconnect_grid()` |
+
+`value` must match exactly. Off-grid requires the JSON boolean `true` for
+`confirm`, not a string or number. If supplied for either operation, `confirm`
+must be a boolean. Invalid values return HTTP 400; malformed JSON or a body
+that is not an object returns FastAPI's HTTP 422 validation error.
+
+The response preserves the library's `mode`, `force`, and `result` fields.
+HTTP 200 requires `result: 1`, the acknowledgement observed on real PW3
+hardware. Other or missing result codes return HTTP 502 with the library
+response in `detail.response`; unavailable/unsupported connections, exceptions,
+or no response within the existing control timeout return HTTP 503.
+
+**Server-side cooldown:** islanding commands are rate limited per gateway —
+after any dispatch (including failures and timeouts, since the gateway may
+still have acted), further islanding commands return HTTP 429 with a
+`Retry-After` header until `PW_ISLANDING_COOLDOWN` seconds have passed
+(default: 30; `0` disables). A command still in flight returns HTTP 409.
+This is enforced for **all** clients — curl, automations, and the Console
+alike — so a misbehaving script cannot rapidly toggle the grid contactor.
+
+⚠️ **WARNING — Grid island control physically operates your home's grid
+contactor. Use with extreme care.** Going off-grid can interrupt power and
+temporarily interrupt solar production. While islanded, Powerwall may raise the
+home's electrical frequency to limit or stop solar production, particularly
+when the battery is near full or available charging capacity is limited. This
+can cause lights to flicker and affect frequency-sensitive equipment.
+
+Your home depends on available battery and solar power while disconnected from
+the grid; if those cannot support the load, your home can lose power. Do not
+assume that a nearly full battery guarantees a seamless transition.
+
+Do not automate these commands without understanding the failure modes; test
+only when someone is present. An acknowledgement is not confirmation that the
+home changed grid state: check `GET /api/system_status/grid_status` after the
+transition, allowing for the configured polling interval. After an error or
+timeout, the outcome may be unknown and the command may still complete; do not
+automatically retry or send the opposite command.
+
 **Web Console (`/console`):** when `PW_CONTROL_SECRET` is set, the Console shows
 a *Powerwall Control* card (after System Health) with mode select
 (Self-Consumption/Backup/Time-Based), reserve slider + number (0–100) and a
@@ -696,6 +745,14 @@ button sends a single combined `POST /control/mode {"value": mode, "level":
 reserve}` when both changed (reserve 0 + mode change is auto-split into two
 calls, see note above), otherwise a single `/control/reserve` or `/control/mode`
 call. Controls the default gateway.
+
+For a local PW3 v1r/TEDAPI gateway, the card also shows the cached grid state
+and enables exactly one islanding action: **Go Off Grid** while connected or
+**Reconnect Grid** while islanded. Each action requires a browser confirmation.
+After any request, both islanding controls are locked for one minute, including
+after an error or timeout, because the outcome may be unknown. Use **Refresh
+Grid Status** and verify the reported state after the polling interval; an
+acknowledgement is not proof that the contactor changed state.
 
 ### Data Aggregation Strategy
 Multi-gateway aggregation uses **smart aggregation** that will evolve over time:

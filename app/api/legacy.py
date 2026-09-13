@@ -57,7 +57,11 @@ import pypowerwall
 from fastapi import APIRouter, HTTPException, Response, Header
 
 from app.api.auth import verify_control_token
-from app.core.gateway_manager import gateway_manager
+from app.core.gateway_manager import (
+    IslandingCommandInProgressError,
+    IslandingCooldownError,
+    gateway_manager,
+)
 from app.config import settings, SERVER_VERSION
 from app.utils.stats_tracker import stats_tracker
 
@@ -136,6 +140,75 @@ async def control_status():
     All actual writes stay behind ``verify_control_token``.
     """
     return {"enabled": settings.control_enabled}
+
+
+@router.post("/control/islanding")
+async def control_islanding(
+    data: dict, authorization: Optional[str] = Header(None)
+) -> dict:
+    """Request a grid transition on the default gateway via local v1r/TEDAPI.
+
+    Acknowledgement is not proof of grid state. Check grid status afterward;
+    a timeout can leave the outcome unknown, so do not automatically retry.
+    """
+    verify_control_token(authorization)
+    value = data.get("value")
+    if value not in ("off_grid", "on_grid"):
+        raise HTTPException(
+            status_code=400, detail="'value' must be 'off_grid' or 'on_grid'"
+        )
+    if "confirm" in data and not isinstance(data["confirm"], bool):
+        raise HTTPException(status_code=400, detail="'confirm' must be a boolean")
+    if value == "off_grid" and data.get("confirm") is not True:
+        raise HTTPException(status_code=400, detail="Off-grid requires 'confirm': true")
+
+    # Do not use the hybrid cloud connection: the released islanding backend
+    # requires local v1r/TEDAPI. Unsupported connections return None.
+    gateway_id = get_default_gateway()
+    method = "go_off_grid" if value == "off_grid" else "reconnect_grid"
+    kwargs = {"confirm": True} if value == "off_grid" else {}
+    try:
+        result = await gateway_manager.local_control(
+            gateway_id, method, timeout=10.0, **kwargs
+        )
+    except IslandingCommandInProgressError:
+        raise HTTPException(
+            status_code=409,
+            detail="An islanding command is still in progress; check grid status. "
+            "Do not retry or send the opposite command.",
+        )
+    except IslandingCooldownError as e:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Islanding is rate limited; wait {e.retry_after}s and verify "
+            "grid status before sending another command.",
+            headers={"Retry-After": str(e.retry_after)},
+        )
+    if not isinstance(result, dict):
+        raise HTTPException(
+            status_code=503,
+            detail="No islanding response: local v1r/TEDAPI may be unavailable or "
+            "unsupported, or the request failed or timed out. Check grid status "
+            "before retrying.",
+        )
+    # 1 is the hardware-observed acknowledgement. The library returns other
+    # or absent results too; do not present those as a successful command.
+    acknowledgement = result.get("result")
+    if (
+        not isinstance(acknowledgement, int)
+        or isinstance(acknowledgement, bool)
+        or acknowledgement != 1
+    ):
+        # Unlike the 503 string detail, this object preserves the library response
+        # so callers can inspect an unacknowledged result.
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Islanding was not acknowledged; check grid status.",
+                "response": result,
+            },
+        )
+    return result
 
 
 @router.post("/control/{path:path}")

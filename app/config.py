@@ -199,7 +199,7 @@ from pydantic_settings import BaseSettings
 logger = logging.getLogger(__name__)
 
 # Server version
-SERVER_VERSION = "0.6.4"
+SERVER_VERSION = "0.6.5"
 
 
 class GatewayConfig(BaseModel):
@@ -316,6 +316,9 @@ class Settings(BaseSettings):
     cache_file: Optional[str] = Field(default=None, alias="PW_CACHE_FILE")
     siteid: Optional[str] = Field(default=None, alias="PW_SITEID")
     control_secret: Optional[str] = Field(default=None, alias="PW_CONTROL_SECRET")
+    islanding_cooldown: int = Field(
+        default=30, alias="PW_ISLANDING_COOLDOWN"
+    )  # Server-enforced seconds between islanding commands per gateway (0 disables)
     proxy_base_url: str = Field(default="/", alias="PROXY_BASE_URL")
     pw_rsa_key_path: Optional[str] = Field(
         default=None, alias="PW_RSA_KEY_PATH"

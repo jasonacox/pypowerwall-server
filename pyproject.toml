@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pypowerwall-server"
-version = "0.6.4"  # Also defined in app/config.py as SERVER_VERSION
+version = "0.6.5"  # Also defined in app/config.py as SERVER_VERSION
 description = "A high-performance FastAPI-based server for monitoring and managing Tesla Powerwall systems"
 readme = "README.md"
 authors = [
@@ -30,7 +30,7 @@ dependencies = [
     "uvicorn[standard]>=0.29.0",
     "pydantic>=2.11.0",
     "pydantic-settings>=2.9.0",
-    "pypowerwall>=0.17.1",
+    "pypowerwall>=0.17.3",
     "websockets>=13.1",
     "psutil>=6.1.0",
     "beautifulsoup4>=4.12.0",

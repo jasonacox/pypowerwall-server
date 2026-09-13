@@ -1,6 +1,8 @@
 """Pytest configuration and fixtures."""
-import pytest
+import asyncio
 from unittest.mock import Mock
+
+import pytest
 from fastapi.testclient import TestClient
 from app.main import app
 from app import main as main_module
@@ -31,6 +33,9 @@ def _reset_singleton_state():
     gateway_manager._cloud_reserve = None
     gateway_manager._cloud_reserve_time = None
     gateway_manager._executor = None
+    gateway_manager._write_lock = asyncio.Lock()
+    gateway_manager._islanding_futures.clear()
+    gateway_manager._islanding_last_dispatch.clear()
     gateway_manager._poll_tasks.clear()
     gateway_manager._mqtt_tasks.clear()
     gateway_manager._consecutive_failures.clear()
