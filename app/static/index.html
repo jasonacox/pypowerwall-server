@@ -868,17 +868,41 @@
         .control-message.error { color: var(--accent-red); }
         .control-islanding-panel {
             margin-top: 16px;
-            padding: 16px;
+            padding: 12px 16px;
             border: 1px solid rgba(210, 153, 34, 0.5);
             border-radius: 8px;
             background: rgba(210, 153, 34, 0.08);
         }
+        .control-islanding-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
         .control-islanding-actions {
             display: flex;
-            flex-wrap: wrap;
+            align-items: center;
             gap: 8px;
-            margin-top: 12px;
         }
+        .control-grid-state {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 600;
+            font-size: 1.05em;
+        }
+        .control-grid-icon {
+            display: inline-flex;
+            align-items: center;
+        }
+        .control-grid-icon svg {
+            width: 22px;
+            height: 22px;
+        }
+        .control-grid-state.connected { color: var(--accent-green); }
+        .control-grid-state.islanded { color: var(--accent-red); }
+        .control-grid-state.unknown { color: var(--text-muted); }
         .control-btn.danger {
             border-color: var(--accent-red);
             color: var(--accent-red);
@@ -1620,6 +1644,14 @@
                 <div class="control-warning" id="control-reserve0-warning"></div>
                 <div class="control-grid">
                     <div class="control-field">
+                        <div class="control-label">Grid</div>
+                        <div class="control-grid-state unknown" id="control-grid-state">
+                            <span class="control-grid-icon" id="control-grid-icon"></span>
+                            <span id="control-grid-state-text">--</span>
+                        </div>
+                        <div class="control-hint" id="control-grid-status">Checking grid status…</div>
+                    </div>
+                    <div class="control-field">
                         <div class="control-label">Mode</div>
                         <select id="control-mode">
                             <option value="self_consumption">Self-Consumption</option>
@@ -1647,19 +1679,14 @@
                     </div>
                 </div>
                 <div class="control-islanding-panel">
-                    <div class="control-label">Grid Islanding</div>
-                    <div class="control-hint" id="control-grid-status">Grid status: checking…</div>
-                    <div class="control-islanding-actions">
-                        <button type="button" class="control-btn danger" id="control-go-off-grid" disabled>Go Off Grid</button>
-                        <button type="button" class="control-btn" id="control-reconnect-grid" disabled>Reconnect Grid</button>
-                        <button type="button" class="control-btn" id="control-refresh-grid">Refresh Grid Status</button>
+                    <div class="control-islanding-row">
+                        <div class="control-label">Grid Islanding</div>
+                        <div class="control-islanding-actions">
+                            <button type="button" class="control-btn danger" id="control-islanding-action" disabled>Go Off Grid</button>
+                            <button type="button" class="control-btn control-icon-btn" id="control-refresh-grid" title="Refresh grid status" aria-label="Refresh grid status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg></button>
+                        </div>
                     </div>
-                    <div class="control-hint" id="control-islanding-cooldown"></div>
-                    <div class="control-warning" style="display:block; margin-top:12px">
-                        This physically operates the home's grid contactor. A confirmation is required.
-                        After any request, verify grid status; an acknowledgement or error does not
-                        prove the outcome.
-                    </div>
+                    <div class="control-hint" id="control-islanding-cooldown" style="display:none"></div>
                     <div class="control-message" id="control-islanding-message" style="display:none"></div>
                 </div>
                 <div class="control-save-row" id="control-save-row" style="display:none">
@@ -3327,32 +3354,40 @@
         }
 
         function updateIslandingControls() {
-            const offGridBtn = document.getElementById('control-go-off-grid');
-            const reconnectBtn = document.getElementById('control-reconnect-grid');
+            const actionBtn = document.getElementById('control-islanding-action');
             const cooldownEl = document.getElementById('control-islanding-cooldown');
             const remainingMs = islandingCooldownUntil() - Date.now();
             const cooldownActive = remainingMs > 0;
 
-            if (offGridBtn) {
-                offGridBtn.disabled = !controlEnabled || !controlIslandingAvailable || controlIslandingBusy
-                    || cooldownActive || controlGridState !== 'connected';
-            }
-            if (reconnectBtn) {
-                reconnectBtn.disabled = !controlEnabled || !controlIslandingAvailable || controlIslandingBusy
-                    || cooldownActive || controlGridState !== 'islanded';
+            if (actionBtn) {
+                // Multi-variant: the button always shows the action that moves
+                // away from the reported grid state. Danger styling only for
+                // the destructive off-grid direction.
+                const reconnect = controlGridState === 'islanded';
+                actionBtn.textContent = reconnect ? 'Reconnect Grid' : 'Go Off Grid';
+                actionBtn.classList.toggle('danger', !reconnect);
+                actionBtn.disabled = !controlEnabled || !controlIslandingAvailable
+                    || controlIslandingBusy || cooldownActive
+                    || controlGridState === 'unknown';
+                actionBtn.title = actionBtn.disabled
+                    ? (cooldownEl?.textContent || 'Unavailable until grid status is known.')
+                    : '';
             }
 
             if (cooldownEl) {
+                // Only surface a hint when something is actually blocking.
+                let hint = '';
                 if (!controlIslandingAvailable) {
-                    cooldownEl.textContent = 'Islanding requires a local PW3 v1r/TEDAPI connection; controls are locked.';
+                    hint = 'Requires a local PW3 v1r/TEDAPI connection.';
                 } else if (controlIslandingBusy) {
-                    cooldownEl.textContent = 'Request in progress — do not retry or send the opposite command.';
+                    hint = 'Request in progress — do not retry or send the opposite command.';
                 } else if (cooldownActive) {
-                    const seconds = Math.ceil(remainingMs / 1000);
-                    cooldownEl.textContent = `Both islanding controls are locked for ${seconds}s after a request.`;
-                } else {
-                    cooldownEl.textContent = 'Only the action matching the reported grid state is enabled.';
+                    hint = `Locked for ${Math.ceil(remainingMs / 1000)}s after a request.`;
+                } else if (controlGridState === 'unknown') {
+                    hint = 'Grid state unknown — refresh status to enable.';
                 }
+                cooldownEl.textContent = hint;
+                cooldownEl.style.display = hint ? '' : 'none';
             }
 
             if (controlIslandingCooldownTimer) {
@@ -3371,8 +3406,27 @@
             return controlErrorText(status, payload, 'Islanding request failed.');
         }
 
+        // Icons for the Grid state field (stroke inherits the state color)
+        const GRID_ICON_CONNECTED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>';
+        const GRID_ICON_ISLANDED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="12.41 6.75 13 2 10.57 4.92"/><polyline points="18.57 12.91 21 10 15.66 10"/><polyline points="8 8 3 14 12 14 11 22 16 16"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+        const GRID_ICON_UNKNOWN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+
+        function renderGridState(state, statusText, hintText) {
+            const wrap = document.getElementById('control-grid-state');
+            const icon = document.getElementById('control-grid-icon');
+            const text = document.getElementById('control-grid-state-text');
+            const hint = document.getElementById('control-grid-status');
+            if (wrap) wrap.className = 'control-grid-state ' + state;
+            if (icon) {
+                icon.innerHTML = state === 'connected' ? GRID_ICON_CONNECTED
+                    : state === 'islanded' ? GRID_ICON_ISLANDED
+                    : GRID_ICON_UNKNOWN;
+            }
+            if (text) text.textContent = statusText;
+            if (hint) hint.textContent = hintText;
+        }
+
         async function loadGridStatus() {
-            const statusEl = document.getElementById('control-grid-status');
             try {
                 const resp = await fetch('/api/system_status/grid_status');
                 if (!resp.ok) throw new Error('status ' + resp.status);
@@ -3381,17 +3435,20 @@
                 const normalized = String(gridStatus).toUpperCase();
                 if (normalized === 'SYSTEMGRIDCONNECTED' || normalized === 'UP') {
                     controlGridState = 'connected';
-                    if (statusEl) statusEl.textContent = 'Grid status: connected';
+                    renderGridState('connected', 'Connected',
+                        'On grid — utility power available.');
                 } else if (normalized === 'SYSTEMISLANDEDACTIVE' || normalized === 'DOWN') {
                     controlGridState = 'islanded';
-                    if (statusEl) statusEl.textContent = 'Grid status: islanded';
+                    renderGridState('islanded', 'Islanded',
+                        'Off grid — running on battery + solar.');
                 } else {
                     controlGridState = 'unknown';
-                    if (statusEl) statusEl.textContent = 'Grid status: ' + gridStatus + ' (controls locked)';
+                    renderGridState('unknown', 'Unknown',
+                        'Reported: ' + gridStatus + '.');
                 }
             } catch (e) {
                 controlGridState = 'unknown';
-                if (statusEl) statusEl.textContent = 'Grid status unavailable (controls locked)';
+                renderGridState('unknown', 'Unknown', 'Grid status unavailable.');
             }
             updateIslandingControls();
         }
@@ -3744,10 +3801,11 @@
             }
             const saveBtn = document.getElementById('control-save');
             if (saveBtn) saveBtn.addEventListener('click', saveControl);
-            const offGridBtn = document.getElementById('control-go-off-grid');
-            if (offGridBtn) offGridBtn.addEventListener('click', () => requestIslanding('off_grid'));
-            const reconnectBtn = document.getElementById('control-reconnect-grid');
-            if (reconnectBtn) reconnectBtn.addEventListener('click', () => requestIslanding('on_grid'));
+            const islandingBtn = document.getElementById('control-islanding-action');
+            if (islandingBtn) islandingBtn.addEventListener('click', () =>
+                // Dispatch away from the reported state; requestIslanding()
+                // re-verifies the live state before sending.
+                requestIslanding(controlGridState === 'islanded' ? 'on_grid' : 'off_grid'));
             const refreshGridBtn = document.getElementById('control-refresh-grid');
             if (refreshGridBtn) refreshGridBtn.addEventListener('click', loadGridStatus);
             updateIslandingControls();
