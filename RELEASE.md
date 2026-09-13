@@ -2,7 +2,7 @@
 
 ## Version History
 
-### [0.6.5] - Upcoming
+### [0.6.5] - 2026-09-12
 
 **Added:**
 - **Authenticated local PW3 v1r islanding control** — `POST /control/islanding` routes `off_grid` (with explicit `confirm: true`) and `on_grid` to the released pypowerwall library methods, using the existing write lock and timeout handling. Unacknowledged or failed commands return HTTP errors; callers must verify grid status. A server-enforced per-gateway cooldown (`PW_ISLANDING_COOLDOWN`, default 30s) rate-limits contactor commands for all clients — repeat commands inside the window return HTTP 429 with `Retry-After`, and a command still in flight returns HTTP 409. Updates pypowerwall to 0.17.3. (#103)
