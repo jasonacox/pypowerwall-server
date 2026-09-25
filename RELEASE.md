@@ -2,6 +2,15 @@
 
 ## Version History
 
+### [0.6.7] - Upcoming
+
+**Added:**
+- **Powerwall temperatures in the console** — the Powerwall Status table gains a **Temp** column showing each battery's hottest pack reading. Hovering, tapping or keyboard-focusing it opens a card with the full breakdown: pack max, pack min, current shunt, and inverter enclosure ambient (expansion packs show the three pack readings; they have no inverter). A warning line appears only when the battery reports over-temperature events. Powerwall 2 rows show the thermal-controller ambient. Works in both the single-gateway and multi-gateway views, matched to rows by battery serial like `/pod`. The inverter heatsink signal is deliberately not shown: it reads a constant on current firmware.
+- Powerwall 3 temperatures need pypowerwall **0.17.4+** (jasonacox/pypowerwall#390). With an older library, cloud or basic-LAN modes, or firmware without the signals, the column is simply hidden; a failed `/vitals` fetch never affects the rest of the panel. No API changes: the single-gateway view reads the existing `/vitals` alongside `/pod`.
+
+**Fixed:**
+- The Powerwall Status card now stacks above the cards below it, so a popover near its bottom edge isn't painted underneath the next card (each card's `backdrop-filter` creates its own stacking context).
+
 ### [0.6.6] - 2026-09-13
 
 **Added:**
