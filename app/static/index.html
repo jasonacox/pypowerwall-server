@@ -1223,26 +1223,26 @@
             color: var(--text-primary);
         }
 
-        /* Temperature cell: headline value, full breakdown on hover, keyboard
+        /* Temp / Fans cells: headline value, full breakdown on hover, keyboard
            focus, or tap (tabindex makes the cell focusable on touch screens) */
-        .pw-temp {
+        .pw-detail {
             position: relative;
             white-space: nowrap;
             cursor: help;
             border-bottom: 1px dotted var(--text-muted);
         }
 
-        .pw-temp:focus {
+        .pw-detail:focus {
             outline: none;
         }
 
-        .pw-temp:focus-visible {
+        .pw-detail:focus-visible {
             outline: 1px solid var(--accent-blue);
             outline-offset: 3px;
             border-radius: 2px;
         }
 
-        .pw-temp-card {
+        .pw-detail-card {
             display: none;
             position: absolute;
             right: 0;
@@ -1259,23 +1259,23 @@
             cursor: default;
         }
 
-        .pw-temp:hover .pw-temp-card,
-        .pw-temp:focus .pw-temp-card {
+        .pw-detail:hover .pw-detail-card,
+        .pw-detail:focus .pw-detail-card {
             display: block;
         }
 
-        .pw-temp-row {
+        .pw-detail-row {
             display: flex;
             justify-content: space-between;
             gap: 16px;
             padding: 2px 0;
         }
 
-        .pw-temp-label {
+        .pw-detail-label {
             color: var(--text-secondary);
         }
 
-        .pw-temp-warn {
+        .pw-detail-warn {
             margin-top: 6px;
             color: var(--accent-yellow);
         }
@@ -3336,7 +3336,7 @@
             return bySerial;
         }
 
-        function isTemp(value) {
+        function isReading(value) {
             return typeof value === 'number' && Number.isFinite(value);
         }
 
@@ -3344,8 +3344,8 @@
         // thermal controller ambient (PW2) - the same value temps() reports
         function headlineTemp(temps) {
             if (!temps) return null;
-            if (isTemp(temps.packMax)) return temps.packMax;
-            return isTemp(temps.controller) ? temps.controller : null;
+            if (isReading(temps.packMax)) return temps.packMax;
+            return isReading(temps.controller) ? temps.controller : null;
         }
 
         function powerwallTempCellHtml(temps) {
@@ -3357,17 +3357,17 @@
                 ['Shunt', temps.shunt],
                 ['Inverter ambient', temps.ambient],
                 ['Controller ambient', temps.controller],
-            ].filter(([, value]) => isTemp(value));
+            ].filter(([, value]) => isReading(value));
             const summary = rows.map(([label, value]) => `${label} ${value.toFixed(1)} °C`).join(', ');
             let card = rows.map(([label, value]) =>
-                `<div class="pw-temp-row"><span class="pw-temp-label">${label}</span>` +
+                `<div class="pw-detail-row"><span class="pw-detail-label">${label}</span>` +
                 `<span>${value.toFixed(1)} °C</span></div>`).join('');
             if (temps.overTempEvents > 0) {
-                card += `<div class="pw-temp-warn">⚠ ${temps.overTempEvents} over-temperature ` +
+                card += `<div class="pw-detail-warn">⚠ ${temps.overTempEvents} over-temperature ` +
                     `event${temps.overTempEvents === 1 ? '' : 's'}</div>`;
             }
-            return `<td><span class="pw-temp" tabindex="0" aria-label="${summary}">` +
-                `${headline.toFixed(1)} °C<span class="pw-temp-card" aria-hidden="true">${card}</span></span></td>`;
+            return `<td><span class="pw-detail" tabindex="0" aria-label="${summary}">` +
+                `${headline.toFixed(1)} °C<span class="pw-detail-card" aria-hidden="true">${card}</span></span></td>`;
         }
 
         // True when any row has a temperature - otherwise the column is hidden
@@ -3377,7 +3377,70 @@
                 headlineTemp(tempsBySerial[deviceSerial(item.PackageSerialNumber)]) !== null);
         }
 
-        function powerwallRowHtml(pw, displayName, isExpansion, isPw3System, tempsBySerial = null) {
+        // Fans from pypowerwall vitals, keyed by battery serial like temperatures.
+        // Powerwall 3: two inverter fans (A, B) on each unit's TEPINV block, measured
+        // RPM plus drive duty cycle (%); there is no target RPM. Expansion packs have
+        // no inverter, so no fans. Powerwall 2: one fan on the PVAC block, actual and
+        // target RPM (same signals as /fans/pw). TEPINV wins over a PVAC block with
+        // the same serial, whatever the key order.
+        function powerwallFansBySerial(vitals) {
+            const bySerial = {};
+            for (const [key, block] of Object.entries(vitals || {})) {
+                const serial = deviceSerial(key);
+                if (!serial || !block || typeof block !== 'object') continue;
+                if (key.startsWith('TEPINV--')) {
+                    bySerial[serial] = {
+                        fans: ['A', 'B'].map(fan => ({
+                            label: `Fan ${fan}`,
+                            rpm: block[`PCH_FanSpeed_${fan}`],
+                            duty: block[`PCH_FanDuty_${fan}`],
+                        })),
+                    };
+                } else if (key.startsWith('PVAC--') && !bySerial[serial] &&
+                    (isReading(block.PVAC_Fan_Speed_Actual_RPM) ||
+                        isReading(block.PVAC_Fan_Speed_Target_RPM))) {
+                    // PW3 vitals also carry a PVAC block (same serial, no fan
+                    // readings): it must never replace that unit's TEPINV fans
+                    bySerial[serial] = {
+                        fans: [{ label: 'Fan', rpm: block.PVAC_Fan_Speed_Actual_RPM }],
+                        target: block.PVAC_Fan_Speed_Target_RPM,
+                    };
+                }
+            }
+            return bySerial;
+        }
+
+        // Headline for a row: the fastest fan's measured RPM (0 is a real reading)
+        function headlineFanRpm(fans) {
+            const rpms = (fans?.fans || []).map(fan => fan.rpm).filter(isReading);
+            return rpms.length ? Math.max(...rpms) : null;
+        }
+
+        function powerwallFanCellHtml(fans) {
+            const headline = headlineFanRpm(fans);
+            if (headline === null) return '<td>--</td>';
+            const rpmText = value => (isReading(value) ? `${Math.round(value)} rpm` : '--');
+            const rows = fans.fans
+                .filter(fan => isReading(fan.rpm) || isReading(fan.duty))
+                .map(fan => [fan.label, rpmText(fan.rpm) +
+                    (isReading(fan.duty) ? ` · ${fan.duty.toFixed(1)}%` : '')]);
+            if (isReading(fans.target)) rows.push(['Target', rpmText(fans.target)]);
+            const summary = rows.map(([label, value]) => `${label} ${value}`).join(', ');
+            const card = rows.map(([label, value]) =>
+                `<div class="pw-detail-row"><span class="pw-detail-label">${label}</span>` +
+                `<span>${value}</span></div>`).join('');
+            return `<td><span class="pw-detail" tabindex="0" aria-label="${summary}">` +
+                `${rpmText(headline)}<span class="pw-detail-card" aria-hidden="true">${card}</span></span></td>`;
+        }
+
+        // True when any row has a fan reading - otherwise the column is hidden
+        // (cloud / basic-LAN modes, or a library/firmware without the signals)
+        function anyPowerwallFans(rows, fansBySerial) {
+            return rows.some(({ item }) =>
+                headlineFanRpm(fansBySerial[deviceSerial(item.PackageSerialNumber)]) !== null);
+        }
+
+        function powerwallRowHtml(pw, displayName, isExpansion, isPw3System, tempsBySerial = null, fansBySerial = null) {
             const capacity = pw.POD_nom_full_pack_energy || pw.nominal_full_pack_energy;
             const capacityKwh = capacity ? (capacity / 1000).toFixed(2) : '--';
             const capacityNum = capacity ? capacity / 1000 : 0;
@@ -3405,6 +3468,7 @@
                 `<td>${power} kW<span class="energy-arrow ${powerArrowClass}">${powerArrow}</span></td>` +
                 `<td>${frequency} Hz</td>` +
                 (tempsBySerial ? powerwallTempCellHtml(tempsBySerial[deviceSerial(pw.PackageSerialNumber)]) : '') +
+                (fansBySerial ? powerwallFanCellHtml(fansBySerial[deviceSerial(pw.PackageSerialNumber)]) : '') +
                 '</tr>';
         }
 
@@ -3447,8 +3511,11 @@
                     return;
                 }
                 
-                const tempsBySerial = powerwallTempsBySerial(await vitalsPromise);
+                const vitals = await vitalsPromise;
+                const tempsBySerial = powerwallTempsBySerial(vitals);
                 const showTemps = anyPowerwallTemps(pwRows, tempsBySerial);
+                const fansBySerial = powerwallFansBySerial(vitals);
+                const showFans = anyPowerwallFans(pwRows, fansBySerial);
 
                 // Build table
                 let html = '<table class="powerwall-table"><thead><tr>';
@@ -3459,6 +3526,7 @@
                 html += '<th>Power</th>';
                 html += '<th>Frequency</th>';
                 if (showTemps) html += '<th>Temp</th>';
+                if (showFans) html += '<th>Fans</th>';
                 html += '</tr></thead><tbody>';
 
                 const SPEC_CAPACITY = 13.5; // kWh per Powerwall
@@ -3469,7 +3537,8 @@
                         pw.name,
                         isExpansion,
                         gatewayMeta['default']?.pw3 || window._systemPw3 || false,
-                        showTemps ? tempsBySerial : null
+                        showTemps ? tempsBySerial : null,
+                        showFans ? fansBySerial : null
                     );
                 });
                 
@@ -3669,15 +3738,18 @@
                     );
                     const tempsBySerial = powerwallTempsBySerial(status.data.vitals);
                     const showTemps = anyPowerwallTemps(rows, tempsBySerial);
+                    const fansBySerial = powerwallFansBySerial(status.data.vitals);
+                    const showFans = anyPowerwallFans(rows, fansBySerial);
                     html += '<table class="powerwall-table"><thead><tr><th>Powerwall</th><th>Model</th><th>Capacity</th><th>Voltage</th><th>Power</th><th>Frequency</th>' +
-                        (showTemps ? '<th>Temp</th>' : '') + '</tr></thead><tbody>';
+                        (showTemps ? '<th>Temp</th>' : '') + (showFans ? '<th>Fans</th>' : '') + '</tr></thead><tbody>';
                     rows.forEach(({ item: block, isExpansion }) => {
                         html += powerwallRowHtml(
                             block,
                             block.name,
                             isExpansion,
                             gatewayMeta[gwId]?.pw3 || false,
-                            showTemps ? tempsBySerial : null
+                            showTemps ? tempsBySerial : null,
+                            showFans ? fansBySerial : null
                         );
                     });
                     html += '</tbody></table>';
