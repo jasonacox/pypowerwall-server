@@ -3253,6 +3253,14 @@
             return parts[parts.length - 1];
         }
 
+        // Serial of a vitals block, matched the way /pod matches TEPOD blocks:
+        // the block's serialNumber field when present, else the key's last part
+        // (live PW3 TEDAPI vitals have no serialNumber, only the key carries it)
+        function vitalsBlockSerial(key, block) {
+            const serial = block && block.serialNumber;
+            return typeof serial === 'string' && serial ? serial : deviceSerial(key);
+        }
+
         // Return rows in the physical hierarchy: each expansion follows its
         // Powerwall 3 leader, even when system_status lists it later.
         function arrangePowerwallRows(items, tedapiConfig) {
@@ -3317,8 +3325,9 @@
             const bySerial = {};
             const entry = serial => (bySerial[serial] = bySerial[serial] || {});
             for (const [key, block] of Object.entries(vitals || {})) {
-                const serial = deviceSerial(key);
-                if (!serial || !block || typeof block !== 'object') continue;
+                if (!block || typeof block !== 'object') continue;
+                const serial = vitalsBlockSerial(key, block);
+                if (!serial) continue;
                 if (key.startsWith('TEPOD--')) {
                     Object.assign(entry(serial), {
                         packMax: block.HVP_PackTempMax,
@@ -3358,13 +3367,15 @@
                 ['Inverter ambient', temps.ambient],
                 ['Controller ambient', temps.controller],
             ].filter(([, value]) => isReading(value));
-            const summary = rows.map(([label, value]) => `${label} ${value.toFixed(1)} °C`).join(', ');
+            let summary = rows.map(([label, value]) => `${label} ${value.toFixed(1)} °C`).join(', ');
             let card = rows.map(([label, value]) =>
                 `<div class="pw-detail-row"><span class="pw-detail-label">${label}</span>` +
                 `<span>${value.toFixed(1)} °C</span></div>`).join('');
             if (temps.overTempEvents > 0) {
-                card += `<div class="pw-detail-warn">⚠ ${temps.overTempEvents} over-temperature ` +
-                    `event${temps.overTempEvents === 1 ? '' : 's'}</div>`;
+                const warning = `${temps.overTempEvents} over-temperature ` +
+                    `event${temps.overTempEvents === 1 ? '' : 's'}`;
+                card += `<div class="pw-detail-warn">⚠ ${warning}</div>`;
+                summary += `. Warning: ${warning}`;
             }
             return `<td><span class="pw-detail" tabindex="0" aria-label="${summary}">` +
                 `${headline.toFixed(1)} °C<span class="pw-detail-card" aria-hidden="true">${card}</span></span></td>`;
@@ -3386,8 +3397,9 @@
         function powerwallFansBySerial(vitals) {
             const bySerial = {};
             for (const [key, block] of Object.entries(vitals || {})) {
-                const serial = deviceSerial(key);
-                if (!serial || !block || typeof block !== 'object') continue;
+                if (!block || typeof block !== 'object') continue;
+                const serial = vitalsBlockSerial(key, block);
+                if (!serial) continue;
                 if (key.startsWith('TEPINV--')) {
                     bySerial[serial] = {
                         fans: ['A', 'B'].map(fan => ({
