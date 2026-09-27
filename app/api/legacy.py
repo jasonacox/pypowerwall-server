@@ -2180,7 +2180,8 @@ async def get_stats():
     tedapi = False
     basiclan = False
     cloudcontrol = False
-    pw3 = None
+    pw3 = False
+    pw3_unknown = False  # a v1r gateway whose hardware isn't known yet
     tedapi_mode = None
     siteid = None
 
@@ -2204,13 +2205,15 @@ async def get_stats():
             siteid = gw.site_id
 
         # Detect PW3 and TEDAPI mode from cached data
-        # pw3 is tri-state: True (PW3), False (known PW2), None (unknown/v1r cold start)
+        # pw3 is True when any gateway has PW3 hardware. It is null only while
+        # a v1r gateway's hardware is still unknown (the v1r transport says
+        # nothing about the hardware); every other case stays a bool.
         status = gateway_manager.get_gateway(gateway_id)
         if status and status.data:
             if status.data.pw3 is True:
                 pw3 = True
-            elif status.data.pw3 is False and pw3 is None:
-                pw3 = False
+            elif status.data.pw3 is None and status.data.tedapi_mode == "v1r":
+                pw3_unknown = True
             if status.data.tedapi_mode:
                 tedapi_mode = status.data.tedapi_mode
 
@@ -2335,7 +2338,7 @@ async def get_stats():
         "basiclan": basiclan,
         "cloudcontrol": cloudcontrol,
         "cloud_control": cloud_link,
-        "pw3": pw3,
+        "pw3": True if pw3 else (None if pw3_unknown else False),
         "tedapi_mode": tedapi_mode,
         "siteid": siteid,
         "counter": 0,  # Legacy field, not used

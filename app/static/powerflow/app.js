@@ -21338,17 +21338,17 @@
             .then((response) => response.json())
             .then((data) => {
                 const isPW3 = data.pw3;
-                // pw3 is now hardware (null while unknown on cold start) -
-                // default to PW3 asset, only PW2 hardware shows PW2
-                if (isPW3 === false) {
-                    e.exports = i.p + "cb0da8a8999c06735455bf5056a5cd78.png";
-                } else {
+                // pw3 is hardware-based; null only while a v1r gateway's
+                // hardware is unknown (v1r was always shown as PW3 before)
+                if (isPW3 === true || isPW3 === null) {
                     e.exports = i.p + "2cd211ee063a3608ab501624f326d61e.png";
+                } else {
+                    e.exports = i.p + "cb0da8a8999c06735455bf5056a5cd78.png";
                 }
             })
             .catch((error) => {
                 console.error("Error fetching /stats:", error);
-                e.exports = i.p + "2cd211ee063a3608ab501624f326d61e.png";
+                e.exports = i.p + "cb0da8a8999c06735455bf5056a5cd78.png";
             });
     },
     function (e, t, i) {},

@@ -127,6 +127,44 @@ def _grid_controls_supported(pw: Any) -> bool:
     return getattr(pw, "tedapi_mode", None) in _GRID_CONTROL_MODES
 
 
+def _is_pw3_hardware(tedapi_config: Any) -> Optional[bool]:
+    """Classify the battery hardware from a TEDAPI config.
+
+    Args:
+        tedapi_config: Cached TEDAPI config (``pw.tedapi.get_config()``).
+
+    Returns:
+        True for Powerwall 3 hardware (a battery block of type
+        ``Powerwall3*``/``LFPV``, or a ``1707000`` part number, which the
+        ``vin`` field starts with), False for other hardware, and None when
+        the config has no battery blocks (unknown).
+    """
+    if not isinstance(tedapi_config, dict):
+        return None
+    blocks = tedapi_config.get("battery_blocks")
+    if not isinstance(blocks, list):
+        return None
+    blocks = [b for b in blocks if isinstance(b, dict)]
+    if not blocks:
+        return None
+    for block in blocks:
+        block_type = str(block.get("type") or "")
+        part = str(
+            block.get("PackagePartNumber")
+            or block.get("partNumber")
+            or block.get("PartNumber")
+            or block.get("vin")
+            or ""
+        )
+        if (
+            "Powerwall3" in block_type
+            or block_type == "LFPV"
+            or part.startswith("1707000")
+        ):
+            return True
+    return False
+
+
 class IslandingCommandInProgressError(RuntimeError):
     """Raised when an earlier islanding command is still running after timeout."""
 
@@ -178,6 +216,9 @@ class GatewayManager:
         self._next_poll_time: Dict[
             str, float
         ] = {}  # Track when to poll next (Unix timestamp)
+        # Battery hardware per gateway (True = Powerwall 3), learned from
+        # tedapi_config; hardware can't change while the server runs.
+        self._hw_pw3: Dict[str, bool] = {}
         self._last_successful_data: Dict[
             str, PowerwallData
         ] = {}  # Keep last good data for graceful degradation
@@ -852,13 +893,12 @@ class GatewayManager:
             except (asyncio.TimeoutError, Exception) as e:
                 logger.debug(f"Site name not available for {gateway_id}: {e}")
 
-        # Cache tedapi_mode and raw pw3 flag; hardware-based pw3 is
-        # resolved after tedapi_config is fetched below to avoid a
-        # one-poll flash of "(PW3)" on v1r cold start.
-        _raw_pw3_status = None
+        # Cache tedapi_mode and the transport pw3 flag; pw3 itself is
+        # resolved from the hardware after tedapi_config is fetched below.
+        transport_pw3 = None
         try:
             if hasattr(pw, "tedapi") and pw.tedapi:
-                _raw_pw3_status = getattr(pw.tedapi, "pw3", None)
+                transport_pw3 = getattr(pw.tedapi, "pw3", None)
                 if hasattr(pw, "tedapi_mode"):
                     data.tedapi_mode = pw.tedapi_mode
         except Exception:
@@ -878,54 +918,21 @@ class GatewayManager:
         except (asyncio.TimeoutError, Exception) as e:
             logger.debug(f"TEDAPI config not available for {gateway_id}: {e}")
 
-        # Resolve pw3 from hardware config when available; for v1r keep
-        # unknown (None) until hardware arrives to avoid flash.
-        try:
-            hw_pw3 = None
-            cfg = getattr(data, "tedapi_config", None)
-            if not isinstance(cfg, dict) or not (cfg.get("battery_blocks") or []):
-                prev = self._last_successful_data.get(gateway_id)
-                cfg = getattr(prev, "tedapi_config", None) if prev else None
-            if isinstance(cfg, dict):
-                blks = cfg.get("battery_blocks") or []
-                if isinstance(blks, list) and blks:
-                    is_pw3_type = any(
-                        "Powerwall3" in (b.get("type") or "") or b.get("type") == "LFPV"
-                        for b in blks
-                        if isinstance(b, dict)
-                    )
-                    def _block_part_number(b):
-                        # Explicit part-number fields first, then vin
-                        # ("<part>--<serial>", e.g. "1707000-11-J--TG..."),
-                        # which commonly carries the part in the wild.
-                        pn = (
-                            b.get("PackagePartNumber")
-                            or b.get("partNumber")
-                            or b.get("PartNumber")
-                            or ""
-                        )
-                        if pn:
-                            return str(pn)
-                        return str(b.get("vin") or "").split("--")[0]
-
-                    is_pw3_pn = any(
-                        _block_part_number(b).startswith("1707000")
-                        for b in blks
-                        if isinstance(b, dict)
-                    )
-                    if is_pw3_type or is_pw3_pn:
-                        hw_pw3 = True
-                    else:
-                        hw_pw3 = False
-            if hw_pw3 is not None:
-                data.pw3 = bool(hw_pw3)
-            elif _raw_pw3_status is not None:
-                gw = self.gateways.get(gateway_id)
-                is_v1r = bool(gw and gw.rsa_key_configured)
-                if not is_v1r:
-                    data.pw3 = bool(_raw_pw3_status)
-        except Exception:
-            pass
+        # Resolve pw3 from the battery hardware in tedapi_config: tedapi.pw3
+        # describes the transport (the library sets it for every v1r
+        # connection, PW2 included). Hardware can't change at runtime, so the
+        # last known answer is kept per gateway and used whenever a poll's
+        # config read fails. Until the hardware is known, non-v1r connections
+        # keep the transport flag and v1r stays None (unknown).
+        hw_pw3 = _is_pw3_hardware(data.tedapi_config)
+        if hw_pw3 is not None:
+            self._hw_pw3[gateway_id] = hw_pw3
+        else:
+            hw_pw3 = self._hw_pw3.get(gateway_id)
+        if hw_pw3 is not None:
+            data.pw3 = hw_pw3
+        elif transport_pw3 is not None and data.tedapi_mode != "v1r":
+            data.pw3 = bool(transport_pw3)
 
         # Try to get grid status (for caching)
         try:
