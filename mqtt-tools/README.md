@@ -311,14 +311,15 @@ When the server starts you will see in its log:
 
 ```
 INFO  MQTT connected to 192.168.1.100:1883
-INFO  MQTT HA discovery published for gateway 'default' (19 entities)
+INFO  MQTT HA discovery published for gateway 'default' (23 entities)
 ```
 
 #### Step 3 - Find the device in Home Assistant
 
 - Go to **Settings → Devices & Services → MQTT → Devices**.
 - Look for a device named after your gateway (e.g. "Home Powerwall").
-- All 19 entities appear grouped on the device card:
+- All 23 base entities appear grouped on the device card (solar string sensors
+  are added when the gateway reports strings):
 
   | Entity | Device Class | Unit |
   |--------|-------------|------|
@@ -336,7 +337,11 @@ INFO  MQTT HA discovery published for gateway 'default' (19 entities)
   | Grid Status | - | text |
   | Operation Mode | - | text |
   | Firmware Version | diagnostic | text |
+  | Grid Export | - | text |
+  | Time Remaining | duration | h |
   | Gateway Online | connectivity | binary |
+  | Grid Connected | connectivity | binary |
+  | Grid Charging | - | binary |
 
 #### Step 4 - Add to an Energy Dashboard
 

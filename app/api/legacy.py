@@ -1410,9 +1410,12 @@ async def get_api_operation():
         "backup"           - Backup-Only mode
         "autonomous"       - Time-Based Control mode
 
-    Grid charging is polled via pw.get_grid_charging() with a hybrid cloud
-    fallback (TEDAPI has no local endpoint). None means unavailable.
-    Grid export policy is polled the same way via pw.get_grid_export().
+    Grid charging/export are only polled from the gateway connection when the
+    active pypowerwall client implements those getters (cloud/FleetAPI or
+    TEDAPI v1r/full). On plain local clients (hybrid TEDAPI or password-only)
+    the getters are library stubs that ERROR-log on every call (issue #114),
+    so the server skips them and uses the hybrid cloud-control fallback.
+    None means unavailable.
     """
     gateway_id = get_default_gateway()
     status = gateway_manager.get_gateway(gateway_id)
@@ -2178,6 +2181,7 @@ async def get_stats():
     basiclan = False
     cloudcontrol = False
     pw3 = False
+    pw3_unknown = False  # a v1r gateway whose hardware isn't known yet
     tedapi_mode = None
     siteid = None
 
@@ -2201,10 +2205,15 @@ async def get_stats():
             siteid = gw.site_id
 
         # Detect PW3 and TEDAPI mode from cached data
+        # pw3 is True when any gateway has PW3 hardware. It is null only while
+        # a v1r gateway's hardware is still unknown (the v1r transport says
+        # nothing about the hardware); every other case stays a bool.
         status = gateway_manager.get_gateway(gateway_id)
         if status and status.data:
-            if status.data.pw3:
+            if status.data.pw3 is True:
                 pw3 = True
+            elif status.data.pw3 is None and status.data.tedapi_mode == "v1r":
+                pw3_unknown = True
             if status.data.tedapi_mode:
                 tedapi_mode = status.data.tedapi_mode
 
@@ -2329,7 +2338,7 @@ async def get_stats():
         "basiclan": basiclan,
         "cloudcontrol": cloudcontrol,
         "cloud_control": cloud_link,
-        "pw3": pw3,
+        "pw3": True if pw3 else (None if pw3_unknown else False),
         "tedapi_mode": tedapi_mode,
         "siteid": siteid,
         "counter": 0,  # Legacy field, not used

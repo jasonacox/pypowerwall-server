@@ -3070,8 +3070,10 @@
                 const response = await fetch('/stats');
                 if (!response.ok) throw new Error('Failed to load stats');
                 const stats = await response.json();
-                controlIslandingAvailable = stats.pw3 === true
-                    && stats.tedapi === true && stats.tedapi_mode === 'v1r';
+                // Islanding needs the signed v1r command, which the library
+                // supports on Powerwall 2 and 3 alike: gate on the transport
+                controlIslandingAvailable = stats.tedapi === true
+                    && stats.tedapi_mode === 'v1r';
                 updateIslandingControls();
                 
                 // Site Name
@@ -3098,8 +3100,12 @@
                     mode = 'Local';
                 }
 
-                // Append PW3 qualifier if applicable
-                if (stats.pw3) {
+                // Append hardware qualifier for v1r - pw3 is now hardware-based,
+                // leave generic "TEDAPI v1r" while hardware still unknown
+                if (stats.tedapi_mode === 'v1r') {
+                    if (stats.pw3 === true) mode += ' (PW3)';
+                    else if (stats.pw3 === false) mode += ' (PW2)';
+                } else if (stats.pw3) {
                     mode += ' (PW3)';
                 }
                 

@@ -104,6 +104,67 @@ _WRITE_METHODS = frozenset(
 _ISLANDING_METHODS = frozenset({"go_off_grid", "reconnect_grid"})
 
 
+# pypowerwall client modes whose top-level get_grid_charging()/get_grid_export()
+# are actually implemented. On the plain local client (hybrid TEDAPI or
+# password-only local mode) those two getters are stubs that log an ERROR on
+# every single call and return None (issue #114) — the library is right to
+# complain when an unsupported function is called, so the server must simply
+# not call them there and use the hybrid cloud-control fallback instead.
+_GRID_CONTROL_MODES = frozenset({"v1r", "full"})
+
+
+def _grid_controls_supported(pw: Any) -> bool:
+    """True when pw.get_grid_charging()/get_grid_export() are implemented.
+
+    Availability follows the pypowerwall library client routing:
+      - cloudmode / fleetapi connections: implemented (site config API)
+      - TEDAPI v1r / full connections: implemented (gateway config read)
+      - local client (hybrid TEDAPI or password-only): stubs that log an
+        ERROR per call — caller must not invoke them (issue #114)
+    """
+    if getattr(pw, "cloudmode", False) or getattr(pw, "fleetapi", False):
+        return True
+    return getattr(pw, "tedapi_mode", None) in _GRID_CONTROL_MODES
+
+
+def _is_pw3_hardware(tedapi_config: Any) -> Optional[bool]:
+    """Classify the battery hardware from a TEDAPI config.
+
+    Args:
+        tedapi_config: Cached TEDAPI config (``pw.tedapi.get_config()``).
+
+    Returns:
+        True for Powerwall 3 hardware (a battery block of type
+        ``Powerwall3*``/``LFPV``, or a ``1707000`` part number, which the
+        ``vin`` field starts with), False for other hardware, and None when
+        the config has no battery blocks (unknown).
+    """
+    if not isinstance(tedapi_config, dict):
+        return None
+    blocks = tedapi_config.get("battery_blocks")
+    if not isinstance(blocks, list):
+        return None
+    blocks = [b for b in blocks if isinstance(b, dict)]
+    if not blocks:
+        return None
+    for block in blocks:
+        block_type = str(block.get("type") or "")
+        part = str(
+            block.get("PackagePartNumber")
+            or block.get("partNumber")
+            or block.get("PartNumber")
+            or block.get("vin")
+            or ""
+        )
+        if (
+            "Powerwall3" in block_type
+            or block_type == "LFPV"
+            or part.startswith("1707000")
+        ):
+            return True
+    return False
+
+
 class IslandingCommandInProgressError(RuntimeError):
     """Raised when an earlier islanding command is still running after timeout."""
 
@@ -155,6 +216,9 @@ class GatewayManager:
         self._next_poll_time: Dict[
             str, float
         ] = {}  # Track when to poll next (Unix timestamp)
+        # Battery hardware per gateway (True = Powerwall 3), learned from
+        # tedapi_config; hardware can't change while the server runs.
+        self._hw_pw3: Dict[str, bool] = {}
         self._last_successful_data: Dict[
             str, PowerwallData
         ] = {}  # Keep last good data for graceful degradation
@@ -829,13 +893,12 @@ class GatewayManager:
             except (asyncio.TimeoutError, Exception) as e:
                 logger.debug(f"Site name not available for {gateway_id}: {e}")
 
-        # Detect PW3 status from pypowerwall TEDAPI connection
+        # Cache tedapi_mode and the transport pw3 flag; pw3 itself is
+        # resolved from the hardware after tedapi_config is fetched below.
+        transport_pw3 = None
         try:
             if hasattr(pw, "tedapi") and pw.tedapi:
-                pw3_status = getattr(pw.tedapi, "pw3", None)
-                if pw3_status is not None:
-                    data.pw3 = bool(pw3_status)
-                # Also cache tedapi_mode
+                transport_pw3 = getattr(pw.tedapi, "pw3", None)
                 if hasattr(pw, "tedapi_mode"):
                     data.tedapi_mode = pw.tedapi_mode
         except Exception:
@@ -854,6 +917,22 @@ class GatewayManager:
                     data.tedapi_config = tedapi_config
         except (asyncio.TimeoutError, Exception) as e:
             logger.debug(f"TEDAPI config not available for {gateway_id}: {e}")
+
+        # Resolve pw3 from the battery hardware in tedapi_config: tedapi.pw3
+        # describes the transport (the library sets it for every v1r
+        # connection, PW2 included). Hardware can't change at runtime, so the
+        # last known answer is kept per gateway and used whenever a poll's
+        # config read fails. Until the hardware is known, non-v1r connections
+        # keep the transport flag and v1r stays None (unknown).
+        hw_pw3 = _is_pw3_hardware(data.tedapi_config)
+        if hw_pw3 is not None:
+            self._hw_pw3[gateway_id] = hw_pw3
+        else:
+            hw_pw3 = self._hw_pw3.get(gateway_id)
+        if hw_pw3 is not None:
+            data.pw3 = hw_pw3
+        elif transport_pw3 is not None and data.tedapi_mode != "v1r":
+            data.pw3 = bool(transport_pw3)
 
         # Try to get grid status (for caching)
         try:
@@ -891,8 +970,9 @@ class GatewayManager:
         last_data = self._last_successful_data.get(gateway_id)
         # Grid charging/export are deliberately NOT pre-filled here: unlike
         # mode (locally re-polled every cycle), these can be cloud-sourced on
-        # TEDAPI (no local endpoint), so a pre-filled value would serve an old
-        # cloud reading as fresh once the cloud link drops. /api/operation
+        # plain local/hybrid clients (library getters are stubs, #114), so a
+        # pre-filled value would serve an old cloud reading as fresh once the
+        # cloud link drops. /api/operation
         # already serves the timestamped _cloud_grid_* fallback stale-marked
         # instead — same no-silent-freeze contract as mode/reserve (#87).
         if last_data and last_data.mode and not basic_lan:
@@ -988,16 +1068,20 @@ class GatewayManager:
                     f"Reserve/time remaining not available for {gateway_id}: {e}"
                 )
 
-            # Grid charging: local TEDAPI has no endpoint (returns None) —
-            # fall back to the hybrid cloud connection when local is
-            # unavailable so TEDAPI+cloud setups still show the real state.
-            # Read directly (not via cloud_control()) so this supplementary
-            # read leaves the cloud-link health counters untouched.
+            # Grid charging: only clients that implement the getter provide a
+            # local value (cloud/FleetAPI, TEDAPI v1r/full). The plain local
+            # client's getter is a stub that logs an ERROR per call
+            # (issue #114), so it is skipped entirely — hybrid setups fall back to
+            # the cloud connection below instead. Read directly (not via
+            # cloud_control()) so this supplementary read leaves the
+            # cloud-link health counters untouched.
             try:
-                local_grid_charging = await asyncio.wait_for(
-                    loop.run_in_executor(self._executor, pw.get_grid_charging),
-                    timeout=step_timeout,
-                )
+                local_grid_charging = None
+                if _grid_controls_supported(pw):
+                    local_grid_charging = await asyncio.wait_for(
+                        loop.run_in_executor(self._executor, pw.get_grid_charging),
+                        timeout=step_timeout,
+                    )
                 if isinstance(local_grid_charging, bool):
                     data.grid_charging = local_grid_charging
                 elif local_grid_charging is None and self._cloud_control is not None:
@@ -1016,14 +1100,16 @@ class GatewayManager:
                     f"Grid charging not available for {gateway_id}: {e}"
                 )
 
-            # Grid export policy: same TEDAPI limitation and hybrid fallback
+            # Grid export policy: same availability rule and hybrid fallback
             # as grid charging above. Only real strings are cached — the
             # library contract is str | None.
             try:
-                local_grid_export = await asyncio.wait_for(
-                    loop.run_in_executor(self._executor, pw.get_grid_export),
-                    timeout=step_timeout,
-                )
+                local_grid_export = None
+                if _grid_controls_supported(pw):
+                    local_grid_export = await asyncio.wait_for(
+                        loop.run_in_executor(self._executor, pw.get_grid_export),
+                        timeout=step_timeout,
+                    )
                 if isinstance(local_grid_export, str) and local_grid_export:
                     data.grid_export = local_grid_export
                 elif local_grid_export is None and self._cloud_control is not None:

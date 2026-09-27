@@ -43,9 +43,15 @@ Text sensors:
     grid_status — "UP" | "DOWN" | "unknown"
     mode        — Operation mode string (e.g. "self_consumption", "backup")
     version     — Firmware version string
+    grid_export — Grid export policy (battery_ok | pv_only | never)
 
 Binary sensor:
     online      — Gateway connection status
+    grid_connected — Grid connected (true when grid_status=="UP", device_class=connectivity)
+    grid_charging — Grid charging allowed (true/false, generic On/Off, no device class)
+
+Numeric sensors:
+    time_remaining — Backup time remaining (h, device_class=duration)
 
 All sensors share a single "Powerwall" device block so HA groups them together.
 The device model is set from PowerwallData.version when available, otherwise
@@ -336,6 +342,41 @@ def build_discovery_payloads(
             payload_off="false",
             device_class="connectivity",
             icon="mdi:lan-connect",
+        ),
+        binary_sensor(
+            "grid_connected", "Grid Connected",
+            f"{data_prefix}/grid_connected",
+            payload_on="true",
+            payload_off="false",
+            device_class="connectivity",
+            icon="mdi:transmission-tower",
+        ),
+        # --- Grid charging (bool) ---
+        binary_sensor(
+            "grid_charging", "Grid Charging",
+            f"{data_prefix}/grid_charging",
+            payload_on="true",
+            payload_off="false",
+            device_class=None,
+            icon="mdi:battery-charging-outline",
+        ),
+        # --- Text sensor: grid export policy ---
+        sensor(
+            "grid_export", "Grid Export",
+            f"{data_prefix}/grid_export",
+            unit=None,
+            device_class=None,
+            state_class=None,  # type: ignore[arg-type]
+            icon="mdi:transmission-tower-export",
+        ),
+        # --- Time remaining (h) ---
+        sensor(
+            "time_remaining", "Time Remaining",
+            f"{data_prefix}/time_remaining",
+            unit="h",
+            device_class="duration",
+            state_class="measurement",
+            icon="mdi:timer-outline",
         ),
     ]
 

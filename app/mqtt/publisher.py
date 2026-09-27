@@ -43,6 +43,10 @@ Topic layout
     {prefix}/{gateway_id}/total_capacity  int    — total battery capacity (Wh)
     {prefix}/{gateway_id}/current_charge  int    — current battery charge (Wh)
     {prefix}/{gateway_id}/online          str    — "true" | "false"
+    {prefix}/{gateway_id}/grid_connected  str    — "true" | "false" (true when grid_status=="UP")
+    {prefix}/{gateway_id}/grid_charging   str    — "true" | "false" (grid charging allowed)
+    {prefix}/{gateway_id}/grid_export     str    — "battery_ok" | "pv_only" | "never"
+    {prefix}/{gateway_id}/time_remaining  float  — hours of backup remaining
     {prefix}/{gateway_id}/aggregates      JSON   — full aggregates dict
     {prefix}/{gateway_id}/status          JSON   — summary dict
     {prefix}/{gateway_id}/availability    str    — "online" | "offline" (LWT)
@@ -325,6 +329,12 @@ class MqttPublisher:
                         str(data.grid_status),
                         retain, qos,
                     )
+                    # Derived binary: grid_connected = true only when UP, else false (incl. unknown/SYNCING)
+                    await self._safe_publish(
+                        f"{prefix}/grid_connected",
+                        "true" if data.grid_status == "UP" else "false",
+                        retain, qos,
+                    )
 
                 if data.mode is not None:
                     await self._safe_publish(
@@ -339,6 +349,29 @@ class MqttPublisher:
                 if data.version is not None:
                     await self._safe_publish(
                         f"{prefix}/version", str(data.version), retain, qos
+                    )
+
+                if data.grid_charging is not None:
+                    await self._safe_publish(
+                        f"{prefix}/grid_charging",
+                        "true" if data.grid_charging else "false",
+                        retain, qos,
+                    )
+
+                if data.grid_export is not None:
+                    await self._safe_publish(
+                        f"{prefix}/grid_export",
+                        str(data.grid_export),
+                        retain, qos,
+                    )
+
+                time_remaining = _safe_float(data.time_remaining)
+                if time_remaining is not None:
+                    # Topic rounded to 2 decimals for HA; summary JSON keeps raw precision
+                    await self._safe_publish(
+                        f"{prefix}/time_remaining",
+                        f"{time_remaining:.2f}",
+                        retain, qos,
                     )
 
                 # Solar string topics (voltage, current, power per string)
@@ -428,9 +461,13 @@ class MqttPublisher:
                     "home": home if data.aggregates else None,
                     "powerwall": pw_power if data.aggregates else None,
                     "grid_status": data.grid_status,
+                    "grid_connected": (data.grid_status == "UP") if data.grid_status is not None else None,
                     "mode": data.mode,
                     "reserve": data.reserve,
                     "version": data.version,
+                    "grid_charging": data.grid_charging,
+                    "grid_export": data.grid_export,
+                    "time_remaining": data.time_remaining,
                 }
                 await self._safe_publish(
                     f"{prefix}/status", json.dumps(summary), retain, qos

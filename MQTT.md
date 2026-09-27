@@ -140,7 +140,14 @@ Base path: `{MQTT_TOPIC_PREFIX}/{gateway_id}/`
 | `pypowerwall/{gw}/reserve` | `20.0` | `%` |
 | `pypowerwall/{gw}/total_capacity` | `13500` | `Wh` (total battery capacity) |
 | `pypowerwall/{gw}/current_charge` | `11547` | `Wh` (current battery charge) |
+| `pypowerwall/{gw}/grid_connected` | `true` or `false` | — (true when `grid_status`==`UP`) |
+| `pypowerwall/{gw}/grid_charging` | `true` or `false` | — (grid charging allowed) |
+| `pypowerwall/{gw}/grid_export` | `battery_ok`/`pv_only`/`never` | — (grid export policy) |
+| `pypowerwall/{gw}/time_remaining` | `5.50` | `h` (backup time remaining, rounded 2 dp; `status` JSON keeps raw precision) |
 | `pypowerwall/{gw}/online` | `true` or `false` | — |
+
+Optional topics are published only when the source value is available; the
+last retained value persists until the gateway's `availability` goes `offline`.
 
 ### Lifetime energy topics (Wh accumulators)
 
@@ -259,12 +266,15 @@ Sensors to auto-discover per gateway:
 | Solar Energy Production | `energy` | `Wh` | `mdi:solar-power` |
 | Battery Energy Charged | `energy` | `Wh` | `mdi:battery-charging` |
 | Battery Energy Discharged | `energy` | `Wh` | `mdi:battery-minus` |
+| Grid Export | — | — | `mdi:transmission-tower-export` |
+| Time Remaining | `duration` | `h` | `mdi:timer-outline` |
 
 Binary sensors:
 | Sensor | HA device_class |
 |--------|----------------|
-| Grid Connected | `connectivity` |
 | Gateway Online | `connectivity` |
+| Grid Connected | `connectivity` |
+| Grid Charging | — |
 
 ---
 
@@ -517,6 +527,10 @@ pypowerwall/default/mode             self_consumption
 pypowerwall/default/reserve          20.0
 pypowerwall/default/total_capacity   13500
 pypowerwall/default/current_charge   11547
+pypowerwall/default/grid_connected   true
+pypowerwall/default/grid_charging    true
+pypowerwall/default/grid_export      battery_ok
+pypowerwall/default/time_remaining   5.50
 pypowerwall/default/online           true
 pypowerwall/default/aggregates       {...}
 pypowerwall/default/status           {...}

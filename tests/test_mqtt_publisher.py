@@ -738,3 +738,175 @@ class TestExtractEnergy:
 
     def test_none_aggregates(self):
         assert _extract_energy(None, "site", "energy_imported") is None
+
+
+class TestGridBackupTopics:
+    """Publisher coverage for grid_connected/grid_charging/grid_export/time_remaining."""
+
+    def _make_publisher(self, monkeypatch) -> MqttPublisher:
+        # Patch the settings singleton directly (see note in
+        # TestMqttPublisherEnabled._make_publisher).
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "mqtt_host", "localhost")
+        monkeypatch.setattr(settings, "mqtt_port", 1883)
+        monkeypatch.setattr(settings, "mqtt_topic_prefix", "pypowerwall")
+        monkeypatch.setattr(settings, "mqtt_qos", 1)
+        monkeypatch.setattr(settings, "mqtt_retain", True)
+        return MqttPublisher()
+
+    async def _publish(self, pub: MqttPublisher, status: GatewayStatus) -> dict:
+        """Publish one gateway snapshot and return {topic: payload}."""
+        mock_client = AsyncMock()
+        pub._client = mock_client
+        pub._connected = True
+        await pub.publish_gateway("test-gw", status)
+        return {c.args[0]: c.args[1] for c in mock_client.publish.call_args_list}
+
+    @pytest.mark.asyncio
+    async def test_grid_connected_mapping(self, monkeypatch):
+        """UP => true; DOWN/SYNCING/unknown => false; None => no topic."""
+        pub = self._make_publisher(monkeypatch)
+        for grid_status, expected in (
+            ("UP", "true"),
+            ("DOWN", "false"),
+            ("SYNCING", "false"),
+            ("unknown", "false"),
+        ):
+            mock_client = AsyncMock()
+            pub._client = mock_client
+            pub._connected = True
+            await pub.publish_gateway("test-gw", make_status(grid_status=grid_status))
+            published = {
+                c.args[0]: c.args[1] for c in mock_client.publish.call_args_list
+            }
+            assert published["pypowerwall/test-gw/grid_connected"] == expected
+
+    @pytest.mark.asyncio
+    async def test_grid_connected_absent_when_status_none(self, monkeypatch):
+        """grid_status None publishes neither grid_status nor grid_connected."""
+        pub = self._make_publisher(monkeypatch)
+        mock_client = AsyncMock()
+        pub._client = mock_client
+        pub._connected = True
+        status = make_status(grid_status=None)
+        await pub.publish_gateway("test-gw", status)
+        published = {c.args[0] for c in mock_client.publish.call_args_list}
+        assert "pypowerwall/test-gw/grid_status" not in published
+        assert "pypowerwall/test-gw/grid_connected" not in published
+
+    @pytest.mark.asyncio
+    async def test_grid_charging_bool_and_absent(self, monkeypatch):
+        """True => true, False => false, None => no topic."""
+        pub = self._make_publisher(monkeypatch)
+        for value, expected in ((True, "true"), (False, "false")):
+            mock_client = AsyncMock()
+            pub._client = mock_client
+            pub._connected = True
+            status = make_status()
+            status.data.grid_charging = value
+            await pub.publish_gateway("test-gw", status)
+            published = {
+                c.args[0]: c.args[1] for c in mock_client.publish.call_args_list
+            }
+            assert published["pypowerwall/test-gw/grid_charging"] == expected
+        mock_client = AsyncMock()
+        pub._client = mock_client
+        pub._connected = True
+        status = make_status()
+        status.data.grid_charging = None
+        await pub.publish_gateway("test-gw", status)
+        published = {c.args[0] for c in mock_client.publish.call_args_list}
+        assert "pypowerwall/test-gw/grid_charging" not in published
+
+    @pytest.mark.asyncio
+    async def test_grid_export_passthrough_and_absent(self, monkeypatch):
+        """battery_ok/pv_only/never pass through verbatim; None => no topic."""
+        pub = self._make_publisher(monkeypatch)
+        for value in ("battery_ok", "pv_only", "never"):
+            mock_client = AsyncMock()
+            pub._client = mock_client
+            pub._connected = True
+            status = make_status()
+            status.data.grid_export = value
+            await pub.publish_gateway("test-gw", status)
+            published = {
+                c.args[0]: c.args[1] for c in mock_client.publish.call_args_list
+            }
+            assert published["pypowerwall/test-gw/grid_export"] == value
+        mock_client = AsyncMock()
+        pub._client = mock_client
+        pub._connected = True
+        status = make_status()
+        status.data.grid_export = None
+        await pub.publish_gateway("test-gw", status)
+        published = {c.args[0] for c in mock_client.publish.call_args_list}
+        assert "pypowerwall/test-gw/grid_export" not in published
+
+    @pytest.mark.asyncio
+    async def test_time_remaining_rounding_and_raw_in_status(self, monkeypatch):
+        """Topic rounded to 2 dp; status JSON keeps raw precision; None => no topic."""
+        pub = self._make_publisher(monkeypatch)
+        mock_client = AsyncMock()
+        pub._client = mock_client
+        pub._connected = True
+        status = make_status()
+        status.data.time_remaining = 7.909
+        await pub.publish_gateway("test-gw", status)
+        published = {c.args[0]: c.args[1] for c in mock_client.publish.call_args_list}
+        assert published["pypowerwall/test-gw/time_remaining"] == "7.91"
+        summary = json.loads(published["pypowerwall/test-gw/status"])
+        assert summary["time_remaining"] == pytest.approx(7.909)
+
+        mock_client = AsyncMock()
+        pub._client = mock_client
+        pub._connected = True
+        status = make_status()
+        status.data.time_remaining = 0
+        await pub.publish_gateway("test-gw", status)
+        published = {c.args[0]: c.args[1] for c in mock_client.publish.call_args_list}
+        assert published["pypowerwall/test-gw/time_remaining"] == "0.00"
+
+        mock_client = AsyncMock()
+        pub._client = mock_client
+        pub._connected = True
+        status = make_status()
+        status.data.time_remaining = None
+        await pub.publish_gateway("test-gw", status)
+        published = {c.args[0] for c in mock_client.publish.call_args_list}
+        assert "pypowerwall/test-gw/time_remaining" not in published
+
+    @pytest.mark.asyncio
+    async def test_time_remaining_non_numeric_is_skipped(self, monkeypatch):
+        """A non-numeric value skips the topic but not the rest of the publish."""
+        pub = self._make_publisher(monkeypatch)
+        status = make_status()
+        status.data.time_remaining = "unknown"
+        published = await self._publish(pub, status)
+        assert "pypowerwall/test-gw/time_remaining" not in published
+        assert "pypowerwall/test-gw/status" in published
+        assert published["pypowerwall/test-gw/availability"] == "online"
+
+    @pytest.mark.asyncio
+    async def test_status_summary_new_keys(self, monkeypatch):
+        """The status JSON carries the four new keys; grid_connected is null
+        when grid_status is unknown (None)."""
+        pub = self._make_publisher(monkeypatch)
+        status = make_status(grid_status="UP")
+        status.data.grid_charging = False
+        status.data.grid_export = "pv_only"
+        status.data.time_remaining = 3.5
+        summary = json.loads(
+            (await self._publish(pub, status))["pypowerwall/test-gw/status"]
+        )
+        assert summary["grid_connected"] is True
+        assert summary["grid_charging"] is False
+        assert summary["grid_export"] == "pv_only"
+        assert summary["time_remaining"] == 3.5
+
+        summary = json.loads(
+            (await self._publish(pub, make_status(grid_status=None)))[
+                "pypowerwall/test-gw/status"
+            ]
+        )
+        assert summary["grid_connected"] is None
