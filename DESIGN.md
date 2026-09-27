@@ -334,6 +334,11 @@ async def get_aggregates():
 - Graceful degradation when gateways are offline
 - Protects pypowerwall from request storms
 
+**Exceptions**: control writes and the Tesla tariff routes call the Tesla cloud
+on demand (executor + timeout). The unauthenticated tariff GET has its own
+5-minute server-side cache with a single-flight lock, and serves the last good
+tariff when a refresh fails, so clients can't turn requests into Tesla API calls.
+
 ### 3. Exponential Backoff
 
 Failed connections use progressive retry delays to prevent hammering:

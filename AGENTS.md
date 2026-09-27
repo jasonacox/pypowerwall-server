@@ -85,6 +85,12 @@ manager = GatewayManager()
 
 All API endpoints read from the in-memory cache populated by background polling. **Never make blocking pypowerwall calls during HTTP requests**:
 
+> **Exceptions**: control writes (`POST /control/*`) and the Tesla tariff routes
+> (`/api/tesla/tariff_rate`, `/api/tesla/time_of_use_settings`) call the Tesla
+> cloud on demand, always through the executor with a timeout. The tariff GET is
+> unauthenticated, so it keeps its own 5-minute server-side cache
+> (`app/api/legacy.py`) and runs one refresh at a time.
+
 ```python
 # ✅ Correct - read from cache
 @router.get("/aggregates")

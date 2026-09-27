@@ -28,11 +28,12 @@ Control Routes (require authentication, except status):
     - GET /control/status -> Control availability (unauthenticated, {"enabled": bool})
     - POST /control/{path} -> Control operations (reserve, mode, etc.)
 
-Tesla Cloud Routes:
-    - GET /api/tesla/tariff_rate -> Cloud tariff read (cached by pypowerwall)
-    - POST /api/tesla/time_of_use_settings -> Authenticated cloud TOU tariff update
-      These routes require the dedicated Tesla cloud-control connection and may
-      return 503 when cloud control is unavailable.
+Tesla Cloud Routes (server-only; not in the pypowerwall proxy):
+    - GET /api/tesla/tariff_rate -> Site tariff via the Tesla cloud, cached
+      server-side for 5 minutes (last good value served if a refresh fails)
+    - POST /api/tesla/time_of_use_settings -> Authenticated TOU tariff update
+      Both need a Tesla cloud connection: hybrid cloud control, or a cloud /
+      FleetAPI gateway. Otherwise 503; a Tesla error is 502.
 
 Design Principles:
     1. EXPLICIT ENDPOINTS ONLY - No catch-all /api/{path:path} routes
@@ -53,11 +54,12 @@ Adding New Endpoints:
     data unless the endpoint is intentionally documented as an on-demand exception.
     Do NOT add catch-all routes - they break graceful degradation.
 """
+import asyncio
 import logging
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import psutil
 import pypowerwall
@@ -390,35 +392,69 @@ async def control_api(
     return result
 
 
-@router.get("/api/tesla/tariff_rate")
-async def tesla_tariff_rate():
-    """Return the current Tesla tariff via the dedicated cloud connection."""
+# Tesla tariff routes read and write the site's tariff through the Tesla cloud
+# (on-demand, not from the poll cache). Tariffs rarely change and the GET is
+# unauthenticated, so reads are cached server-side and one refresh runs at a
+# time: clients can't turn requests into Tesla API calls.
+_TARIFF_CACHE_TTL = 300.0  # seconds
+_tariff_cache: Dict[str, Any] = {"value": None, "time": 0.0}
+_tariff_lock = asyncio.Lock()
 
-    if not gateway_manager._cloud_control:
-        raise HTTPException(
-            status_code=503,
-            detail="Tesla cloud control connection not available",
+
+async def _tesla_cloud_call(method: str, *args, timeout: float) -> Optional[Any]:
+    """Call a pypowerwall method that needs the Tesla cloud.
+
+    Uses the hybrid cloud-control connection when one is configured, else the
+    default gateway's own connection when that gateway is in cloud or FleetAPI
+    mode. Other modes (TEDAPI, local) have no tariff API - TEDAPI would answer
+    with an empty mock - so they get a 503.
+    """
+    if gateway_manager._cloud_control:
+        return await gateway_manager.cloud_control(method, *args, timeout=timeout)
+    gateway_id = get_default_gateway()
+    gateway = gateway_manager.gateways.get(gateway_id)
+    if gateway and (gateway.cloud_mode or gateway.fleetapi):
+        return await gateway_manager.local_control(
+            gateway_id, method, *args, timeout=timeout
         )
-
-    result = await gateway_manager.cloud_control(
-        "poll",
-        "/api/tesla/tariff_rate",
-        timeout=15.0,
+    raise HTTPException(
+        status_code=503,
+        detail="Tesla cloud connection not available "
+        "(requires hybrid, cloud or FleetAPI mode)",
     )
 
+
+def _raise_for_cloud_error(result: Any, unavailable: str) -> None:
+    """Map a pypowerwall result to 503 (no answer) or 502 (Tesla error)."""
     if result is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Unable to retrieve Tesla tariff rate",
-        )
-
+        raise HTTPException(status_code=503, detail=unavailable)
     if isinstance(result, dict) and "ERROR" in result:
-        raise HTTPException(
-            status_code=502,
-            detail=result["ERROR"],
-        )
+        raise HTTPException(status_code=502, detail=result["ERROR"])
 
-    return result
+
+@router.get("/api/tesla/tariff_rate")
+async def tesla_tariff_rate():
+    """Return the site's current Tesla tariff (cloud read, cached 5 minutes).
+
+    Returns the tariff as pypowerwall's get_tariff() reports it. If a refresh
+    fails, the last good tariff is served; with none cached, 503 (no answer)
+    or 502 (Tesla error).
+    """
+    async with _tariff_lock:
+        cached = _tariff_cache["value"]
+        if (
+            cached is not None
+            and time.time() - _tariff_cache["time"] < _TARIFF_CACHE_TTL
+        ):
+            return cached
+        result = await _tesla_cloud_call("get_tariff", timeout=15.0)
+        if result is None or (isinstance(result, dict) and "ERROR" in result):
+            if cached is not None:
+                logger.warning("Tesla tariff refresh failed; serving the cached tariff")
+                return cached
+            _raise_for_cloud_error(result, "Unable to retrieve Tesla tariff rate")
+        _tariff_cache.update(value=result, time=time.time())
+        return result
 
 
 @router.post("/api/tesla/time_of_use_settings")
@@ -426,41 +462,29 @@ async def tesla_time_of_use_settings(
     data: dict,
     authorization: Optional[str] = Header(None),
 ):
-    """Update Tesla Time-of-Use tariff settings via the cloud connection."""
+    """Update the site's Time-of-Use tariff via the Tesla cloud (authenticated).
 
+    Body: {"tou_settings": {...}} following Tesla's time_of_use_settings
+    contract, which requires "tariff_content_v2" (a different schema from the
+    tariff GET returns). Only tou_settings is sent to Tesla.
+    """
     verify_control_token(authorization)
 
-    if not gateway_manager._cloud_control:
+    tou_settings = data.get("tou_settings")
+    if not isinstance(tou_settings, dict) or not tou_settings:
         raise HTTPException(
-            status_code=503,
-            detail="Tesla cloud control connection not available",
+            status_code=400, detail="'tou_settings' must be a non-empty object"
         )
-
-    if "tou_settings" not in data or not isinstance(data["tou_settings"], dict):
+    if not isinstance(tou_settings.get("tariff_content_v2"), dict):
         raise HTTPException(
             status_code=400,
-            detail="'tou_settings' must be an object",
+            detail="'tou_settings.tariff_content_v2' must be an object",
         )
 
-    result = await gateway_manager.cloud_control(
-        "post",
-        "/api/tesla/time_of_use_settings",
-        data,
-        timeout=20.0,
-    )
-
-    if result is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Unable to update Tesla time-of-use settings",
-        )
-
-    if isinstance(result, dict) and "ERROR" in result:
-        raise HTTPException(
-            status_code=502,
-            detail=result["ERROR"],
-        )
-
+    result = await _tesla_cloud_call("set_tariff", tou_settings, timeout=20.0)
+    _raise_for_cloud_error(result, "Unable to update Tesla time-of-use settings")
+    async with _tariff_lock:
+        _tariff_cache.update(value=None, time=0.0)  # next GET reads the new tariff
     return result
 
 
@@ -2105,7 +2129,6 @@ async def pw_version():
         pass
 
     return {"version": version, "vint": vint}
-
 
 
 @router.get("/pw/status")

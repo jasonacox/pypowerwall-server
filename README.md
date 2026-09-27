@@ -581,6 +581,21 @@ All existing proxy endpoints work unchanged:
 - `GET /control/status` - Control availability for the Console (`{"enabled": bool}`, unauthenticated)
 - `POST /control/{path}` - Control operations (reserve, mode, etc.)
 
+**Tesla Tariff (server-only, not in the pypowerwall proxy):**
+- `GET /api/tesla/tariff_rate` - The site's utility tariff from the Tesla cloud
+  (`code`, `name`, `utility`, `seasons`, `energy_charges`, ...). Cached for 5
+  minutes; if a refresh fails, the last good tariff is served.
+- `POST /api/tesla/time_of_use_settings` - Update the Time-of-Use tariff
+  (requires `Authorization: Bearer <PW_CONTROL_SECRET>`). Body:
+  `{"tou_settings": {"optimization_strategy": "economics", "tariff_content_v2": {...}}}`.
+  Only `tou_settings` is sent to Tesla. `tariff_content_v2` uses Tesla's v2
+  tariff schema, which differs from what the GET returns, so a read result
+  can't be posted back unchanged. Returns e.g. `{"Message": "Updated", "Code": 201}`.
+
+Both need a Tesla cloud connection: hybrid mode (a local gateway with
+`PW_EMAIL` cloud control), or a cloud or FleetAPI gateway. Otherwise they
+return `503`; a Tesla-side error returns `502`, and an invalid POST body `400`.
+
 ### Multi-Gateway Endpoints
 
 **Gateway Selection:**

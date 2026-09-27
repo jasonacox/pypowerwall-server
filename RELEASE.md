@@ -1,11 +1,6 @@
 # Release Notes
 
 ## Version History
-### Upcoming
-
-**Added:**
-- **Tesla tariff and Time-of-Use cloud API routes** — adds `GET /api/tesla/tariff_rate` for reading the current Tesla tariff and authenticated `POST /api/tesla/time_of_use_settings` for updating Time-of-Use tariff settings through the dedicated Tesla cloud-control connection. The routes depend on the pypowerwall tariff/TOU support introduced by pypowerwall PR #382. (#110)
-
 ### [0.7.0] - Upcoming
 
 **Added:**
@@ -14,6 +9,7 @@
 - Powerwall 3 temperatures come from pypowerwall 0.17.4 and later (jasonacox/pypowerwall#390; pinned 0.18.2 since 0.6.7). In cloud or basic-LAN modes, or on firmware without the signals, the column is simply hidden; a failed `/vitals` fetch never affects the rest of the panel. No API changes: the single-gateway view reads the existing `/vitals` alongside `/pod`.
 - **Powerwall fans in the console** — the Powerwall Status table gains a **Fans** column next to **Temp**. It shows each unit's fastest fan in rpm, and hovering, tapping or keyboard-focusing it opens a card with every fan: Powerwall 3 shows fans A and B with measured rpm and drive duty cycle (%), and Powerwall 2 shows the fan's actual and target rpm. Expansion packs have no inverter, so they show `--`. The data comes from the same `/vitals` read as the Temp column (no new request), matched to rows by battery serial, in both the single-gateway and multi-gateway views. The column is hidden when no unit reports a fan reading (cloud or basic-LAN modes, or firmware without the signals; PW3 fans need pypowerwall 0.18.2, pinned since 0.6.7). The Temp and Fans cells share one hover-card style (`.pw-detail`).
 - **MQTT: Tesla Remote Meter data** — wireless CT remote meters (config.json meter type `trm_mb`, surfaced by pypowerwall as `TRM--<din>` vitals blocks) are published per CT as `{prefix}/{gw}/meters/remote/{din}/ct{n}/{voltage,current,power,energy_imported,energy_exported}` (lifetime energy in whole Wh, converted from Tesla's watt-seconds) plus a full per-CT JSON topic, with matching Home Assistant auto-discovery sensors (`entity_category: diagnostic`). Needs a TEDAPI mode (Basic LAN skips vitals); absent when no remote meter is configured. Thanks @dailow (#118)
+- **Tesla tariff API** — `GET /api/tesla/tariff_rate` reads the site's utility tariff from the Tesla cloud (cached for 5 minutes, last good value served if a refresh fails), and authenticated `POST /api/tesla/time_of_use_settings` updates the Time-of-Use tariff (body `{"tou_settings": {...}}` with Tesla's v2 `tariff_content_v2`; only `tou_settings` is sent to Tesla). Works in hybrid mode (cloud control) and on cloud or FleetAPI gateways; other modes return 503. Uses pypowerwall's `get_tariff()`/`set_tariff()` (jasonacox/pypowerwall#382, in the 0.18.2 pin), and writes are serialized with the other control writes. These routes are server-only: the pypowerwall proxy doesn't have them. Thanks @nesys (#110)
 
 **Fixed:**
 - The Powerwall Status card now stacks above the cards below it, so a popover near its bottom edge isn't painted underneath the next card (each card's `backdrop-filter` creates its own stacking context).
