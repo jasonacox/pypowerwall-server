@@ -179,6 +179,14 @@ def mock_pypowerwall():
         ]
     }
     
+    # Connection-mode flags consumed by gateway_manager availability checks
+    # (e.g. _grid_controls_supported, issue #114). Default the shared mock to
+    # a PW2 hybrid-local connection — the mode whose grid-control getters are
+    # stubs in the pypowerwall library.
+    mock.tedapi_mode = "hybrid"
+    mock.cloudmode = False
+    mock.fleetapi = False
+
     # TEDAPI mock
     mock.tedapi = Mock()
     mock.tedapi.get_config.return_value = {"vin": "12345", "din": "1234567-00-A"}

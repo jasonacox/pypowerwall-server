@@ -4,8 +4,21 @@
 
 ### [0.6.7] - Upcoming
 
+**Added:**
+- **Powerwall 3 fans in `/fans/pw`** — ported from pypowerwall proxy t104 (jasonacox/pypowerwall#398) with the same keys and order. Each Powerwall 3 inverter reports two fans (A and B), numbered after any Powerwall 2/+ fans, leader first (as in `/pod`). `FANn_actual` is the measured RPM (`PCH_FanSpeed_A`/`_B`). `FANn_target` is `null` because PW3 has no target-RPM signal, and the new `FANn_duty` is the fan drive duty cycle in percent (`PCH_FanDuty_A`/`_B`). Without this port, the pypowerwall release that adds PW3 fans to `get_fan_speeds()` would have made a PW3 system return all-null `FANn_actual`/`FANn_target` in follower-first order instead of `{}`. `/fans` passes the new `TEPINV--<din>` objects through unchanged. Powerwall 2/+ output is byte-identical.
+
 **Fixed:**
-- **TEDAPI v1r hardware label on PW2** — `TEDAPI v1r (PW3)` was shown for `v1r` on PW2 because `pw3` reflected transport, not hardware. `pw3` is now derived from `tedapi_config` battery-block type (`Powerwall3*`/`LFPV`) or part number (`1707000*`) when available, and the Console shows `TEDAPI v1r (PW2)` vs `(PW3)` accordingly (non-`v1r` keeps transport-based flag; `v1r` stays `null` until hardware config arrives, preserving unknown as `null` in `/stats`).
+- **Islanding "in progress" race on Python 3.13** — a completed islanding command could still be reported as in progress for one event-loop iteration after `local_control()` returned. The in-flight marker was cleared by a done-callback, which asyncio runs on a later loop iteration, and on Python 3.13 the call returns before that. An immediate follow-up command could then be refused with "An islanding command is still in progress" (with the cooldown disabled via `PW_ISLANDING_COOLDOWN=0`), and `tests/test_islanding.py::test_local_control_raises_cooldown_error` failed on 3.13. "In progress" now means the dispatched command hasn't finished (`not future.done()`), independent of callback timing. New regression tests build the exact 3.13 state directly, so they catch it on every Python version. Docker images (Python 3.12) were not affected.
+- **Grid charging/export polling no longer spams ERROR logs on plain local connections** — the poll loop now skips `get_grid_charging()` / `get_grid_export()` for connection modes where those getters are unimplemented local stubs that log an ERROR on every call (e.g. local-only setups after upgrading to 0.6.6). Cloud/FleetAPI and TEDAPI v1r/full connections still poll and cache the values, and hybrid setups keep the cloud fallback. `GET /api/operation` output is unchanged (null when there is no source; hybrid falls back to cloud). (#114)
+
+**Changed:**
+- **pypowerwall upgraded to 0.18.2** (from 0.17.3; `requirements.txt` pin and `pyproject.toml` minimum). Docker images now ship pypowerwall 0.18.2. The server keeps the library's default `failover=True`, so connection behavior only changes where the library fixed it. Library changes that reach server users:
+  - Powerwall 3 temperatures (jasonacox/pypowerwall#390) and fan signals (jasonacox/pypowerwall#398) in `/vitals`, `/temps`, `/temps/pw`, `/fans` and `/fans/pw` on TEDAPI (V2024_06 query set), and `/temps/pw` numbering that stays aligned with `/pod` when a battery has no reading.
+  - Per-instance TEDAPI API locks (jasonacox/pypowerwall#381), so multiple gateways no longer serialize behind one another's fetches.
+  - v1r: LAN-down failover to the WiFi host (`PW_WIFI_HOST`) now actually happens, recovery probing is race-free, and several TEDAPI hardening fixes (jasonacox/pypowerwall#394, #395).
+  - Cloud: automatic recovery when Tesla re-provisions a site (jasonacox/pypowerwall#382).
+  - PW3 `get_battery_block()` fix for basic/WiFi TEDAPI mode (jasonacox/pypowerwall#396), `python -m pypowerwall register` honoring `-authpath` (jasonacox/pypowerwall#383), and the 0.18.0 packaging changes.
+- **Python 3.13 in CI** — the `pytest` and simulator workflows now test Python 3.10–3.13 (previously 3.10–3.12, which is why the race went unnoticed), and `pyproject.toml` lists the 3.13 classifier. `requires-python = ">=3.10"` already allowed 3.13 installs.
 
 ### [0.6.6] - 2026-09-13
 

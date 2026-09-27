@@ -104,6 +104,29 @@ _WRITE_METHODS = frozenset(
 _ISLANDING_METHODS = frozenset({"go_off_grid", "reconnect_grid"})
 
 
+# pypowerwall client modes whose top-level get_grid_charging()/get_grid_export()
+# are actually implemented. On the plain local client (hybrid TEDAPI or
+# password-only local mode) those two getters are stubs that log an ERROR on
+# every single call and return None (issue #114) — the library is right to
+# complain when an unsupported function is called, so the server must simply
+# not call them there and use the hybrid cloud-control fallback instead.
+_GRID_CONTROL_MODES = frozenset({"v1r", "full"})
+
+
+def _grid_controls_supported(pw: Any) -> bool:
+    """True when pw.get_grid_charging()/get_grid_export() are implemented.
+
+    Availability follows the pypowerwall library client routing:
+      - cloudmode / fleetapi connections: implemented (site config API)
+      - TEDAPI v1r / full connections: implemented (gateway config read)
+      - local client (hybrid TEDAPI or password-only): stubs that log an
+        ERROR per call — caller must not invoke them (issue #114)
+    """
+    if getattr(pw, "cloudmode", False) or getattr(pw, "fleetapi", False):
+        return True
+    return getattr(pw, "tedapi_mode", None) in _GRID_CONTROL_MODES
+
+
 class IslandingCommandInProgressError(RuntimeError):
     """Raised when an earlier islanding command is still running after timeout."""
 
@@ -940,8 +963,9 @@ class GatewayManager:
         last_data = self._last_successful_data.get(gateway_id)
         # Grid charging/export are deliberately NOT pre-filled here: unlike
         # mode (locally re-polled every cycle), these can be cloud-sourced on
-        # TEDAPI (no local endpoint), so a pre-filled value would serve an old
-        # cloud reading as fresh once the cloud link drops. /api/operation
+        # plain local/hybrid clients (library getters are stubs, #114), so a
+        # pre-filled value would serve an old cloud reading as fresh once the
+        # cloud link drops. /api/operation
         # already serves the timestamped _cloud_grid_* fallback stale-marked
         # instead — same no-silent-freeze contract as mode/reserve (#87).
         if last_data and last_data.mode and not basic_lan:
@@ -1037,16 +1061,20 @@ class GatewayManager:
                     f"Reserve/time remaining not available for {gateway_id}: {e}"
                 )
 
-            # Grid charging: local TEDAPI has no endpoint (returns None) —
-            # fall back to the hybrid cloud connection when local is
-            # unavailable so TEDAPI+cloud setups still show the real state.
-            # Read directly (not via cloud_control()) so this supplementary
-            # read leaves the cloud-link health counters untouched.
+            # Grid charging: only clients that implement the getter provide a
+            # local value (cloud/FleetAPI, TEDAPI v1r/full). The plain local
+            # client's getter is a stub that logs an ERROR per call
+            # (issue #114), so it is skipped entirely — hybrid setups fall back to
+            # the cloud connection below instead. Read directly (not via
+            # cloud_control()) so this supplementary read leaves the
+            # cloud-link health counters untouched.
             try:
-                local_grid_charging = await asyncio.wait_for(
-                    loop.run_in_executor(self._executor, pw.get_grid_charging),
-                    timeout=step_timeout,
-                )
+                local_grid_charging = None
+                if _grid_controls_supported(pw):
+                    local_grid_charging = await asyncio.wait_for(
+                        loop.run_in_executor(self._executor, pw.get_grid_charging),
+                        timeout=step_timeout,
+                    )
                 if isinstance(local_grid_charging, bool):
                     data.grid_charging = local_grid_charging
                 elif local_grid_charging is None and self._cloud_control is not None:
@@ -1065,14 +1093,16 @@ class GatewayManager:
                     f"Grid charging not available for {gateway_id}: {e}"
                 )
 
-            # Grid export policy: same TEDAPI limitation and hybrid fallback
+            # Grid export policy: same availability rule and hybrid fallback
             # as grid charging above. Only real strings are cached — the
             # library contract is str | None.
             try:
-                local_grid_export = await asyncio.wait_for(
-                    loop.run_in_executor(self._executor, pw.get_grid_export),
-                    timeout=step_timeout,
-                )
+                local_grid_export = None
+                if _grid_controls_supported(pw):
+                    local_grid_export = await asyncio.wait_for(
+                        loop.run_in_executor(self._executor, pw.get_grid_export),
+                        timeout=step_timeout,
+                    )
                 if isinstance(local_grid_export, str) and local_grid_export:
                     data.grid_export = local_grid_export
                 elif local_grid_export is None and self._cloud_control is not None:
@@ -2072,8 +2102,12 @@ class GatewayManager:
             Result of the method call, or None on error/timeout
         """
         if method in _ISLANDING_METHODS:
+            # "In progress" means the dispatched future hasn't finished. Check
+            # done() rather than relying on the clear-on-completion callback
+            # below: asyncio runs done-callbacks on a later loop iteration, and
+            # on Python 3.13 local_control() returns before that has happened.
             in_flight = self._islanding_futures.get(gateway_id)
-            if in_flight is not None:
+            if in_flight is not None and not in_flight.done():
                 raise IslandingCommandInProgressError(
                     "An islanding command is still in progress"
                 )
