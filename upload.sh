@@ -1,185 +1,183 @@
 #!/bin/bash
-echo "Build and Push jasonacox/pypowerwall-server to Docker Hub"
-echo "Usage: $0 [beta_number]"
-echo "  If beta_number is not provided, auto-increments from last beta version"
-echo ""
+# Build and push the jasonacox/pypowerwall-server image to Docker Hub.
+#
+# Usage (from anywhere in the repo):
+#   ./upload.sh                 # asks: beta or production
+#   ./upload.sh --prod [-y]     # production: :<version> and :latest
+#   ./upload.sh --beta [N] [-y] # beta: :<version>-betaN (auto-increments N)
+#   --no-cache                  # build without the layer cache
+#   -y                          # don't prompt (for a scripted release)
+#
+# Production images are built from a clean checkout of the committed HEAD
+# (never the working tree, whose .venv, dist/ and pypowerwall symlink must not
+# reach an image), refuse to overwrite a version tag already on Docker Hub, wait
+# until the pinned pypowerwall is installable from PyPI, and are smoke-tested
+# after the push. Beta images build the working tree with the local
+# pypowerwall/ (Dockerfile.beta). Any failure exits non-zero.
+set -u
 
-# Start timing
+IMAGE="jasonacox/pypowerwall-server"
+PLATFORMS="linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v8"
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+RELEASE_TYPE=""
+BETA_NUM=""
+ASSUME_YES=0
+NO_CACHE_FLAG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --prod) RELEASE_TYPE=2 ;;
+    --beta)
+      RELEASE_TYPE=1
+      if [ $# -gt 1 ] && [[ "$2" =~ ^[0-9]+$ ]]; then BETA_NUM="$2"; shift; fi ;;
+    [0-9]*) RELEASE_TYPE=1; BETA_NUM="$1" ;;  # legacy: ./upload.sh <beta_number>
+    -y) ASSUME_YES=1 ;;
+    --no-cache) NO_CACHE_FLAG="--no-cache" ;;
+    *) echo "Usage: $0 [--prod | --beta [N]] [--no-cache] [-y]" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+confirm() {
+  [ "$ASSUME_YES" -eq 1 ] && return 0
+  read -r -p "$1 [Enter] to continue or Ctrl-C to cancel..." || die "no input - cancelled"
+}
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside the pypowerwall-server git repo"
+cd "$ROOT" || exit 1
+grep -q '^name = "pypowerwall-server"' pyproject.toml 2>/dev/null || die "$ROOT is not the pypowerwall-server repo"
+
+echo "Build and Push ${IMAGE} to Docker Hub"
 BUILD_START=$(date +%s)
 
-last_path=$(basename $PWD)
-if [ "$last_path" == "pypowerwall-server" ]; then
-  # Determine version
-  SERVER_VERSION=`grep "SERVER_VERSION = " app/config.py | cut -d\" -f2`
-  
-  # Ask if this is a beta release
+SERVER_VERSION=$(sed -n 's/^SERVER_VERSION = "\([^"]*\)".*/\1/p' app/config.py)
+[ -n "$SERVER_VERSION" ] || die "could not read SERVER_VERSION from app/config.py"
+
+if [ -z "$RELEASE_TYPE" ]; then
   echo "Release Type:"
   echo "  1) Beta release (adds -betaX suffix)"
   echo "  2) Production release (version ${SERVER_VERSION})"
-  echo ""
-  read -p "Select release type [1-2]: " RELEASE_TYPE
-  
-  if [ "$RELEASE_TYPE" == "2" ]; then
-    # Production release - just use version number
-    VER="${SERVER_VERSION}"
-    CONTAINER_NAME="jasonacox/pypowerwall-server:${VER}"
-    echo ""
-    echo "Production release: ${CONTAINER_NAME}"
-  else
-    # Beta release - handle beta numbering
-    BETA_FILE=".beta_version"
-    if [ -n "$1" ]; then
-      # Use provided beta number
-      BETA_NUM="$1"
-      echo "$BETA_NUM" > "$BETA_FILE"
-    else
-      # Auto-increment beta number
-      if [ -f "$BETA_FILE" ]; then
-        BETA_NUM=$(cat "$BETA_FILE")
-        BETA_NUM=$((BETA_NUM + 1))
-      else
-        BETA_NUM=1
-      fi
-      echo "$BETA_NUM" > "$BETA_FILE"
-    fi
-    
-    VER="${SERVER_VERSION}-beta${BETA_NUM}"
-    CONTAINER_NAME="jasonacox/pypowerwall-server:${VER}"
-    echo ""
-    echo "Beta release: ${CONTAINER_NAME}"
-    echo "Beta version: ${BETA_NUM} (stored in ${BETA_FILE})"
-  fi
-
-  # Check with user before proceeding
-  echo ""
-  read -p "Build and push to Docker Hub? Press [Enter] to continue or Ctrl-C to cancel..."
-  
-  # Ask if no-cache build is desired
-  echo ""
-  read -p "Use --no-cache for build? [y/N]: " NO_CACHE_RESPONSE
-  NO_CACHE_FLAG=""
-  if [ "$NO_CACHE_RESPONSE" == "y" ] || [ "$NO_CACHE_RESPONSE" == "Y" ]; then
-    NO_CACHE_FLAG="--no-cache"
-    echo "Building with --no-cache"
-  else
-    echo "Building with cache"
-  fi
-  
-  # Select Dockerfile and determine whether to tag :latest
-  if [ "$RELEASE_TYPE" == "2" ]; then
-    DOCKERFILE="Dockerfile"
-    LATEST_TAG="-t jasonacox/pypowerwall-server:latest"
-    PYPW_DEREFFED=false
-  else
-    DOCKERFILE="Dockerfile.beta"
-    LATEST_TAG=""  # Beta builds do not overwrite :latest
-
-    # Preflight: Dockerfile.beta COPYs pypowerwall/ into the image; fail fast if missing.
-    if [ ! -d "pypowerwall" ] && [ ! -L "pypowerwall" ]; then
-      echo "ERROR: Beta builds require a 'pypowerwall/' directory or symlink in the project root."
-      echo "  Dockerfile.beta will COPY ./pypowerwall into the image."
-      echo "  Create it (e.g. ln -s /path/to/pypowerwall/pypowerwall pypowerwall) and re-run."
-      exit 1
-    fi
-
-    # Docker BuildKit does not follow symlinks that point outside the build context.
-    # If pypowerwall/ is a symlink (e.g. to ../pypowerwall/pypowerwall), dereference it
-    # into a real directory so the COPY step in Dockerfile.beta works correctly.
-    PYPW_DEREFFED=false
-    if [ -L "pypowerwall" ]; then
-      echo "* Dereferencing pypowerwall symlink for Docker build context..."
-      cp -rL pypowerwall pypowerwall_real
-      mv pypowerwall pypowerwall_symlink
-      mv pypowerwall_real pypowerwall
-      PYPW_DEREFFED=true
-      # Ensure symlink is always restored even if the build fails.
-      # Use -L (is a symlink) not -d (is a directory) so the check works even
-      # when the symlink target is temporarily missing or broken.
-      trap 'if [ "$PYPW_DEREFFED" = true ] && [ -L pypowerwall_symlink ]; then rm -rf pypowerwall; mv pypowerwall_symlink pypowerwall; fi' EXIT
-    fi
-  fi
-
-  # Build jasonacox/pypowerwall-server:x.y.z
-  echo "* BUILD ${CONTAINER_NAME} (using ${DOCKERFILE})"
-  docker buildx build -f ${DOCKERFILE} ${NO_CACHE_FLAG} --platform linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v8 --push -t ${CONTAINER_NAME} ${LATEST_TAG} .
-  echo ""
-
-  # Verify
-  echo "* VERIFY ${CONTAINER_NAME}"
-  docker buildx imagetools inspect ${CONTAINER_NAME} | grep Platform
-  echo ""
-  if [ "$RELEASE_TYPE" == "2" ]; then
-    echo "* VERIFY jasonacox/pypowerwall-server:latest"
-    docker buildx imagetools inspect jasonacox/pypowerwall-server:latest | grep Platform
-    echo ""
-  fi
-
-  # Restore pypowerwall symlink if it was dereferenced for the beta build
-  if [ "$PYPW_DEREFFED" = true ]; then
-    echo "* Restoring pypowerwall symlink..."
-    rm -rf pypowerwall
-    mv pypowerwall_symlink pypowerwall
-  fi
-
-  # Calculate build time
-  BUILD_END=$(date +%s)
-  BUILD_TIME=$((BUILD_END - BUILD_START))
-  BUILD_MIN=$((BUILD_TIME / 60))
-  BUILD_SEC=$((BUILD_TIME % 60))
-
-  # Get container sizes for each architecture
-  echo "* Fetching container sizes..."
-  
-  # Get the digest for each platform
-  AMD64_DIGEST=$(docker buildx imagetools inspect ${CONTAINER_NAME} --raw 2>/dev/null | jq -r '.manifests[] | select(.platform.architecture=="amd64") | .digest' 2>/dev/null)
-  ARM64_DIGEST=$(docker buildx imagetools inspect ${CONTAINER_NAME} --raw 2>/dev/null | jq -r '.manifests[] | select(.platform.architecture=="arm64") | .digest' 2>/dev/null)
-  ARMV7_DIGEST=$(docker buildx imagetools inspect ${CONTAINER_NAME} --raw 2>/dev/null | jq -r '.manifests[] | select(.platform.architecture=="arm" and .platform.variant=="v7") | .digest' 2>/dev/null)
-  ARMV8_DIGEST=$(docker buildx imagetools inspect ${CONTAINER_NAME} --raw 2>/dev/null | jq -r '.manifests[] | select(.platform.architecture=="arm" and .platform.variant=="v8") | .digest' 2>/dev/null)
-  # Get actual image sizes by inspecting each platform's manifest
-  if [ -n "$AMD64_DIGEST" ]; then
-    SIZE_AMD64=$(docker buildx imagetools inspect ${CONTAINER_NAME}@${AMD64_DIGEST} --raw 2>/dev/null | jq '[.layers[].size] | add' 2>/dev/null)
-    SIZE_AMD64_MB=$((SIZE_AMD64 / 1024 / 1024))
-  else
-    SIZE_AMD64_MB="N/A"
-  fi
-  
-  if [ -n "$ARM64_DIGEST" ]; then
-    SIZE_ARM64=$(docker buildx imagetools inspect ${CONTAINER_NAME}@${ARM64_DIGEST} --raw 2>/dev/null | jq '[.layers[].size] | add' 2>/dev/null)
-    SIZE_ARM64_MB=$((SIZE_ARM64 / 1024 / 1024))
-  else
-    SIZE_ARM64_MB="N/A"
-  fi
-
-  if [ -n "$ARMV7_DIGEST" ]; then
-    SIZE_ARMV7=$(docker buildx imagetools inspect ${CONTAINER_NAME}@${ARMV7_DIGEST} --raw 2>/dev/null | jq '[.layers[].size] | add' 2>/dev/null)
-    SIZE_ARMV7_MB=$((SIZE_ARMV7 / 1024 / 1024))
-  else
-    SIZE_ARMV7_MB="N/A"
-  fi
-
-  if [ -n "$ARMV8_DIGEST" ]; then
-    SIZE_ARMV8=$(docker buildx imagetools inspect ${CONTAINER_NAME}@${ARMV8_DIGEST} --raw 2>/dev/null | jq '[.layers[].size] | add' 2>/dev/null)
-    SIZE_ARMV8_MB=$((SIZE_ARMV8 / 1024 / 1024))
-  else
-    SIZE_ARMV8_MB="N/A"
-  fi
-  
-  # Print summary
-  echo "=========================================="
-  echo "          BUILD SUMMARY"
-  echo "=========================================="
-  echo "Build Time:      ${BUILD_MIN}m ${BUILD_SEC}s"
-  echo "Container Sizes:"
-  echo "  - amd64:       ${SIZE_AMD64_MB} MB"
-  echo "  - arm64:       ${SIZE_ARM64_MB} MB"
-  echo "  - arm/v7:      ${SIZE_ARMV7_MB} MB"
-  echo "  - arm/v8:      ${SIZE_ARMV8_MB} MB"
-  echo "Container Name:  ${CONTAINER_NAME}"
-  echo "Docker Hub:      https://hub.docker.com/r/jasonacox/pypowerwall-server"
-  echo "=========================================="
-
-else
-  # Exit script if last_path is not "server"
-  echo "Current directory is not 'server'."
-  exit 0
+  read -r -p "Select release type [1-2]: " RELEASE_TYPE || die "no input - cancelled"
 fi
+case "$RELEASE_TYPE" in 1|2) ;; *) die "release type must be 1 (beta) or 2 (production)" ;; esac
+
+if [ "$RELEASE_TYPE" == "2" ]; then
+  # --- Production ----------------------------------------------------------
+  VER="${SERVER_VERSION}"
+  PROJECT_VERSION=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' pyproject.toml)
+  [ "$PROJECT_VERSION" = "$VER" ] || die "pyproject.toml version ($PROJECT_VERSION) != app/config.py SERVER_VERSION ($VER)"
+  git diff --quiet HEAD -- || die "uncommitted changes to tracked files - commit them (production builds use the committed HEAD)"
+  if docker buildx imagetools inspect "${IMAGE}:${VER}" >/dev/null 2>&1; then
+    die "${IMAGE}:${VER} is already on Docker Hub - bump the version instead of overwriting a release"
+  fi
+
+  # The image runs 'pip install -r requirements.txt' from PyPI. Right after a
+  # pypowerwall upload PyPI's simple index can lag the JSON API, so wait (up to
+  # 10 minutes) until the pinned version is listed in both simple-index forms.
+  PYPOWERWALL=$(sed -n 's/^pypowerwall==\(.*\)$/\1/p' requirements.txt)
+  [ -n "$PYPOWERWALL" ] || die "could not read the pypowerwall pin from requirements.txt"
+  simple_has_version() {
+    curl -fsS https://pypi.org/simple/pypowerwall/ | grep -q "pypowerwall-${PYPOWERWALL}-py3-none-any.whl" \
+    && curl -fsS -H "Accept: application/vnd.pypi.simple.v1+json" https://pypi.org/simple/pypowerwall/ \
+       | python3 -c "import json,sys; sys.exit(0 if '${PYPOWERWALL}' in json.load(sys.stdin).get('versions', []) else 1)"
+  }
+  echo "Checking pypowerwall==${PYPOWERWALL} is installable from PyPI..."
+  for i in $(seq 1 40); do
+    simple_has_version && break
+    [ "$i" -eq 40 ] && die "pypowerwall==${PYPOWERWALL} is not on PyPI's simple index after 10 minutes"
+    echo "  not listed yet (PyPI index lag) - retrying in 15s ($i/40)"
+    sleep 15
+  done
+
+  CONTEXT="$(mktemp -d "${TMPDIR:-/tmp}/pypowerwall-server-image.XXXXXX")"
+  trap 'git worktree remove --force "$CONTEXT" >/dev/null 2>&1; rm -rf "$CONTEXT"; git worktree prune' EXIT
+  git worktree add --quiet --detach "$CONTEXT" HEAD || die "could not create a clean checkout of HEAD"
+  DOCKERFILE="Dockerfile"
+  TAGS=(-t "${IMAGE}:${VER}" -t "${IMAGE}:latest")
+  echo ""
+  echo "Production release: ${IMAGE}:${VER} and :latest from $(git rev-parse --short HEAD) (clean checkout)"
+else
+  # --- Beta ----------------------------------------------------------------
+  BETA_FILE=".beta_version"
+  if [ -z "$BETA_NUM" ]; then
+    if [ -f "$BETA_FILE" ]; then BETA_NUM=$(( $(cat "$BETA_FILE") + 1 )); else BETA_NUM=1; fi
+  fi
+  echo "$BETA_NUM" > "$BETA_FILE"
+  VER="${SERVER_VERSION}-beta${BETA_NUM}"
+  DOCKERFILE="Dockerfile.beta"
+  TAGS=(-t "${IMAGE}:${VER}")  # beta builds never overwrite :latest
+  CONTEXT="$ROOT"
+
+  # Dockerfile.beta COPYs pypowerwall/ into the image; fail fast if missing.
+  if [ ! -d "pypowerwall" ] && [ ! -L "pypowerwall" ]; then
+    die "beta builds need a 'pypowerwall/' directory or symlink in the project root (e.g. ln -s ../pypowerwall/pypowerwall pypowerwall)"
+  fi
+  # BuildKit does not follow symlinks out of the build context: dereference the
+  # pypowerwall symlink for the build and always restore it afterwards.
+  if [ -L "pypowerwall" ]; then
+    echo "* Dereferencing pypowerwall symlink for Docker build context..."
+    cp -rL pypowerwall pypowerwall_real
+    mv pypowerwall pypowerwall_symlink
+    mv pypowerwall_real pypowerwall
+    trap 'if [ -L pypowerwall_symlink ]; then rm -rf pypowerwall; mv pypowerwall_symlink pypowerwall; fi' EXIT
+  fi
+  echo ""
+  echo "Beta release: ${IMAGE}:${VER} (beta number stored in ${BETA_FILE})"
+fi
+
+confirm "Build and push to Docker Hub?"
+
+echo "* BUILD ${IMAGE}:${VER} (using ${DOCKERFILE}${NO_CACHE_FLAG:+, --no-cache})"
+docker buildx build -f "${CONTEXT}/${DOCKERFILE}" ${NO_CACHE_FLAG} --platform "${PLATFORMS}" --push \
+  "${TAGS[@]}" "${CONTEXT}" \
+  || die "docker buildx build failed - nothing was pushed (see the build output above)"
+echo ""
+
+echo "* VERIFY ${IMAGE}:${VER}"
+docker buildx imagetools inspect "${IMAGE}:${VER}" | grep Platform \
+  || die "${IMAGE}:${VER} is not on Docker Hub after the push"
+if [ "$RELEASE_TYPE" == "2" ]; then
+  echo "* VERIFY ${IMAGE}:latest"
+  LATEST_DIGEST=$(docker buildx imagetools inspect "${IMAGE}:latest" --format '{{json .Manifest.Digest}}')
+  VER_DIGEST=$(docker buildx imagetools inspect "${IMAGE}:${VER}" --format '{{json .Manifest.Digest}}')
+  [ -n "$VER_DIGEST" ] && [ "$LATEST_DIGEST" = "$VER_DIGEST" ] \
+    || die "${IMAGE}:latest does not point at ${VER}"
+  echo "  :latest = :${VER} (${VER_DIGEST})"
+
+  # Smoke test: the published image carries this server and library version
+  echo "* SMOKE TEST ${IMAGE}:${VER} (linux/amd64)"
+  REPORTED=$(docker run --rm --pull always --platform linux/amd64 --entrypoint python "${IMAGE}:${VER}" \
+    -c "import pypowerwall; from app.config import SERVER_VERSION; print(SERVER_VERSION, pypowerwall.__version__)") \
+    || die "could not run ${IMAGE}:${VER}"
+  [ "$REPORTED" = "${VER} ${PYPOWERWALL}" ] \
+    || die "image reports '${REPORTED}', expected '${VER} ${PYPOWERWALL}'"
+  echo "  server ${VER}, pypowerwall ${PYPOWERWALL}"
+fi
+echo ""
+
+# --- Summary -----------------------------------------------------------------
+BUILD_TIME=$(( $(date +%s) - BUILD_START ))
+platform_size() {
+  local digest
+  digest=$(docker buildx imagetools inspect "${IMAGE}:${VER}" --raw 2>/dev/null \
+    | jq -r ".manifests[] | select($1) | .digest" 2>/dev/null)
+  if [ -n "$digest" ]; then
+    echo "$(( $(docker buildx imagetools inspect "${IMAGE}:${VER}@${digest}" --raw 2>/dev/null \
+      | jq '[.layers[].size] | add' 2>/dev/null) / 1024 / 1024 )) MB"
+  else
+    echo "N/A"
+  fi
+}
+echo "=========================================="
+echo "          BUILD SUMMARY"
+echo "=========================================="
+echo "Build Time:      $((BUILD_TIME / 60))m $((BUILD_TIME % 60))s"
+echo "Container Sizes:"
+echo "  - amd64:       $(platform_size '.platform.architecture=="amd64"')"
+echo "  - arm64:       $(platform_size '.platform.architecture=="arm64"')"
+echo "  - arm/v7:      $(platform_size '.platform.architecture=="arm" and .platform.variant=="v7"')"
+echo "  - arm/v8:      $(platform_size '.platform.architecture=="arm" and .platform.variant=="v8"')"
+echo "Container Name:  ${IMAGE}:${VER}"
+echo "Docker Hub:      https://hub.docker.com/r/${IMAGE}"
+echo "=========================================="

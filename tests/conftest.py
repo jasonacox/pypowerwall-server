@@ -47,6 +47,7 @@ def _reset_singleton_state():
     gateway_manager._pending_configs.clear()
     gateway_manager._last_successful_data.clear()
     gateway_manager._preserve_stale_count.clear()
+    gateway_manager._hw_pw3.clear()
     # Cancel any running probe tasks before clearing references
     for task in gateway_manager._probe_tasks.values():
         if hasattr(task, "cancel"):
@@ -179,6 +180,14 @@ def mock_pypowerwall():
         ]
     }
     
+    # Connection-mode flags consumed by gateway_manager availability checks
+    # (e.g. _grid_controls_supported, issue #114). Default the shared mock to
+    # a PW2 hybrid-local connection — the mode whose grid-control getters are
+    # stubs in the pypowerwall library.
+    mock.tedapi_mode = "hybrid"
+    mock.cloudmode = False
+    mock.fleetapi = False
+
     # TEDAPI mock
     mock.tedapi = Mock()
     mock.tedapi.get_config.return_value = {"vin": "12345", "din": "1234567-00-A"}

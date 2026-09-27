@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pypowerwall-server"
-version = "0.6.6"  # Also defined in app/config.py as SERVER_VERSION
+version = "0.6.7"  # Also defined in app/config.py as SERVER_VERSION
 description = "A high-performance FastAPI-based server for monitoring and managing Tesla Powerwall systems"
 readme = "README.md"
 authors = [
@@ -20,6 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Home Automation",
     "Topic :: System :: Monitoring",
 ]
@@ -30,8 +31,7 @@ dependencies = [
     "uvicorn[standard]>=0.29.0",
     "pydantic>=2.11.0",
     "pydantic-settings>=2.9.0",
-    # Tesla tariff/TOU routes require pypowerwall 0.18.1 or later.
-    "pypowerwall>=0.18.1",
+    "pypowerwall>=0.18.2",
     "websockets>=13.1",
     "psutil>=6.1.0",
     "beautifulsoup4>=4.12.0",

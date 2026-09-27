@@ -31,6 +31,14 @@ Solar string sensors (when string_ids provided):
     strings/{AB}/current  — Paired-string current (A, sum of pair)
     strings/{AB}/power    — Paired-string power (W, sum of pair)
 
+Remote meter sensors (when remote_meters provided — Tesla wireless CT meters,
+config.json type "trm_mb", surfaced by pypowerwall as TRM--<din> vitals blocks):
+    meters/remote/{din}/ct{n}/voltage         — CT voltage (V)
+    meters/remote/{din}/ct{n}/current         — CT current (A)
+    meters/remote/{din}/ct{n}/power           — CT real power (W)
+    meters/remote/{din}/ct{n}/energy_imported — CT lifetime energy imported (Wh, total_increasing)
+    meters/remote/{din}/ct{n}/energy_exported — CT lifetime energy exported (Wh, total_increasing)
+
 Lifetime energy sensors (Wh, device_class=energy, state_class=total_increasing):
     grid_energy_imported     — Grid energy imported, lifetime (from aggregates site)
     grid_energy_exported     — Grid energy exported, lifetime (from aggregates site)
@@ -43,9 +51,15 @@ Text sensors:
     grid_status — "UP" | "DOWN" | "unknown"
     mode        — Operation mode string (e.g. "self_consumption", "backup")
     version     — Firmware version string
+    grid_export — Grid export policy (battery_ok | pv_only | never)
 
 Binary sensor:
     online      — Gateway connection status
+    grid_connected — Grid connected (true when grid_status=="UP", device_class=connectivity)
+    grid_charging — Grid charging allowed (true/false, generic On/Off, no device class)
+
+Numeric sensors:
+    time_remaining — Backup time remaining (h, device_class=duration)
 
 All sensors share a single "Powerwall" device block so HA groups them together.
 The device model is set from PowerwallData.version when available, otherwise
@@ -59,9 +73,81 @@ References
 """
 import json
 import logging
-from typing import Optional, Sequence
+import re
+from typing import Any, Dict, Optional, Sequence
 
 logger = logging.getLogger(__name__)
+
+# Matches the per-CT fields pypowerwall flattens onto each TRM--<din> vitals
+# block, e.g. "TRM_CT0_InstVoltage" -> ct index "0", metric "InstVoltage".
+_TRM_CT_FIELD_RE = re.compile(r"^TRM_CT(\d+)_(.+)$")
+
+
+def extract_remote_meters(
+    vitals: Optional[Dict[str, Any]],
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """Parse Tesla Remote Meter data out of a pw.vitals() payload.
+
+    pypowerwall surfaces each wireless CT remote meter (config.json type
+    "trm_mb") as a flat "TRM--<din>" block with "TRM_CT{n}_<Metric>" fields
+    per active CT (there can be more than one CT per meter, and more than
+    one remote meter per gateway). This regroups that flat shape into
+    {din: {ct_index: {metric: value}}}, e.g.:
+
+        {"2002069-00-E--EM4260230B10BC": {"0": {"InstVoltage": 122.7,
+                                                  "InstCurrent": 0.95,
+                                                  "InstRealPower": 158.3,
+                                                  "Location": "solar", ...}}}
+
+    Shared by ha_discovery (to build sensor definitions) and the publisher
+    (to publish the actual values) so the TRM-key parsing lives in one place.
+    Returns {} for missing/malformed input - never raises.
+    """
+    meters: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    if not isinstance(vitals, dict):
+        return meters
+    for key, block in vitals.items():
+        if (
+            not isinstance(key, str)
+            or not key.startswith("TRM--")
+            or not isinstance(block, dict)
+        ):
+            continue
+        din = key[len("TRM--") :]
+        # The DIN becomes an MQTT topic level: skip empty ones and any with
+        # topic separators/wildcards, which a broker would reject on publish
+        if not din or any(ch in din for ch in "/+#"):
+            continue
+        cts: Dict[str, Dict[str, Any]] = {}
+        for field, value in block.items():
+            if not isinstance(field, str):
+                continue
+            match = _TRM_CT_FIELD_RE.match(field)
+            if not match:
+                continue
+            ct_index, metric = match.group(1), match.group(2)
+            cts.setdefault(ct_index, {})[metric] = value
+        if cts:
+            meters[din] = cts
+    return meters
+
+
+def discovery_signature(
+    strings: Optional[Dict[str, Any]], vitals: Optional[Dict[str, Any]]
+) -> frozenset:
+    """The optional (data-dependent) entities a snapshot would announce.
+
+    Solar strings and remote-meter CTs are only discovered when a poll
+    reports them. The publisher compares this signature with what it has
+    already announced, so a family first seen on a later poll (e.g. after the
+    first poll's vitals timed out) still gets discovered.
+    """
+    signature = set()
+    if isinstance(strings, dict):
+        signature.update(("string", sid) for sid in strings)
+    for din, cts in extract_remote_meters(vitals).items():
+        signature.update(("remote_meter", din, ct) for ct in cts)
+    return frozenset(signature)
 
 
 def _device_block(gateway_id: str, gateway_name: str, version: Optional[str]) -> dict:
@@ -82,6 +168,7 @@ def build_discovery_payloads(
     ha_prefix: str,
     version: Optional[str] = None,
     string_ids: Optional[Sequence[str]] = None,
+    remote_meters: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None,
 ) -> list[tuple[str, str]]:
     """Build all HA auto-discovery (topic, payload) pairs for a gateway.
 
@@ -96,6 +183,10 @@ def build_discovery_payloads(
                        ["A1", "B1", …, "F2"] for a multi-PW3 setup).  When
                        provided, per-string and paired-rollup sensors are added
                        to the discovery payloads so HA auto-discovers them.
+        remote_meters: Tesla Remote Meter data as returned by
+                       extract_remote_meters(pw.vitals()) - {din: {ct_index:
+                       {metric: value}}}.  When provided, per-CT sensors are
+                       added so HA auto-discovers each wireless CT meter.
 
     Returns:
         List of (topic, json_payload_str) tuples, one per sensor/binary sensor.
@@ -337,6 +428,41 @@ def build_discovery_payloads(
             device_class="connectivity",
             icon="mdi:lan-connect",
         ),
+        binary_sensor(
+            "grid_connected", "Grid Connected",
+            f"{data_prefix}/grid_connected",
+            payload_on="true",
+            payload_off="false",
+            device_class="connectivity",
+            icon="mdi:transmission-tower",
+        ),
+        # --- Grid charging (bool) ---
+        binary_sensor(
+            "grid_charging", "Grid Charging",
+            f"{data_prefix}/grid_charging",
+            payload_on="true",
+            payload_off="false",
+            device_class=None,
+            icon="mdi:battery-charging-outline",
+        ),
+        # --- Text sensor: grid export policy ---
+        sensor(
+            "grid_export", "Grid Export",
+            f"{data_prefix}/grid_export",
+            unit=None,
+            device_class=None,
+            state_class=None,  # type: ignore[arg-type]
+            icon="mdi:transmission-tower-export",
+        ),
+        # --- Time remaining (h) ---
+        sensor(
+            "time_remaining", "Time Remaining",
+            f"{data_prefix}/time_remaining",
+            unit="h",
+            device_class="duration",
+            state_class="measurement",
+            icon="mdi:timer-outline",
+        ),
     ]
 
     # --- Solar string sensors (per-string + paired rollups) ---
@@ -393,5 +519,62 @@ def build_discovery_payloads(
                         icon=icon,
                         entity_category="diagnostic",
                     ))
+
+    # --- Remote meter sensors (Tesla wireless CT meters, one or more CTs
+    # per meter, one or more meters per gateway) ---
+    if remote_meters:
+        meters_prefix = f"{data_prefix}/meters/remote"
+        _REMOTE_METER_METRICS = [
+            ("voltage", "Voltage", "V", "voltage", "measurement", "mdi:lightning-bolt"),
+            ("current", "Current", "A", "current", "measurement", "mdi:current-ac"),
+            ("power", "Power", "W", "power", "measurement", "mdi:flash"),
+            (
+                "energy_imported",
+                "Energy Imported",
+                "Wh",
+                "energy",
+                "total_increasing",
+                "mdi:transmission-tower-import",
+            ),
+            (
+                "energy_exported",
+                "Energy Exported",
+                "Wh",
+                "energy",
+                "total_increasing",
+                "mdi:transmission-tower-export",
+            ),
+        ]
+        for din, cts in remote_meters.items():
+            # din looks like "2002069-00-E--EM4260230B10BC" - use the serial
+            # suffix after the last "--" for a shorter, still-unique label.
+            short_id = din.rsplit("--", 1)[-1] or din
+            din_slug = re.sub(r"[^a-z0-9]+", "_", din.lower()).strip("_")
+            for ct_index, fields in cts.items():
+                location = fields.get("Location")
+                label = f"Remote Meter {short_id} CT{ct_index}"
+                if location:
+                    label = f"{label} ({location})"
+                m_prefix = f"{meters_prefix}/{din}/ct{ct_index}"
+                for (
+                    metric,
+                    metric_label,
+                    unit,
+                    dc,
+                    state_class,
+                    icon,
+                ) in _REMOTE_METER_METRICS:
+                    results.append(
+                        sensor(
+                            f"remote_meter_{din_slug}_ct{ct_index}_{metric}",
+                            f"{label} {metric_label}",
+                            f"{m_prefix}/{metric}",
+                            unit=unit,
+                            device_class=dc,
+                            state_class=state_class,
+                            icon=icon,
+                            entity_category="diagnostic",
+                        )
+                    )
 
     return results

@@ -278,6 +278,18 @@ logged at the first successful poll and again on every change
 (`Gateway <id> firmware changed: X -> Y`), so `docker logs pypowerwall-server`
 answers "when did my Powerwall firmware update?" without extra tooling.
 
+**Timeouts:**
+```bash
+PW_TIMEOUT=10                # Local gateway request timeout in seconds (default: 10)
+```
+`PW_TIMEOUT` is the HTTP timeout pypowerwall uses for local gateway
+connections (local, hybrid, TEDAPI full/v1r). Cloud and FleetAPI connections
+use the library default (5 s). Each poll step waits `max(5, PW_TIMEOUT + 2)`
+seconds (aggregates, vitals and strings: `max(10, PW_TIMEOUT + 2)`), so the
+library times out before the server gives up on the worker thread, and a whole
+poll is capped at `max(30, 3 × PW_CACHE_EXPIRE, 4 × (PW_TIMEOUT + 2))` seconds.
+Raise it if a slow local gateway logs poll timeouts.
+
 **Time-Series Storage (Daily Energy Stats):**
 ```bash
 PW_TIMESERIES_RETENTION=24h            # Raw 5s sample retention (default: 24h)
@@ -531,7 +543,7 @@ All existing proxy endpoints work unchanged:
 
 **Fan Information:**
 - `GET /fans` - All fan status
-- `GET /fans/pw` - Powerwall fans only
+- `GET /fans/pw` - Powerwall fans only (`FANn_actual`/`FANn_target` RPM; Powerwall 3 adds `FANn_duty` %, with `FANn_target` null)
 
 **Data Export:**
 - `GET /csv` - CSV format for Telegraf/InfluxDB

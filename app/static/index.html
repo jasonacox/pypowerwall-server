@@ -1181,6 +1181,10 @@
         /* Powerwall Health Card */
         .powerwall-card {
             grid-column: span 12;
+            /* Each card's backdrop-filter makes a stacking context; lift this one
+               so a temperature card near the bottom isn't painted under the next */
+            position: relative;
+            z-index: 2;
         }
         
         .powerwall-table {
@@ -1217,6 +1221,63 @@
         .powerwall-name {
             font-weight: 600;
             color: var(--text-primary);
+        }
+
+        /* Temp / Fans cells: headline value, full breakdown on hover, keyboard
+           focus, or tap (tabindex makes the cell focusable on touch screens) */
+        .pw-detail {
+            position: relative;
+            white-space: nowrap;
+            cursor: help;
+            border-bottom: 1px dotted var(--text-muted);
+        }
+
+        .pw-detail:focus {
+            outline: none;
+        }
+
+        .pw-detail:focus-visible {
+            outline: 1px solid var(--accent-blue);
+            outline-offset: 3px;
+            border-radius: 2px;
+        }
+
+        .pw-detail-card {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: calc(100% + 6px);
+            z-index: 10;
+            min-width: 210px;
+            padding: 8px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+            font-size: 0.9em;
+            color: var(--text-primary);
+            cursor: default;
+        }
+
+        .pw-detail:hover .pw-detail-card,
+        .pw-detail:focus .pw-detail-card {
+            display: block;
+        }
+
+        .pw-detail-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 2px 0;
+        }
+
+        .pw-detail-label {
+            color: var(--text-secondary);
+        }
+
+        .pw-detail-warn {
+            margin-top: 6px;
+            color: var(--accent-yellow);
         }
 
         .powerwall-expansion-row td {
@@ -3009,8 +3070,10 @@
                 const response = await fetch('/stats');
                 if (!response.ok) throw new Error('Failed to load stats');
                 const stats = await response.json();
-                controlIslandingAvailable = stats.pw3 === true
-                    && stats.tedapi === true && stats.tedapi_mode === 'v1r';
+                // Islanding needs the signed v1r command, which the library
+                // supports on Powerwall 2 and 3 alike: gate on the transport
+                controlIslandingAvailable = stats.tedapi === true
+                    && stats.tedapi_mode === 'v1r';
                 updateIslandingControls();
                 
                 // Site Name
@@ -3037,8 +3100,12 @@
                     mode = 'Local';
                 }
 
-                // Append PW3 qualifier if applicable
-                if (stats.pw3) {
+                // Append hardware qualifier for v1r - pw3 is now hardware-based,
+                // leave generic "TEDAPI v1r" while hardware still unknown
+                if (stats.tedapi_mode === 'v1r') {
+                    if (stats.pw3 === true) mode += ' (PW3)';
+                    else if (stats.pw3 === false) mode += ' (PW2)';
+                } else if (stats.pw3) {
                     mode += ' (PW3)';
                 }
                 
@@ -3192,6 +3259,14 @@
             return parts[parts.length - 1];
         }
 
+        // Serial of a vitals block, matched the way /pod matches TEPOD blocks:
+        // the block's serialNumber field when present, else the key's last part
+        // (live PW3 TEDAPI vitals have no serialNumber, only the key carries it)
+        function vitalsBlockSerial(key, block) {
+            const serial = block && block.serialNumber;
+            return typeof serial === 'string' && serial ? serial : deviceSerial(key);
+        }
+
         // Return rows in the physical hierarchy: each expansion follows its
         // Powerwall 3 leader, even when system_status lists it later.
         function arrangePowerwallRows(items, tedapiConfig) {
@@ -3246,7 +3321,144 @@
             return rows;
         }
 
-        function powerwallRowHtml(pw, displayName, isExpansion, isPw3System) {
+        // Temperatures (degrees C) from pypowerwall vitals, keyed by battery serial
+        // (the last "--" part of the device key, as /pod matches TEPOD blocks).
+        // Powerwall 3: pack max/min and shunt on each battery's TEPOD block, plus
+        // the enclosure ambient on each unit's TEPINV block (expansion packs have
+        // no inverter). Powerwall 2: the thermal controller ambient (TETHC).
+        // PCH_heatsinkTemp is not shown: it reads a constant on current firmware.
+        function powerwallTempsBySerial(vitals) {
+            const bySerial = {};
+            const entry = serial => (bySerial[serial] = bySerial[serial] || {});
+            for (const [key, block] of Object.entries(vitals || {})) {
+                if (!block || typeof block !== 'object') continue;
+                const serial = vitalsBlockSerial(key, block);
+                if (!serial) continue;
+                if (key.startsWith('TEPOD--')) {
+                    Object.assign(entry(serial), {
+                        packMax: block.HVP_PackTempMax,
+                        packMin: block.HVP_PackTempMin,
+                        shunt: block.HVP_ShuntTemperature,
+                        overTempEvents: (block.BMS_LOG_tempOutOfBounds || 0) +
+                            (block.BMS_LOG_tempOutOfBoundsCharge || 0),
+                    });
+                } else if (key.startsWith('TEPINV--')) {
+                    entry(serial).ambient = block.PCH_AmbientTemp;
+                } else if (key.startsWith('TETHC--')) {
+                    entry(serial).controller = block.THC_AmbientTemp;
+                }
+            }
+            return bySerial;
+        }
+
+        function isReading(value) {
+            return typeof value === 'number' && Number.isFinite(value);
+        }
+
+        // Headline temperature for a row: hottest pack reading (PW3), else the
+        // thermal controller ambient (PW2) - the same value temps() reports
+        function headlineTemp(temps) {
+            if (!temps) return null;
+            if (isReading(temps.packMax)) return temps.packMax;
+            return isReading(temps.controller) ? temps.controller : null;
+        }
+
+        function powerwallTempCellHtml(temps) {
+            const headline = headlineTemp(temps);
+            if (headline === null) return '<td>--</td>';
+            const rows = [
+                ['Pack max', temps.packMax],
+                ['Pack min', temps.packMin],
+                ['Shunt', temps.shunt],
+                ['Inverter ambient', temps.ambient],
+                ['Controller ambient', temps.controller],
+            ].filter(([, value]) => isReading(value));
+            let summary = rows.map(([label, value]) => `${label} ${value.toFixed(1)} °C`).join(', ');
+            let card = rows.map(([label, value]) =>
+                `<div class="pw-detail-row"><span class="pw-detail-label">${label}</span>` +
+                `<span>${value.toFixed(1)} °C</span></div>`).join('');
+            if (temps.overTempEvents > 0) {
+                const warning = `${temps.overTempEvents} over-temperature ` +
+                    `event${temps.overTempEvents === 1 ? '' : 's'}`;
+                card += `<div class="pw-detail-warn">⚠ ${warning}</div>`;
+                summary += `. Warning: ${warning}`;
+            }
+            return `<td><span class="pw-detail" tabindex="0" aria-label="${summary}">` +
+                `${headline.toFixed(1)} °C<span class="pw-detail-card" aria-hidden="true">${card}</span></span></td>`;
+        }
+
+        // True when any row has a temperature - otherwise the column is hidden
+        // (cloud / basic-LAN modes, or firmware without the signals)
+        function anyPowerwallTemps(rows, tempsBySerial) {
+            return rows.some(({ item }) =>
+                headlineTemp(tempsBySerial[deviceSerial(item.PackageSerialNumber)]) !== null);
+        }
+
+        // Fans from pypowerwall vitals, keyed by battery serial like temperatures.
+        // Powerwall 3: two inverter fans (A, B) on each unit's TEPINV block, measured
+        // RPM plus drive duty cycle (%); there is no target RPM. Expansion packs have
+        // no inverter, so no fans. Powerwall 2: one fan on the PVAC block, actual and
+        // target RPM (same signals as /fans/pw). TEPINV wins over a PVAC block with
+        // the same serial, whatever the key order.
+        function powerwallFansBySerial(vitals) {
+            const bySerial = {};
+            for (const [key, block] of Object.entries(vitals || {})) {
+                if (!block || typeof block !== 'object') continue;
+                const serial = vitalsBlockSerial(key, block);
+                if (!serial) continue;
+                if (key.startsWith('TEPINV--')) {
+                    bySerial[serial] = {
+                        fans: ['A', 'B'].map(fan => ({
+                            label: `Fan ${fan}`,
+                            rpm: block[`PCH_FanSpeed_${fan}`],
+                            duty: block[`PCH_FanDuty_${fan}`],
+                        })),
+                    };
+                } else if (key.startsWith('PVAC--') && !bySerial[serial] &&
+                    (isReading(block.PVAC_Fan_Speed_Actual_RPM) ||
+                        isReading(block.PVAC_Fan_Speed_Target_RPM))) {
+                    // PW3 vitals also carry a PVAC block (same serial, no fan
+                    // readings): it must never replace that unit's TEPINV fans
+                    bySerial[serial] = {
+                        fans: [{ label: 'Fan', rpm: block.PVAC_Fan_Speed_Actual_RPM }],
+                        target: block.PVAC_Fan_Speed_Target_RPM,
+                    };
+                }
+            }
+            return bySerial;
+        }
+
+        // Headline for a row: the fastest fan's measured RPM (0 is a real reading)
+        function headlineFanRpm(fans) {
+            const rpms = (fans?.fans || []).map(fan => fan.rpm).filter(isReading);
+            return rpms.length ? Math.max(...rpms) : null;
+        }
+
+        function powerwallFanCellHtml(fans) {
+            const headline = headlineFanRpm(fans);
+            if (headline === null) return '<td>--</td>';
+            const rpmText = value => (isReading(value) ? `${Math.round(value)} rpm` : '--');
+            const rows = fans.fans
+                .filter(fan => isReading(fan.rpm) || isReading(fan.duty))
+                .map(fan => [fan.label, rpmText(fan.rpm) +
+                    (isReading(fan.duty) ? ` · ${fan.duty.toFixed(1)}%` : '')]);
+            if (isReading(fans.target)) rows.push(['Target', rpmText(fans.target)]);
+            const summary = rows.map(([label, value]) => `${label} ${value}`).join(', ');
+            const card = rows.map(([label, value]) =>
+                `<div class="pw-detail-row"><span class="pw-detail-label">${label}</span>` +
+                `<span>${value}</span></div>`).join('');
+            return `<td><span class="pw-detail" tabindex="0" aria-label="${summary}">` +
+                `${rpmText(headline)}<span class="pw-detail-card" aria-hidden="true">${card}</span></span></td>`;
+        }
+
+        // True when any row has a fan reading - otherwise the column is hidden
+        // (cloud / basic-LAN modes, or a library/firmware without the signals)
+        function anyPowerwallFans(rows, fansBySerial) {
+            return rows.some(({ item }) =>
+                headlineFanRpm(fansBySerial[deviceSerial(item.PackageSerialNumber)]) !== null);
+        }
+
+        function powerwallRowHtml(pw, displayName, isExpansion, isPw3System, tempsBySerial = null, fansBySerial = null) {
             const capacity = pw.POD_nom_full_pack_energy || pw.nominal_full_pack_energy;
             const capacityKwh = capacity ? (capacity / 1000).toFixed(2) : '--';
             const capacityNum = capacity ? capacity / 1000 : 0;
@@ -3272,7 +3484,10 @@
                 `<td>${capacityKwh} kWh <span class="${capacityClass}">(${capacityPct}%)</span></td>` +
                 `<td>${voltage} V</td>` +
                 `<td>${power} kW<span class="energy-arrow ${powerArrowClass}">${powerArrow}</span></td>` +
-                `<td>${frequency} Hz</td></tr>`;
+                `<td>${frequency} Hz</td>` +
+                (tempsBySerial ? powerwallTempCellHtml(tempsBySerial[deviceSerial(pw.PackageSerialNumber)]) : '') +
+                (fansBySerial ? powerwallFanCellHtml(fansBySerial[deviceSerial(pw.PackageSerialNumber)]) : '') +
+                '</tr>';
         }
 
         async function loadPowerwalls() {
@@ -3281,6 +3496,10 @@
             if (!isMulti) {
             // Single gateway — full detail view via /pod (unchanged)
             try {
+                // Vitals (temperatures) are optional: a failed fetch only hides the column
+                const vitalsPromise = fetch('/vitals')
+                    .then(r => (r.ok ? r.json() : {}))
+                    .catch(() => ({}));
                 const response = await fetch('/pod');
                 if (!response.ok) throw new Error('Failed to load pod data');
                 const pod = await response.json();
@@ -3310,6 +3529,12 @@
                     return;
                 }
                 
+                const vitals = await vitalsPromise;
+                const tempsBySerial = powerwallTempsBySerial(vitals);
+                const showTemps = anyPowerwallTemps(pwRows, tempsBySerial);
+                const fansBySerial = powerwallFansBySerial(vitals);
+                const showFans = anyPowerwallFans(pwRows, fansBySerial);
+
                 // Build table
                 let html = '<table class="powerwall-table"><thead><tr>';
                 html += '<th>Powerwall</th>';
@@ -3318,16 +3543,20 @@
                 html += '<th>Voltage</th>';
                 html += '<th>Power</th>';
                 html += '<th>Frequency</th>';
+                if (showTemps) html += '<th>Temp</th>';
+                if (showFans) html += '<th>Fans</th>';
                 html += '</tr></thead><tbody>';
-                
+
                 const SPEC_CAPACITY = 13.5; // kWh per Powerwall
-                
+
                 pwRows.forEach(({ item: pw, isExpansion }) => {
                     html += powerwallRowHtml(
                         pw,
                         pw.name,
                         isExpansion,
-                        gatewayMeta['default']?.pw3 || window._systemPw3 || false
+                        gatewayMeta['default']?.pw3 || window._systemPw3 || false,
+                        showTemps ? tempsBySerial : null,
+                        showFans ? fansBySerial : null
                     );
                 });
                 
@@ -3521,17 +3750,24 @@
                     html += `<div class="gateway-section-header">${gwName}</div>`;
                     if (!blocks.length) { html += '<div class="no-strings">No Powerwall data</div>'; continue; }
                     // Battery table (same columns as single-gateway view)
-                    html += '<table class="powerwall-table"><thead><tr><th>Powerwall</th><th>Model</th><th>Capacity</th><th>Voltage</th><th>Power</th><th>Frequency</th></tr></thead><tbody>';
                     const rows = arrangePowerwallRows(
                         blocks.map((block, i) => ({ ...block, name: `PW${i + 1}` })),
                         status.data.tedapi_config
                     );
+                    const tempsBySerial = powerwallTempsBySerial(status.data.vitals);
+                    const showTemps = anyPowerwallTemps(rows, tempsBySerial);
+                    const fansBySerial = powerwallFansBySerial(status.data.vitals);
+                    const showFans = anyPowerwallFans(rows, fansBySerial);
+                    html += '<table class="powerwall-table"><thead><tr><th>Powerwall</th><th>Model</th><th>Capacity</th><th>Voltage</th><th>Power</th><th>Frequency</th>' +
+                        (showTemps ? '<th>Temp</th>' : '') + (showFans ? '<th>Fans</th>' : '') + '</tr></thead><tbody>';
                     rows.forEach(({ item: block, isExpansion }) => {
                         html += powerwallRowHtml(
                             block,
                             block.name,
                             isExpansion,
-                            gatewayMeta[gwId]?.pw3 || false
+                            gatewayMeta[gwId]?.pw3 || false,
+                            showTemps ? tempsBySerial : null,
+                            showFans ? fansBySerial : null
                         );
                     });
                     html += '</tbody></table>';

@@ -772,12 +772,12 @@ Environment Variables:
   PW_HOST            Powerwall gateway IP (default: 192.168.91.1)
   PW_GW_PWD          Gateway Wi-Fi password (required for TEDAPI)
   PW_EMAIL           Tesla account email (for Cloud/FleetAPI)
-  PW_PASSWORD        Tesla account password (deprecated, use setup)
+  PW_PASSWORD        Customer password for local API (PW2 local / PW3 Basic LAN)
   PW_AUTH_PATH        Path to store authentication files (default: .)
   PW_STYLE           Theme style (default: clear)
   PW_SITEID          Specific site ID (for multiple sites)
   PW_CACHE_EXPIRE    Polling interval in seconds (default: 5)
-  PW_TIMEOUT         Request timeout in seconds (default: 5)
+  PW_TIMEOUT         Local gateway request timeout in seconds (default: 10)
   PW_DEBUG           Enable debug logging (default: false)
   PW_PORT            Server port (default: 8675)
   PW_BIND_ADDRESS    Server bind address (default: 0.0.0.0)
@@ -805,7 +805,11 @@ For more information, visit: https://github.com/jasonacox/pypowerwall-server
     parser.add_argument("--style", help="UI theme style")
     parser.add_argument("--siteid", help="Specific site ID")
     parser.add_argument("--cache-expire", type=int, help="Polling interval in seconds")
-    parser.add_argument("--timeout", type=int, help="Request timeout in seconds")
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        help="Local gateway request timeout in seconds (default: 10)",
+    )
     parser.add_argument("--port", type=int, help="Server port (default: 8675)")
     parser.add_argument(
         "--bind-address",

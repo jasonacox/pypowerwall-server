@@ -140,7 +140,14 @@ Base path: `{MQTT_TOPIC_PREFIX}/{gateway_id}/`
 | `pypowerwall/{gw}/reserve` | `20.0` | `%` |
 | `pypowerwall/{gw}/total_capacity` | `13500` | `Wh` (total battery capacity) |
 | `pypowerwall/{gw}/current_charge` | `11547` | `Wh` (current battery charge) |
+| `pypowerwall/{gw}/grid_connected` | `true` or `false` | — (true when `grid_status`==`UP`) |
+| `pypowerwall/{gw}/grid_charging` | `true` or `false` | — (grid charging allowed) |
+| `pypowerwall/{gw}/grid_export` | `battery_ok`/`pv_only`/`never` | — (grid export policy) |
+| `pypowerwall/{gw}/time_remaining` | `5.50` | `h` (backup time remaining, rounded 2 dp; `status` JSON keeps raw precision) |
 | `pypowerwall/{gw}/online` | `true` or `false` | — |
+
+Optional topics are published only when the source value is available; the
+last retained value persists until the gateway's `availability` goes `offline`.
 
 ### Lifetime energy topics (Wh accumulators)
 
@@ -209,6 +216,27 @@ string of a pair is present (e.g. A without B), no AB rollup is emitted.
 
 Published `online` on each successful poll; `offline` published as a **Last Will and Testament (LWT)** message so HA marks sensors unavailable if the server crashes.
 
+### Remote meter topics (Tesla wireless CT meters)
+
+Published when the gateway has one or more Tesla Remote Meters configured
+(config.json meter type `trm_mb`) — a wireless CT meter, distinct from the
+solar strings above. `{din}` is the meter's own device identifier; `{n}` is
+the CT index (a meter can report more than one CT, and a gateway can have
+more than one meter):
+
+| Topic | Value | Unit |
+|-------|-------|------|
+| `pypowerwall/{gw}/meters/remote/{din}/ct{n}/voltage` | `122.68` | `V` |
+| `pypowerwall/{gw}/meters/remote/{din}/ct{n}/current` | `0.95` | `A` |
+| `pypowerwall/{gw}/meters/remote/{din}/ct{n}/power` | `158.3` | `W` |
+| `pypowerwall/{gw}/meters/remote/{din}/ct{n}/energy_imported` | `12074` | `Wh` (lifetime, whole Wh, converted from Tesla's watt-seconds) |
+| `pypowerwall/{gw}/meters/remote/{din}/ct{n}/energy_exported` | `48` | `Wh` (lifetime, whole Wh, converted from Tesla's watt-seconds) |
+| `pypowerwall/{gw}/meters/remote/{din}/ct{n}` | `{"InstVoltage": ..., "InstCurrent": ..., "InstRealPower": ..., "Location": "solar", ...}` | JSON |
+
+Sourced from `pw.vitals()`'s `TRM--{din}` blocks — requires pypowerwall
+≥ 0.18.2 in TEDAPI modes (Basic LAN skips vitals) and a gateway with at least
+one remote meter configured; silently absent otherwise, same as solar strings.
+
 ---
 
 ## Home Assistant Auto-Discovery
@@ -259,12 +287,30 @@ Sensors to auto-discover per gateway:
 | Solar Energy Production | `energy` | `Wh` | `mdi:solar-power` |
 | Battery Energy Charged | `energy` | `Wh` | `mdi:battery-charging` |
 | Battery Energy Discharged | `energy` | `Wh` | `mdi:battery-minus` |
+| Grid Export | — | — | `mdi:transmission-tower-export` |
+| Time Remaining | `duration` | `h` | `mdi:timer-outline` |
 
 Binary sensors:
 | Sensor | HA device_class |
 |--------|----------------|
-| Grid Connected | `connectivity` |
 | Gateway Online | `connectivity` |
+| Grid Connected | `connectivity` |
+| Grid Charging | — |
+
+Remote meter sensors (one set of five per CT, `entity_category: diagnostic`,
+named e.g. `Remote Meter EM…B10BC CT0 (solar) Voltage`, unique ID
+`pypowerwall_{gw}_remote_meter_{din_slug}_ct{n}_{metric}` where `din_slug` is
+the DIN lower-cased with non-alphanumerics replaced by `_`):
+| Sensor | HA device_class | Unit | state_class |
+|--------|----------------|------|-------------|
+| Voltage | `voltage` | `V` | `measurement` |
+| Current | `current` | `A` | `measurement` |
+| Power | `power` | `W` | `measurement` |
+| Energy Imported | `energy` | `Wh` | `total_increasing` |
+| Energy Exported | `energy` | `Wh` | `total_increasing` |
+
+Solar-string and remote-meter sensors are discovered when a poll first
+reports them, including on a later poll if the first one didn't.
 
 ---
 
@@ -517,6 +563,10 @@ pypowerwall/default/mode             self_consumption
 pypowerwall/default/reserve          20.0
 pypowerwall/default/total_capacity   13500
 pypowerwall/default/current_charge   11547
+pypowerwall/default/grid_connected   true
+pypowerwall/default/grid_charging    true
+pypowerwall/default/grid_export      battery_ok
+pypowerwall/default/time_remaining   5.50
 pypowerwall/default/online           true
 pypowerwall/default/aggregates       {...}
 pypowerwall/default/status           {...}

@@ -43,6 +43,10 @@ Topic layout
     {prefix}/{gateway_id}/total_capacity  int    — total battery capacity (Wh)
     {prefix}/{gateway_id}/current_charge  int    — current battery charge (Wh)
     {prefix}/{gateway_id}/online          str    — "true" | "false"
+    {prefix}/{gateway_id}/grid_connected  str    — "true" | "false" (true when grid_status=="UP")
+    {prefix}/{gateway_id}/grid_charging   str    — "true" | "false" (grid charging allowed)
+    {prefix}/{gateway_id}/grid_export     str    — "battery_ok" | "pv_only" | "never"
+    {prefix}/{gateway_id}/time_remaining  float  — hours of backup remaining
     {prefix}/{gateway_id}/aggregates      JSON   — full aggregates dict
     {prefix}/{gateway_id}/status          JSON   — summary dict
     {prefix}/{gateway_id}/availability    str    — "online" | "offline" (LWT)
@@ -64,12 +68,28 @@ Topic layout
     {prefix}/{gateway_id}/strings/{AB,CD,EF}/power    float — W (sum of pair)
 
     Multi-PW3 single-gateway: also AB1/CD1/EF1, AB2/CD2/EF2 etc.
+
+    {prefix}/{gateway_id}/meters/remote/{din}/ct{n}/voltage          float — V
+    {prefix}/{gateway_id}/meters/remote/{din}/ct{n}/current          float — A
+    {prefix}/{gateway_id}/meters/remote/{din}/ct{n}/power            float — W
+    {prefix}/{gateway_id}/meters/remote/{din}/ct{n}/energy_imported  int   — Wh, lifetime
+    {prefix}/{gateway_id}/meters/remote/{din}/ct{n}/energy_exported  int   — Wh, lifetime
+    {prefix}/{gateway_id}/meters/remote/{din}/ct{n}                  JSON  — full per-CT data
+
+    Remote-meter lifetime energy is converted from Tesla's watt-seconds to
+    whole Wh; the per-CT JSON includes Location ("site" / "solar" / "load").
+
+    Tesla Remote Meter: a wireless CT meter (config.json type "trm_mb").
+    {din} is the meter's own device identifier; {n} is the CT index (a meter
+    can report more than one CT, and a gateway can have more than one meter).
+    Sourced from pw.vitals()'s TRM--<din> blocks (pypowerwall >= 0.18.2 in
+    TEDAPI modes; Basic LAN skips vitals) - absent when no remote meter.
 """
 import asyncio
 import json
 import logging
 import ssl
-from typing import List, Optional, Set
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +102,9 @@ class MqttPublisher:
         self._connected: bool = False    # True only while inside active async with
         self._connection_task: Optional[asyncio.Task] = None
         self._shutdown: bool = False
-        self._discovery_sent: Set[str] = set()   # gateway IDs with discovery published
+        # Per gateway: the optional entities (strings, remote-meter CTs)
+        # already announced; a gateway key means base discovery was sent
+        self._discovery_sent: Dict[str, frozenset] = {}
         self._backoff: int = 2           # current reconnect backoff in seconds
 
     # ------------------------------------------------------------------
@@ -156,7 +178,10 @@ class MqttPublisher:
             return
         try:
             from app.config import settings  # late import
-            from app.mqtt.ha_discovery import build_discovery_payloads
+            from app.mqtt.ha_discovery import (
+                build_discovery_payloads,
+                extract_remote_meters,
+            )
 
             gateway_name = (
                 status.gateway.name
@@ -169,6 +194,10 @@ class MqttPublisher:
             if status.data and status.data.strings and isinstance(status.data.strings, dict):
                 string_ids = list(status.data.strings.keys())
 
+            remote_meters = (
+                extract_remote_meters(status.data.vitals) if status.data else {}
+            )
+
             payloads = build_discovery_payloads(
                 gateway_id=gateway_id,
                 gateway_name=gateway_name,
@@ -176,6 +205,7 @@ class MqttPublisher:
                 ha_prefix=settings.mqtt_ha_prefix,
                 version=version,
                 string_ids=string_ids,
+                remote_meters=remote_meters or None,
             )
             for topic, payload in payloads:
                 await self._safe_publish(topic, payload, retain=True, qos=settings.mqtt_qos)
@@ -200,13 +230,23 @@ class MqttPublisher:
         if not self._connected or self._client is None:
             return
 
-        # Send HA discovery payloads the first time we see this gateway
-        # (also re-sent after reconnect since _discovery_sent is cleared there)
-        if gateway_id not in self._discovery_sent:
+        # Send HA discovery payloads the first time we see this gateway, and
+        # again whenever a snapshot reports strings or remote-meter CTs not
+        # announced yet (re-sent after reconnect too: _discovery_sent is
+        # cleared there). Storing the union means a later snapshot without
+        # them (e.g. a vitals timeout) doesn't re-send.
+        from app.mqtt.ha_discovery import discovery_signature
+
+        data = status.data if status else None
+        signature = discovery_signature(
+            data.strings if data else None, data.vitals if data else None
+        )
+        announced = self._discovery_sent.get(gateway_id)
+        if announced is None or not signature <= announced:
             from app.config import settings  # late import
             if settings.mqtt_ha_discovery:
                 await self._publish_ha_discovery(gateway_id, status)
-            self._discovery_sent.add(gateway_id)
+            self._discovery_sent[gateway_id] = (announced or frozenset()) | signature
 
         try:
             from app.config import settings  # late import
@@ -325,6 +365,12 @@ class MqttPublisher:
                         str(data.grid_status),
                         retain, qos,
                     )
+                    # Derived binary: grid_connected = true only when UP, else false (incl. unknown/SYNCING)
+                    await self._safe_publish(
+                        f"{prefix}/grid_connected",
+                        "true" if data.grid_status == "UP" else "false",
+                        retain, qos,
+                    )
 
                 if data.mode is not None:
                     await self._safe_publish(
@@ -339,6 +385,29 @@ class MqttPublisher:
                 if data.version is not None:
                     await self._safe_publish(
                         f"{prefix}/version", str(data.version), retain, qos
+                    )
+
+                if data.grid_charging is not None:
+                    await self._safe_publish(
+                        f"{prefix}/grid_charging",
+                        "true" if data.grid_charging else "false",
+                        retain, qos,
+                    )
+
+                if data.grid_export is not None:
+                    await self._safe_publish(
+                        f"{prefix}/grid_export",
+                        str(data.grid_export),
+                        retain, qos,
+                    )
+
+                time_remaining = _safe_float(data.time_remaining)
+                if time_remaining is not None:
+                    # Topic rounded to 2 decimals for HA; summary JSON keeps raw precision
+                    await self._safe_publish(
+                        f"{prefix}/time_remaining",
+                        f"{time_remaining:.2f}",
+                        retain, qos,
                     )
 
                 # Solar string topics (voltage, current, power per string)
@@ -416,6 +485,56 @@ class MqttPublisher:
                                     f"{total_p:.2f}", retain, qos,
                                 )
 
+                # Remote meter topics (Tesla wireless CT meters - one or more
+                # CTs per meter, one or more meters per gateway)
+                if data.vitals:
+                    from app.mqtt.ha_discovery import extract_remote_meters
+
+                    remote_meters = extract_remote_meters(data.vitals)
+                    for din, cts in remote_meters.items():
+                        for ct_index, fields in cts.items():
+                            ct_prefix = f"{prefix}/meters/remote/{din}/ct{ct_index}"
+                            voltage = _safe_float(fields.get("InstVoltage"))
+                            if voltage is not None:
+                                await self._safe_publish(
+                                    f"{ct_prefix}/voltage", f"{voltage:.2f}",
+                                    retain, qos,
+                                )
+                            current = _safe_float(fields.get("InstCurrent"))
+                            if current is not None:
+                                await self._safe_publish(
+                                    f"{ct_prefix}/current", f"{current:.2f}",
+                                    retain, qos,
+                                )
+                            power = _safe_float(fields.get("InstRealPower"))
+                            if power is not None:
+                                await self._safe_publish(
+                                    f"{ct_prefix}/power", f"{power:.1f}", retain, qos
+                                )
+                            # Lifetime accumulators arrive in watt-seconds; HA's
+                            # energy dashboard (and the rest of this file's
+                            # energy sensors) expects Wh.
+                            energy_imported_ws = _safe_float(
+                                fields.get("EnergyImportedWs")
+                            )
+                            if energy_imported_ws is not None:
+                                await self._safe_publish(
+                                    f"{ct_prefix}/energy_imported",
+                                    f"{energy_imported_ws / 3600:.0f}", retain, qos,
+                                )
+                            energy_exported_ws = _safe_float(
+                                fields.get("EnergyExportedWs")
+                            )
+                            if energy_exported_ws is not None:
+                                await self._safe_publish(
+                                    f"{ct_prefix}/energy_exported",
+                                    f"{energy_exported_ws / 3600:.0f}", retain, qos,
+                                )
+                            # Full per-CT JSON for consumers that want everything
+                            await self._safe_publish(
+                                ct_prefix, json.dumps(fields), retain, qos
+                            )
+
                 # Summary JSON topic
                 summary = {
                     "online": status.online,
@@ -428,9 +547,13 @@ class MqttPublisher:
                     "home": home if data.aggregates else None,
                     "powerwall": pw_power if data.aggregates else None,
                     "grid_status": data.grid_status,
+                    "grid_connected": (data.grid_status == "UP") if data.grid_status is not None else None,
                     "mode": data.mode,
                     "reserve": data.reserve,
                     "version": data.version,
+                    "grid_charging": data.grid_charging,
+                    "grid_export": data.grid_export,
+                    "time_remaining": data.time_remaining,
                 }
                 await self._safe_publish(
                     f"{prefix}/status", json.dumps(summary), retain, qos

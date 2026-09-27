@@ -21338,7 +21338,9 @@
             .then((response) => response.json())
             .then((data) => {
                 const isPW3 = data.pw3;
-                if (isPW3 == true) {
+                // pw3 is hardware-based; null only while a v1r gateway's
+                // hardware is unknown (v1r was always shown as PW3 before)
+                if (isPW3 === true || isPW3 === null) {
                     e.exports = i.p + "2cd211ee063a3608ab501624f326d61e.png";
                 } else {
                     e.exports = i.p + "cb0da8a8999c06735455bf5056a5cd78.png";
