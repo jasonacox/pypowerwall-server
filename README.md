@@ -531,7 +531,7 @@ All existing proxy endpoints work unchanged:
 
 **Fan Information:**
 - `GET /fans` - All fan status
-- `GET /fans/pw` - Powerwall fans only
+- `GET /fans/pw` - Powerwall fans only (`FANn_actual`/`FANn_target` RPM; Powerwall 3 adds `FANn_duty` %, with `FANn_target` null)
 
 **Data Export:**
 - `GET /csv` - CSV format for Telegraf/InfluxDB

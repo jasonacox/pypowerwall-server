@@ -2,17 +2,31 @@
 
 ## Version History
 
-### [0.6.7] - Upcoming
+### [0.7.0] - Upcoming
 
 **Added:**
 - **Powerwall temperatures in the console** — the Powerwall Status table gains a **Temp** column showing each battery's hottest pack reading. Hovering, tapping or keyboard-focusing it opens a card with the full breakdown: pack max, pack min, current shunt, and inverter enclosure ambient (expansion packs show the three pack readings; they have no inverter). A warning line appears only when the battery reports over-temperature events. Powerwall 2 rows show the thermal-controller ambient. Works in both the single-gateway and multi-gateway views, matched to rows by battery serial like `/pod`. The inverter heatsink signal is deliberately not shown: it reads a constant on current firmware.
-- Powerwall 3 temperatures come from pypowerwall **0.17.4** (jasonacox/pypowerwall#390). In cloud or basic-LAN modes, or on firmware without the signals, the column is simply hidden; a failed `/vitals` fetch never affects the rest of the panel. No API changes: the single-gateway view reads the existing `/vitals` alongside `/pod`.
-
-**Changed:**
-- **pypowerwall upgraded to 0.17.4** (`requirements.txt` pin and `pyproject.toml` minimum). Besides PW3 temperatures, it brings per-instance TEDAPI API locks (jasonacox/pypowerwall#381), so multiple gateways no longer serialize behind one another's fetches, and `/temps/pw` numbering that stays aligned with `/pod` when a battery has no reading. Also included: `python -m pypowerwall register` now honors `-authpath`, and the key-state docs are corrected (jasonacox/pypowerwall#383).
+- Powerwall 3 temperatures come from pypowerwall 0.17.4 and later (jasonacox/pypowerwall#390; the server pins 0.18.2 since 0.6.7). In cloud or basic-LAN modes, or on firmware without the signals, the column is simply hidden; a failed `/vitals` fetch never affects the rest of the panel. No API changes: the single-gateway view reads the existing `/vitals` alongside `/pod`.
 
 **Fixed:**
 - The Powerwall Status card now stacks above the cards below it, so a popover near its bottom edge isn't painted underneath the next card (each card's `backdrop-filter` creates its own stacking context).
+
+### [0.6.7] - Upcoming
+
+**Added:**
+- **Powerwall 3 fans in `/fans/pw`** — ported from pypowerwall proxy t104 (jasonacox/pypowerwall#398) with the same keys and order. Each Powerwall 3 inverter reports two fans (A and B), numbered after any Powerwall 2/+ fans, leader first (as in `/pod`). `FANn_actual` is the measured RPM (`PCH_FanSpeed_A`/`_B`). `FANn_target` is `null` because PW3 has no target-RPM signal, and the new `FANn_duty` is the fan drive duty cycle in percent (`PCH_FanDuty_A`/`_B`). Without this port, the pypowerwall release that adds PW3 fans to `get_fan_speeds()` would have made a PW3 system return all-null `FANn_actual`/`FANn_target` in follower-first order instead of `{}`. `/fans` passes the new `TEPINV--<din>` objects through unchanged. Powerwall 2/+ output is byte-identical.
+
+**Fixed:**
+- **Islanding "in progress" race on Python 3.13** — a completed islanding command could still be reported as in progress for one event-loop iteration after `local_control()` returned. The in-flight marker was cleared by a done-callback, which asyncio runs on a later loop iteration, and on Python 3.13 the call returns before that. An immediate follow-up command could then be refused with "An islanding command is still in progress" (with the cooldown disabled via `PW_ISLANDING_COOLDOWN=0`), and `tests/test_islanding.py::test_local_control_raises_cooldown_error` failed on 3.13. "In progress" now means the dispatched command hasn't finished (`not future.done()`), independent of callback timing. New regression tests build the exact 3.13 state directly, so they catch it on every Python version. Docker images (Python 3.12) were not affected.
+
+**Changed:**
+- **pypowerwall upgraded to 0.18.2** (from 0.17.3; `requirements.txt` pin and `pyproject.toml` minimum). Docker images now ship pypowerwall 0.18.2. The server keeps the library's default `failover=True`, so connection behavior only changes where the library fixed it. Library changes that reach server users:
+  - Powerwall 3 temperatures (jasonacox/pypowerwall#390) and fan signals (jasonacox/pypowerwall#398) in `/vitals`, `/temps`, `/temps/pw`, `/fans` and `/fans/pw` on TEDAPI (V2024_06 query set), and `/temps/pw` numbering that stays aligned with `/pod` when a battery has no reading.
+  - Per-instance TEDAPI API locks (jasonacox/pypowerwall#381), so multiple gateways no longer serialize behind one another's fetches.
+  - v1r: LAN-down failover to the WiFi host (`PW_WIFI_HOST`) now actually happens, recovery probing is race-free, and several TEDAPI hardening fixes (jasonacox/pypowerwall#394, #395).
+  - Cloud: automatic recovery when Tesla re-provisions a site (jasonacox/pypowerwall#382).
+  - PW3 `get_battery_block()` fix for basic/WiFi TEDAPI mode (jasonacox/pypowerwall#396), `python -m pypowerwall register` honoring `-authpath` (jasonacox/pypowerwall#383), and the 0.18.0 packaging changes.
+- **Python 3.13 in CI** — the `pytest` and simulator workflows now test Python 3.10–3.13 (previously 3.10–3.12, which is why the race went unnoticed), and `pyproject.toml` lists the 3.13 classifier. `requires-python = ">=3.10"` already allowed 3.13 installs.
 
 ### [0.6.6] - 2026-09-13
 

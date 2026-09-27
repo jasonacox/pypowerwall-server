@@ -784,6 +784,9 @@ async def get_fans():
 async def get_fans_pw():
     """Get fan speeds in simplified format (legacy proxy endpoint).
 
+    Keys are FANn_actual / FANn_target (RPM) per fan, plus FANn_duty (%) on
+    Powerwall 3 fans; same keys and order as the pypowerwall proxy.
+
     Uses graceful degradation: returns cached data even if gateway is temporarily offline.
     """
     gateway_id = get_default_gateway()
@@ -794,10 +797,28 @@ async def get_fans_pw():
 
     fan_speeds = status.data.fan_speeds or {}
     fans = {}
-    for i, (_, value) in enumerate(sorted(fan_speeds.items())):
+    # Powerwall 2/+: one fan per PVAC block, sorted by key (unchanged)
+    pvac_fans = sorted(
+        (k, v) for k, v in fan_speeds.items() if not k.startswith("TEPINV--")
+    )
+    for i, (_, value) in enumerate(pvac_fans):
         key = f"FAN{i+1}"
         fans[f"{key}_actual"] = value.get("PVAC_Fan_Speed_Actual_RPM")
         fans[f"{key}_target"] = value.get("PVAC_Fan_Speed_Target_RPM")
+    # Powerwall 3: two fans (A, B) per inverter, numbered on after any PVAC
+    # fans in get_fan_speeds() order (leader first, as in /pod). FANn_actual is
+    # the measured RPM, as on PW2. PW3 has no target-RPM signal, so FANn_target
+    # is null (kept so every FANn has the same keys); FANn_duty is the PW3 fan
+    # drive duty cycle in percent. Mirrors pypowerwall proxy t104.
+    n = len(pvac_fans)
+    for name, value in fan_speeds.items():
+        if not name.startswith("TEPINV--"):
+            continue
+        for fan in ("A", "B"):
+            n += 1
+            fans[f"FAN{n}_actual"] = value.get(f"PCH_FanSpeed_{fan}")
+            fans[f"FAN{n}_target"] = None
+            fans[f"FAN{n}_duty"] = value.get(f"PCH_FanDuty_{fan}")
     return fans
 
 

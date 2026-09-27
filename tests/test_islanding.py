@@ -379,3 +379,62 @@ async def test_islanding_uses_existing_write_lock(
         assert not task.done()
     assert await asyncio.wait_for(task, timeout=2.0) == {"result": 1}
     control.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_completed_command_is_not_in_progress(
+    connected_gateway, mock_pypowerwall, monkeypatch
+) -> None:
+    """A finished command whose clear-on-completion callback hasn't run yet
+    must not count as in progress.
+
+    asyncio runs done-callbacks on a later loop iteration; on Python 3.13
+    local_control() returns before that, leaving a done future registered.
+    This builds that state directly so the check is exercised on every
+    Python version, not just 3.13.
+    """
+    monkeypatch.setattr(settings, "islanding_cooldown", 0)
+    gateway_id = connected_gateway.gateway.id
+    finished = asyncio.get_running_loop().create_future()
+    finished.set_result({"result": 1})
+    gateway_manager._islanding_futures[gateway_id] = finished
+    mock_pypowerwall.reconnect_grid.return_value = {"result": 1}
+
+    result = await gateway_manager.local_control(gateway_id, "reconnect_grid")
+
+    assert result == {"result": 1}
+    mock_pypowerwall.reconnect_grid.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_unfinished_command_is_in_progress(
+    connected_gateway, mock_pypowerwall, monkeypatch
+) -> None:
+    """A registered command that hasn't finished still blocks a new one."""
+    monkeypatch.setattr(settings, "islanding_cooldown", 0)
+    gateway_id = connected_gateway.gateway.id
+    running = asyncio.get_running_loop().create_future()
+    gateway_manager._islanding_futures[gateway_id] = running
+    try:
+        with pytest.raises(IslandingCommandInProgressError):
+            await gateway_manager.local_control(gateway_id, "reconnect_grid")
+        mock_pypowerwall.reconnect_grid.assert_not_called()
+    finally:
+        running.cancel()
+
+
+@pytest.mark.asyncio
+async def test_immediate_follow_up_after_completion(
+    connected_gateway, mock_pypowerwall, monkeypatch
+) -> None:
+    """With the cooldown disabled, a command issued right after the previous
+    one returned is accepted (not refused as still in progress)."""
+    monkeypatch.setattr(settings, "islanding_cooldown", 0)
+    gateway_id = connected_gateway.gateway.id
+    mock_pypowerwall.go_off_grid.return_value = {"result": 1}
+    mock_pypowerwall.reconnect_grid.return_value = {"result": 1}
+
+    await gateway_manager.local_control(gateway_id, "go_off_grid", confirm=True)
+    result = await gateway_manager.local_control(gateway_id, "reconnect_grid")
+
+    assert result == {"result": 1}

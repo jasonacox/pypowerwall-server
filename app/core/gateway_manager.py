@@ -2023,8 +2023,12 @@ class GatewayManager:
             Result of the method call, or None on error/timeout
         """
         if method in _ISLANDING_METHODS:
+            # "In progress" means the dispatched future hasn't finished. Check
+            # done() rather than relying on the clear-on-completion callback
+            # below: asyncio runs done-callbacks on a later loop iteration, and
+            # on Python 3.13 local_control() returns before that has happened.
             in_flight = self._islanding_futures.get(gateway_id)
-            if in_flight is not None:
+            if in_flight is not None and not in_flight.done():
                 raise IslandingCommandInProgressError(
                     "An islanding command is still in progress"
                 )
