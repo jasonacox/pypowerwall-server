@@ -23,6 +23,8 @@ Routing Structure:
     1. Direct app routes (registered on main app):
        - GET  /              -> Tesla Power Flow animation UI
        - GET  /console       -> Management console UI
+       - GET  /history       -> Historical data lookup (daily energy,
+                                Powerwall temperatures and fans)
        - GET  /example       -> iFrame demo page
        - GET  /example.html  -> Same as /example
        - GET  /favicon-*.png -> Favicon files
@@ -562,17 +564,16 @@ async def root(request: Request, style: str = None):
     )
 
 
-@app.get("/console", response_class=HTMLResponse, tags=["UI"])
-async def console():
-    """Serve the management console UI."""
-    index_path = Path(__file__).parent / "static" / "index.html"
-    if index_path.exists():
-        content = index_path.read_text()
-        # When running under a proxy sub-path (PROXY_BASE_URL), inject a fetch
-        # monkey-patch so all root-relative API calls get the prefix prepended
-        # automatically, without modifying every call site in index.html.
-        if _proxy_base:
-            proxy_base_script = f"""<script>
+def _proxy_base_script() -> str:
+    """Fetch monkey-patch injected into UI pages under PROXY_BASE_URL.
+
+    Prepends the sub-path to every root-relative fetch() so the pages'
+    API calls work behind a reverse proxy without editing each call site.
+    Empty when no PROXY_BASE_URL is configured.
+    """
+    if not _proxy_base:
+        return ""
+    return f"""<script>
 (function() {{
     var _BASE = "{_proxy_base}";
     window._BASE = _BASE;
@@ -584,15 +585,29 @@ async def console():
     }};
 }})();
 </script>"""
+
+
+@app.get("/console", response_class=HTMLResponse, tags=["UI"])
+async def console():
+    """Serve the management console UI."""
+    index_path = Path(__file__).parent / "static" / "index.html"
+    if index_path.exists():
+        content = index_path.read_text()
+        # When running under a proxy sub-path (PROXY_BASE_URL), inject a fetch
+        # monkey-patch so all root-relative API calls get the prefix prepended
+        # automatically, without modifying every call site in index.html.
+        proxy_base_script = _proxy_base_script()
+        if _proxy_base:
             # Fix WebSocket URL which is built in JS as a template literal
             content = content.replace(
                 "/ws/aggregate",
                 f"{_proxy_base}/ws/aggregate",
             )
-        else:
-            proxy_base_script = ""
         content = content.replace("{PROXY_BASE_SCRIPT}", proxy_base_script)
         content = content.replace("{PROXY_BASE}", _proxy_base)
+        # Shared static assets carry ?v=<version> so an upgrade isn't served
+        # a stale cached charts.js / charts.css
+        content = content.replace("{SERVER_VERSION}", SERVER_VERSION)
         return HTMLResponse(content=content)
     b = _proxy_base
     return HTMLResponse(
@@ -629,6 +644,23 @@ async def console():
         </html>
     """
     )
+
+
+@app.get("/history", response_class=HTMLResponse, tags=["UI"])
+async def history():
+    """Serve the historical data lookup page.
+
+    Daily energy totals over any stored date range, plus Powerwall
+    temperature and fan history, read from /api/timeseries/*.
+    """
+    page_path = Path(__file__).parent / "static" / "history.html"
+    if not page_path.exists():
+        return HTMLResponse(content="History page not installed", status_code=404)
+    content = page_path.read_text()
+    content = content.replace("{PROXY_BASE_SCRIPT}", _proxy_base_script())
+    content = content.replace("{PROXY_BASE}", _proxy_base)
+    content = content.replace("{SERVER_VERSION}", SERVER_VERSION)
+    return HTMLResponse(content=content)
 
 
 @app.get("/example", response_class=HTMLResponse, tags=["UI"])
@@ -915,6 +947,7 @@ For more information, visit: https://github.com/jasonacox/pypowerwall-server
     print(f"Starting PyPowerwall Server v{SERVER_VERSION}")
     print(f"Server will listen on http://{settings.server_host}:{settings.server_port}")
     print(f"Console UI: http://{settings.server_host}:{settings.server_port}/console")
+    print(f"History:    http://{settings.server_host}:{settings.server_port}/history")
     print(f"API Docs: http://{settings.server_host}:{settings.server_port}/docs")
     print()
 

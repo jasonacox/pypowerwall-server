@@ -1,0 +1,1391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {PROXY_BASE_SCRIPT}
+    <script src="{PROXY_BASE}/static/js/charts.js?v={SERVER_VERSION}"></script>
+    <link rel="stylesheet" href="{PROXY_BASE}/static/css/charts.css?v={SERVER_VERSION}">
+    <title>History - PyPowerwall Server</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="{PROXY_BASE}/favicon-32x32.png">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        /* Same tokens as the console (index.html) so the pages read as one app */
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-card: rgba(22, 27, 34, 0.8);
+            --border-color: rgba(48, 54, 61, 0.8);
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+            --accent-blue: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-red: #f85149;
+            --accent-yellow: #d29922;
+            --solar-color: #f0c000;
+            --home-color: #58a6ff;
+            --charge-color: #3fb950;
+            --discharge-color: #a371f7;
+            --import-color: #f85149;
+            --export-color: #db6d28;
+        }
+
+        html {
+            background: #0d1117;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #1a2332 100%);
+            min-height: 100vh;
+            color: var(--text-primary);
+            line-height: 1.45;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 0;
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-icon {
+            font-size: 2em;
+        }
+
+        .logo h1 {
+            font-size: 1.5em;
+            font-weight: 600;
+            background: linear-gradient(90deg, var(--accent-blue), var(--accent-green));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .header-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 0.9em;
+        }
+
+        .header-links a:hover,
+        .header-links a[aria-current="page"] {
+            color: var(--text-primary);
+            background: var(--bg-card);
+        }
+
+        a:focus-visible,
+        button:focus-visible,
+        input:focus-visible,
+        select:focus-visible {
+            outline: 2px solid var(--accent-blue);
+            outline-offset: 2px;
+        }
+
+        /* Range + gateway controls */
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px 20px;
+            margin-bottom: 20px;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .control-group > label {
+            font-size: 0.85em;
+            color: var(--text-secondary);
+        }
+
+        .segmented {
+            display: inline-flex;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .segmented button {
+            background: transparent;
+            border: none;
+            border-right: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 6px 12px;
+            font-size: 0.85em;
+            cursor: pointer;
+        }
+
+        .segmented button:last-child {
+            border-right: none;
+        }
+
+        .segmented button:hover {
+            color: var(--text-primary);
+        }
+
+        .segmented button[aria-pressed="true"] {
+            background: rgba(88, 166, 255, 0.15);
+            color: var(--text-primary);
+        }
+
+        input[type="date"],
+        select {
+            max-width: 100%;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            padding: 5px 8px;
+            font: inherit;
+            font-size: 0.85em;
+            color-scheme: dark;
+        }
+
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        .card-header {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 16px;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .card-title {
+            font-size: 1.05em;
+            font-weight: 600;
+        }
+
+        .card-note {
+            font-size: 0.8em;
+            color: var(--text-secondary);
+        }
+
+        /* Range totals */
+        .totals {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .total {
+            border-left: 3px solid var(--border-color);
+            padding: 2px 0 2px 12px;
+        }
+
+        .total .label {
+            font-size: 0.8em;
+            color: var(--text-secondary);
+        }
+
+        .total .value {
+            font-size: 1.35em;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .total .sub {
+            font-size: 0.75em;
+            color: var(--text-muted);
+        }
+
+        .total.solar { border-color: var(--solar-color); }
+        .total.home { border-color: var(--home-color); }
+        .total.charge { border-color: var(--charge-color); }
+        .total.import { border-color: var(--import-color); }
+        .total.export { border-color: var(--export-color); }
+        .total.self { border-color: var(--accent-green); }
+
+        /* Series toggles */
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            color: var(--text-secondary);
+            padding: 3px 10px;
+            font-size: 0.8em;
+            cursor: pointer;
+        }
+
+        .chip .swatch {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            background: var(--swatch);
+        }
+
+        .chip .swatch.line {
+            height: 3px;
+            border-radius: 1px;
+        }
+
+        .chip[aria-pressed="true"] {
+            color: var(--text-primary);
+            border-color: var(--text-muted);
+        }
+
+        .chip[aria-pressed="false"] .swatch {
+            opacity: 0.25;
+        }
+
+        .chip-label {
+            font-size: 0.8em;
+            color: var(--text-muted);
+            align-self: center;
+            margin-right: 4px;
+        }
+
+        .card-header .temp-unit {
+            margin-left: auto;
+        }
+
+        .unit-select {
+            margin-right: 12px;
+            flex-wrap: wrap;
+            max-width: 100%;
+        }
+
+        .energy-trend {
+            margin-top: 16px;
+        }
+
+        /* Line-style key for the Powerwall units when "All" is selected */
+        .unit-key {
+            display: inline-flex;
+            flex-wrap: wrap;
+            gap: 4px 12px;
+        }
+
+        .unit-key > span {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .unit-key .swatch {
+            display: inline-block;
+            width: 18px;
+            height: 3px;
+        }
+
+
+        .empty {
+            color: var(--text-secondary);
+            font-size: 0.9em;
+            padding: 36px 12px;
+            text-align: center;
+            max-width: 640px;
+            margin: 0 auto;
+        }
+
+        .empty code {
+            color: var(--text-primary);
+        }
+
+        /* Tables */
+        .table-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 14px;
+        }
+
+        .btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            padding: 6px 12px;
+            font-size: 0.85em;
+            cursor: pointer;
+        }
+
+        .btn:hover {
+            color: var(--text-primary);
+        }
+
+        .table-scroll {
+            overflow-x: auto;
+            margin-top: 12px;
+            max-height: 480px;
+            overflow-y: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85em;
+            font-variant-numeric: tabular-nums;
+        }
+
+        th,
+        td {
+            padding: 6px 10px;
+            text-align: right;
+            border-bottom: 1px solid var(--border-color);
+            white-space: nowrap;
+        }
+
+        th:first-child,
+        td:first-child {
+            text-align: left;
+        }
+
+        th {
+            color: var(--text-secondary);
+            font-weight: 500;
+            position: sticky;
+            top: 0;
+            background: var(--bg-secondary);
+        }
+
+        .stats-table {
+            margin-top: 12px;
+        }
+
+        .stats-table .unit-head {
+            display: none;
+        }
+
+        .stats-table td:first-child .dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 2px;
+            margin-right: 6px;
+        }
+
+        .error {
+            color: var(--accent-red);
+        }
+
+        @media (max-width: 700px) {
+            .container {
+                padding: 12px;
+            }
+            .chart-wrap canvas {
+                height: 260px;
+            }
+            /* Low/Average/High/Latest must fit a phone without sideways
+               scrolling: tighter cells, and long series names wrap */
+            .stats-table table {
+                font-size: 0.8em;
+            }
+            .stats-table th,
+            .stats-table td {
+                padding: 6px 4px;
+            }
+            .stats-table td:first-child {
+                white-space: normal;
+            }
+            /* Unit once in the header instead of in every cell */
+            .stats-table .unit {
+                display: none;
+            }
+            .stats-table .unit-head {
+                display: inline;
+            }
+            /* Eight range presets: share the row instead of overflowing it */
+            #range-presets {
+                display: flex;
+                width: 100%;
+            }
+            #range-presets button {
+                flex: 1 1 0;
+                min-width: 0;
+                padding: 6px 2px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <span class="logo-icon">⚡</span>
+                <h1>PyPowerwall Server</h1>
+            </div>
+            <nav class="header-links" aria-label="Pages">
+                <a href="{PROXY_BASE}/console">Console</a>
+                <a href="{PROXY_BASE}/history" aria-current="page">History</a>
+                <a href="{PROXY_BASE}/">Power Flow</a>
+                <a href="{PROXY_BASE}/docs">API Docs</a>
+            </nav>
+        </header>
+
+        <div class="controls">
+            <div class="control-group">
+                <label id="range-label">Range</label>
+                <div class="segmented" id="range-presets" role="group" aria-labelledby="range-label">
+                    <button type="button" data-range="1h">1h</button>
+                    <button type="button" data-range="6h">6h</button>
+                    <button type="button" data-range="1d">24h</button>
+                    <button type="button" data-range="7d">7 days</button>
+                    <button type="button" data-range="30d">30 days</button>
+                    <button type="button" data-range="90d">90 days</button>
+                    <button type="button" data-range="1y">1 year</button>
+                    <button type="button" data-range="all">All</button>
+                </div>
+            </div>
+            <div class="control-group">
+                <label for="from-date">From</label>
+                <input type="date" id="from-date">
+                <label for="to-date">to</label>
+                <input type="date" id="to-date">
+            </div>
+            <div class="control-group">
+                <label for="gateway-select">Gateway</label>
+                <select id="gateway-select">
+                    <option value="">All gateways</option>
+                </select>
+            </div>
+        </div>
+
+        <section class="card" aria-labelledby="energy-title">
+            <div class="card-header">
+                <h2 class="card-title" id="energy-title">Daily energy</h2>
+                <div class="card-note" id="energy-note"></div>
+            </div>
+            <div id="energy-body">
+                <div class="empty">Loading daily energy…</div>
+            </div>
+        </section>
+
+        <!-- One chart card per signal group, built from /api/timeseries/signals -->
+        <div id="signal-cards">
+            <section class="card" aria-labelledby="signals-title">
+                <div class="card-header">
+                    <h2 class="card-title" id="signals-title">Powerwall temperatures and fans</h2>
+                </div>
+                <div class="empty">Loading history…</div>
+            </section>
+        </div>
+    </div>
+
+    <script>
+    (function () {
+        'use strict';
+
+        const C = window.PWCharts;
+        const { DAY, esc, pad, parseDay, dayX, xDay, fmtDayLong, fmtTimeLong } = C;
+
+        const ENERGY_SERIES = [
+            { key: 'solar_kwh', label: 'Solar', color: '#f0c000', total: 'solar' },
+            { key: 'home_kwh', label: 'Home', color: '#58a6ff', total: 'home' },
+            { key: 'battery_charge_kwh', label: 'Battery charge', color: '#3fb950', total: 'charge' },
+            { key: 'battery_discharge_kwh', label: 'Battery discharge', color: '#a371f7', total: 'charge' },
+            { key: 'grid_import_kwh', label: 'Grid import', color: '#f85149', total: 'import' },
+            { key: 'grid_export_kwh', label: 'Grid export', color: '#db6d28', total: 'export' },
+        ];
+        // Signal colors come from this palette by catalog order within each
+        // group, so a new metric needs no page change
+        const SIGNAL_PALETTE = ['#f85149', '#58a6ff', '#d29922', '#a371f7', '#3fb950', '#db6d28', '#39c5cf', '#f778ba'];
+        const DEVICE_DASHES = [[], [7, 4], [2, 3], [10, 3, 2, 3]];
+        const UNIT_KEY = 'pw_history_temp_unit';
+        const HIDE_KEY = 'pw_history_hide';
+        // Hidden until switched on (daily energy shows solar only at first)
+        const DEFAULT_HIDDEN = ENERGY_SERIES.filter(s => s.key !== 'solar_kwh').map(s => s.key);
+        const REFRESH_MS = 5 * 60 * 1000;
+        const FETCH_TIMEOUT_MS = 30 * 1000;
+
+        const state = {
+            range: '30d',
+            from: null,          // 'YYYY-MM-DD'
+            to: null,
+            gateway: '',
+            unit: 'C',
+            pw: 'all',           // selected Powerwall on every signal card
+            hidden: new Set(DEFAULT_HIDDEN),  // series switched off (any chart)
+            tableOpen: false,
+            gatewayNames: {},
+            retentionText: null,
+            energyDays: [],
+            powerTrend: null,
+            devicesInfo: null,
+            deviceTrend: null,
+        };
+
+        // ---------------------------------------------------------------
+        // Helpers
+        // ---------------------------------------------------------------
+        const $ = id => document.getElementById(id);
+
+        function storageGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+        function storageSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* ignore */ } }
+
+        function localDay(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
+        function addDays(s, n) { const d = parseDay(s); d.setDate(d.getDate() + n); return localDay(d); }
+        // A real calendar day in YYYY-MM-DD form (round-trips through Date)
+        function validDay(s) { return /^\d{4}-\d{2}-\d{2}$/.test(s || '') && localDay(parseDay(s)) === s; }
+
+        // Chart step label: "30-second", "4-minute"
+        function fmtStep(sec) {
+            return sec < 60 || sec % 60 ? `${Math.round(sec)}-second` : `${Math.round(sec / 60)}-minute`;
+        }
+        function fmtNum(v, dp) { return v == null || !isFinite(v) ? '--' : v.toFixed(dp); }
+        function safeName(s) { return String(s).replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40) || 'all'; }
+
+        function toUnit(v, unit) {
+            if (v == null) return v;
+            return unit === '°C' && state.unit === 'F' ? v * 9 / 5 + 32 : v;
+        }
+        function unitLabel(unit) { return unit === '°C' ? (state.unit === 'F' ? '°F' : '°C') : unit; }
+
+        // Fetch JSON with the reload's abort signal (timeouts abort it too)
+        async function getJSON(url, signal) {
+            const resp = await fetch(url, { signal });
+            if (!resp.ok) throw new Error(`${url} returned ${resp.status}`);
+            return resp.json();
+        }
+
+        // ---------------------------------------------------------------
+        // Range + URL state
+        // ---------------------------------------------------------------
+        const PRESET_DAYS = new Map([['1h', 1], ['6h', 1], ['1d', 1], ['7d', 7], ['30d', 30], ['90d', 90], ['1y', 365]]);
+        const PRESETS = new Set([...PRESET_DAYS.keys(), 'all']);
+        // Rolling windows (seconds) for the charts. Energy is per local day,
+        // so 1h/6h show today's totals and 24h shows yesterday + today.
+        const ROLLING = new Map([['1h', 3600], ['6h', 6 * 3600], ['1d', DAY]]);
+        const SUBDAY = new Set(['1h', '6h']);
+
+        function applyPreset(range) {
+            state.range = range;
+            const today = localDay(new Date());
+            state.to = today;
+            state.from = range === 'all' ? null : addDays(today, -(PRESET_DAYS.get(range) - 1));
+            if (range === '1d') state.from = addDays(today, -1);
+        }
+
+        function setCustomRange(from, to) {
+            state.range = 'custom';
+            if (from && to && from > to) [from, to] = [to, from];
+            state.from = from;
+            state.to = to;
+        }
+
+        function syncControls() {
+            document.querySelectorAll('#range-presets button').forEach(b =>
+                b.setAttribute('aria-pressed', String(b.dataset.range === state.range)));
+            $('from-date').value = state.from || '';
+            $('to-date').value = state.to || '';
+            $('gateway-select').value = state.gateway;
+        }
+
+        function hiddenIsDefault() {
+            return state.hidden.size === DEFAULT_HIDDEN.length && DEFAULT_HIDDEN.every(k => state.hidden.has(k));
+        }
+
+        function writeUrl() {
+            const p = new URLSearchParams();
+            if (state.range !== 'custom') p.set('range', state.range);
+            else { if (state.from) p.set('from', state.from); if (state.to) p.set('to', state.to); }
+            if (state.gateway) p.set('gateway', state.gateway);
+            if (state.pw && state.pw !== 'all') p.set('pw', state.pw);
+            if (!hiddenIsDefault()) p.set('hide', Array.from(state.hidden).sort().join(','));
+            const q = p.toString();
+            history.replaceState(null, '', location.pathname + (q ? '?' + q : ''));
+        }
+
+        function readUrl() {
+            const p = new URLSearchParams(location.search);
+            const range = p.get('range');
+            const from = validDay(p.get('from')) ? p.get('from') : null;
+            const to = validDay(p.get('to')) ? p.get('to') : null;
+            if (from || to) setCustomRange(from, to || localDay(new Date()));
+            else applyPreset(PRESETS.has(range) ? range : '30d');
+            state.gateway = p.get('gateway') || '';
+            state.pw = p.get('pw') || 'all';
+            // Switched-off series: URL first, then this browser, then defaults
+            const hide = p.has('hide') ? p.get('hide') : storageGet(HIDE_KEY);
+            if (hide != null) state.hidden = new Set(hide.split(',').filter(Boolean));
+            state.unit = storageGet(UNIT_KEY) === 'F' ? 'F' : 'C';
+        }
+
+        function setHidden(key, hidden) {
+            if (hidden) state.hidden.add(key); else state.hidden.delete(key);
+            storageSet(HIDE_KEY, Array.from(state.hidden).sort().join(','));
+            writeUrl();
+        }
+
+        // Epoch window for charts: local midnight of From .. end of To (capped at now)
+        function epochWindow() {
+            const now = Date.now() / 1000;
+            if (ROLLING.has(state.range)) return { start: now - ROLLING.get(state.range), end: now + 60 };
+            let start;
+            if (state.from) start = parseDay(state.from).getTime() / 1000;
+            else {
+                const days = (state.devicesInfo?.series || []).map(s => s.first_day).filter(Boolean).sort();
+                const firstTs = (state.devicesInfo?.series || [])
+                    .map(s => s.first_ts).filter(v => v != null).sort((a, b) => a - b)[0];
+                start = days.length ? parseDay(days[0]).getTime() / 1000 : (firstTs || now - DAY);
+            }
+            // Next local midnight (23 or 25 hours after the last midnight on DST days)
+            const end = state.to ? parseDay(addDays(state.to, 1)).getTime() / 1000 : now;
+            return { start, end: Math.min(end, now + 60) };
+        }
+
+        // ---------------------------------------------------------------
+        // Small UI pieces
+        // ---------------------------------------------------------------
+        function chipButton(label, color, pressed, onToggle, lineStyle) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'chip';
+            b.setAttribute('aria-pressed', String(pressed));
+            const sw = document.createElement('span');
+            sw.className = 'swatch' + (lineStyle ? ' line' : '');
+            sw.style.setProperty('--swatch', color);
+            b.append(sw, document.createTextNode(label));
+            b.addEventListener('click', () => {
+                const now = b.getAttribute('aria-pressed') !== 'true';
+                b.setAttribute('aria-pressed', String(now));
+                onToggle(now);
+            });
+            return b;
+        }
+
+        // Re-render a region without the page jumping: hold its height while it
+        // is rebuilt (so the browser doesn't clamp the scroll position to a
+        // briefly shorter page), then restore scroll and keyboard focus
+        function keepPlace(region, render) {
+            const y = window.scrollY;
+            const focused = document.activeElement;
+            const focusCard = focused && region.contains(focused) ? focused.closest('section')?.getAttribute('aria-labelledby') : null;
+            const focusText = focusCard ? focused.textContent : null;
+            region.style.minHeight = `${region.offsetHeight}px`;
+            try {
+                render();
+            } finally {
+                region.style.minHeight = '';
+                window.scrollTo(window.scrollX, y);
+                if (focusCard) {
+                    const card = region.querySelector(`section[aria-labelledby="${CSS.escape(focusCard)}"]`);
+                    const again = card && Array.from(card.querySelectorAll('button')).find(b => b.textContent === focusText);
+                    if (again) again.focus({ preventScroll: true });
+                }
+            }
+        }
+
+        function makeCard(container, id, title) {
+            const section = document.createElement('section');
+            section.className = 'card';
+            section.setAttribute('aria-labelledby', `${id}-title`);
+            const header = document.createElement('div');
+            header.className = 'card-header';
+            const h2 = document.createElement('h2');
+            h2.className = 'card-title';
+            h2.id = `${id}-title`;
+            h2.textContent = title;
+            const note = document.createElement('div');
+            note.className = 'card-note';
+            header.append(h2, note);
+            const body = document.createElement('div');
+            section.append(header, body);
+            container.appendChild(section);
+            return { body, note, header };
+        }
+
+        // ---------------------------------------------------------------
+        // Daily energy
+        // ---------------------------------------------------------------
+        async function fetchEnergy(signal) {
+            const p = new URLSearchParams();
+            if (state.from) p.set('start', state.from);
+            p.set('end', state.to || localDay(new Date()));
+            if (state.gateway) p.set('gateway', state.gateway);
+            // Short ranges also chart power through the day from raw samples
+            let power = null;
+            if (ROLLING.has(state.range)) {
+                const { start, end } = epochWindow();
+                const tp = new URLSearchParams({ start: String(Math.floor(start)), end: String(Math.ceil(end)) });
+                if (state.gateway) tp.set('gateway', state.gateway);
+                // Its own failure shows in the chart's note; daily totals still render
+                power = getJSON('/api/timeseries/trend?' + tp.toString(), signal)
+                    .then(t => Object.assign(t, { window: { start, end } }), e => {
+                        if (e.name === 'AbortError') throw e;
+                        return { error: e.message };
+                    });
+            }
+            const data = await getJSON('/api/timeseries/daily?' + p.toString(), signal);
+            // Sum gateways per day (one gateway when filtered), oldest first
+            const days = (data.days || []).map(d => {
+                const row = { day: d.day };
+                for (const s of ENERGY_SERIES) {
+                    row[s.key] = Object.values(d.gateways || {}).reduce((a, g) => a + (g[s.key] || 0), 0);
+                }
+                return row;
+            }).reverse();
+            return { enabled: data.enabled !== false, days, power: power ? await power : null };
+        }
+
+        function renderEnergyMessage(html) {
+            $('energy-title').textContent = SUBDAY.has(state.range) ? 'Today' : 'Daily energy';
+            $('energy-body').innerHTML = `<div class="empty">${html}</div>`;
+            $('energy-note').textContent = '';
+        }
+
+        function renderEnergy() {
+            keepPlace($('energy-body'), renderEnergyNow);
+        }
+        function renderEnergyNow() {
+            const body = $('energy-body');
+            const rows = state.energyDays;
+            body.replaceChildren();
+            C.prune();
+            $('energy-title').textContent = SUBDAY.has(state.range) ? 'Today' : 'Daily energy';
+            const rolling = ROLLING.has(state.range);
+            const hasPower = rolling && (state.powerTrend?.points || []).length > 0;
+            if (!rows.length && hasPower) {
+                $('energy-note').textContent = 'No daily totals yet';
+                renderPowerChart(body);
+                return;
+            }
+            if (!rows.length) {
+                renderEnergyMessage('No daily energy recorded in this range. Totals start accumulating from the first poll after the server starts; pick a wider range or check back tomorrow.');
+                return;
+            }
+            const first = state.from || rows[0].day;
+            const last = state.to || rows[rows.length - 1].day;
+            const dayCount = Math.round((dayX(last) - dayX(first)) / DAY) + 1;
+            // One day of totals: title it by the day and skip the tiles that
+            // would only repeat the total (best day, per-day averages)
+            const singleDay = rows.length === 1;
+            if (singleDay) {
+                const day = rows[0].day;
+                $('energy-title').textContent = day === localDay(new Date()) ? 'Today' : fmtDayLong(day);
+            }
+            $('energy-note').textContent = singleDay
+                ? (SUBDAY.has(state.range) ? 'So far today · energy is totalled per local day' : 'kWh for the day')
+                : `${rows.length} of ${dayCount} days recorded · kWh per local day`;
+
+            // Range totals
+            const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
+            const solar = sum('solar_kwh'), home = sum('home_kwh');
+            const imp = sum('grid_import_kwh'), exp = sum('grid_export_kwh');
+            const chg = sum('battery_charge_kwh'), dchg = sum('battery_discharge_kwh');
+            const best = rows.reduce((b, r) => (r.solar_kwh > (b?.solar_kwh ?? -1) ? r : b), null);
+            const selfPowered = home > 0 ? Math.max(0, Math.min(100, (1 - imp / home) * 100)) : null;
+            const totals = document.createElement('div');
+            totals.className = 'totals';
+            const tiles = [
+                ['solar', 'Solar generated', `${fmtNum(solar, 1)} kWh`, singleDay ? '' : `${fmtNum(solar / rows.length, 1)} kWh/day average`],
+                singleDay ? null : ['solar', 'Best solar day', best ? `${fmtNum(best.solar_kwh, 1)} kWh` : '--', best ? fmtDayLong(best.day) : ''],
+                ['home', 'Home used', `${fmtNum(home, 1)} kWh`, singleDay ? '' : `${fmtNum(home / rows.length, 1)} kWh/day average`],
+                ['charge', 'Battery in / out', `${fmtNum(chg, 1)} / ${fmtNum(dchg, 1)}`, 'kWh charged / discharged'],
+                ['import', 'Grid import', `${fmtNum(imp, 1)} kWh`, ''],
+                ['export', 'Grid export', `${fmtNum(exp, 1)} kWh`, ''],
+                ['self', 'Self-powered', selfPowered == null ? '--' : `${fmtNum(selfPowered, 0)}%`, 'of home use not from the grid'],
+            ];
+            for (const [cls, label, value, sub] of tiles.filter(Boolean)) {
+                const t = document.createElement('div');
+                t.className = `total ${cls}`;
+                t.innerHTML = `<div class="label">${esc(label)}</div><div class="value">${esc(value)}</div><div class="sub">${esc(sub)}</div>`;
+                totals.appendChild(t);
+            }
+            body.appendChild(totals);
+
+            if (rolling) renderPowerChart(body);
+            else renderDailyBars(body, rows, first, last);
+            renderEnergyTable(body, rows, first, last);
+        }
+
+        function renderDailyBars(body, rows, first, last) {
+            const chips = document.createElement('div');
+            chips.className = 'chips';
+            body.appendChild(chips);
+            const canvas = C.makeChart(body, false);
+            canvas.setAttribute('aria-label', 'Daily energy chart');
+            canvas.setAttribute('aria-describedby', 'energy-table');
+
+            const byDay = new Map(rows.map(r => [r.day, r]));
+            const days = [];
+            for (let d = first, i = 0; d <= last && i < 5000; d = addDays(d, 1), i++) days.push(d);
+            const cfg = {
+                xMode: 'day',
+                xMin: dayX(first) - DAY / 2,
+                xMax: dayX(last) + DAY / 2,
+                slot: DAY,
+                gap: DAY,
+                zeroBased: true,
+                tooltipAll: true,
+                yUnit: 'kWh',
+                series: ENERGY_SERIES.map(s => ({
+                    id: s.key,
+                    label: s.label,
+                    color: s.color,
+                    type: 'bar',
+                    visible: !state.hidden.has(s.key),
+                    points: days.map(d => ({ x: dayX(d), y: byDay.has(d) ? byDay.get(d)[s.key] : null })),
+                })),
+                formatValue: p => `${fmtNum(p.y, 2)} kWh`,
+            };
+            for (const s of ENERGY_SERIES) {
+                chips.appendChild(chipButton(s.label, s.color, !state.hidden.has(s.key), on => {
+                    setHidden(s.key, !on);
+                    cfg.series.find(x => x.id === s.key).visible = on;
+                    C.drawChart(canvas, cfg);
+                }));
+            }
+            C.drawChart(canvas, cfg);
+        }
+
+        function renderPowerChart(body) {
+            // The console's Energy Trend chart (shared /static/js/charts.js)
+            const trend = state.powerTrend;
+            const points = trend?.points || [];
+            const panel = document.createElement('div');
+            body.appendChild(panel);
+            const chart = C.energyTrend(panel, {
+                hidden: C.TREND_SERIES.map(s => s.key).filter(k => state.hidden.has(k)),
+                onToggle: (key, shown) => setHidden(key, !shown),
+            });
+            const now = Date.now() / 1000;
+            const win = trend?.window || { start: now - DAY, end: now };
+            const domain = { t0: win.start, t1: Math.min(win.end, now) };
+            if (trend?.error) {
+                chart.note.textContent = `Trend data unavailable: ${trend.error}`;
+            } else if (trend && trend.enabled === false) {
+                chart.note.textContent = 'Energy Trend needs local time-series storage (PW_TIMESERIES_RETENTION not -1).';
+            } else if (points.length < 2) {
+                chart.note.textContent = 'Not enough raw samples in this window yet — the trend appears as data accumulates.';
+            } else {
+                const mins = Math.round((domain.t1 - domain.t0) / 60);
+                const label = `last ${mins >= 60 ? Math.round(mins / 60) + 'h' : mins + 'm'}`;
+                const bucketMin = Math.round((trend.bucket_seconds || 240) / 60);
+                chart.note.textContent = `${label} · ${bucketMin >= 60 ? (bucketMin / 60) + 'h' : bucketMin + ' min'} resolution · ${points.length} points`;
+            }
+            chart.setData(points, domain);
+        }
+
+        function renderEnergyTable(body, rows, first, last) {
+            const actions = document.createElement('div');
+            actions.className = 'table-actions';
+            const showBtn = document.createElement('button');
+            showBtn.type = 'button';
+            showBtn.className = 'btn';
+            showBtn.setAttribute('aria-controls', 'energy-table');
+            const csvBtn = document.createElement('button');
+            csvBtn.type = 'button';
+            csvBtn.className = 'btn';
+            csvBtn.textContent = 'Download CSV';
+            actions.append(showBtn, csvBtn);
+            body.appendChild(actions);
+            const scroll = document.createElement('div');
+            scroll.className = 'table-scroll';
+            scroll.id = 'energy-table';
+            let html = '<table><thead><tr><th>Day</th>' +
+                ENERGY_SERIES.map(s => `<th>${esc(s.label)} (kWh)</th>`).join('') + '</tr></thead><tbody>';
+            for (const r of rows.slice().reverse()) {
+                html += `<tr><td>${esc(r.day)}</td>` + ENERGY_SERIES.map(s => `<td>${fmtNum(r[s.key], 2)}</td>`).join('') + '</tr>';
+            }
+            scroll.innerHTML = html + '</tbody></table>';
+            body.appendChild(scroll);
+            // The open/closed state survives refreshes
+            function sync() {
+                scroll.hidden = !state.tableOpen;
+                showBtn.textContent = state.tableOpen ? 'Hide table' : 'Show table';
+                showBtn.setAttribute('aria-expanded', String(state.tableOpen));
+            }
+            sync();
+            showBtn.addEventListener('click', () => { state.tableOpen = !state.tableOpen; sync(); });
+            csvBtn.addEventListener('click', () => {
+                const lines = ['day,' + ENERGY_SERIES.map(s => s.key).join(',')];
+                for (const r of rows) lines.push(r.day + ',' + ENERGY_SERIES.map(s => (r[s.key] || 0).toFixed(3)).join(','));
+                const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `daily-energy_${safeName(state.gateway || 'all')}_${first}_${last}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+            });
+        }
+
+        // ---------------------------------------------------------------
+        // Signal cards (temperatures, fans, ...): built from the catalog
+        // ---------------------------------------------------------------
+        async function fetchSignals(signal) {
+            const p = new URLSearchParams();
+            if (state.gateway) p.set('gateway', state.gateway);
+            return getJSON('/api/timeseries/signals?' + p.toString(), signal);
+        }
+
+        async function fetchSignalTrend(signal, info) {
+            if (info.error || !info.enabled || info.signals_enabled === false || !(info.series || []).length) return null;
+            const { start, end } = epochWindow();
+            const p = new URLSearchParams({ start: String(Math.floor(start)), end: String(Math.ceil(end)) });
+            if (state.gateway) p.set('gateway', state.gateway);
+            const trend = await getJSON('/api/timeseries/signal_trend?' + p.toString(), signal);
+            trend.window = { start, end };
+            return trend;
+        }
+
+        function signalsEmpty() {
+            const info = state.devicesInfo || {};
+            if (info.error) return `Couldn't load temperature and fan history: ${esc(info.error)}`;
+            if (info.enabled === false) return 'Time-series storage is turned off. Remove <code>PW_TIMESERIES_RETENTION=-1</code> to record history.';
+            if (info.signals_enabled === false) return 'Temperature and fan recording is turned off. Remove <code>PW_TIMESERIES_SIGNAL_RETENTION=-1</code> to record it.';
+            return 'No temperature or fan history yet. These readings need a TEDAPI connection (Wi-Fi or wired v1r; Powerwall 3 temperatures need pypowerwall 0.17.4 or later); recording starts with the first poll.';
+        }
+
+        // Catalog lookups (from /api/timeseries/signals)
+        function catalog() { return state.devicesInfo || {}; }
+        function groupOf(metric) { return (catalog().metrics || {})[metric]?.group || 'other'; }
+        function groupInfo(group) {
+            const info = (catalog().groups || {})[group];
+            if (info) return info;
+            // A group the catalog doesn't describe still gets a card
+            const words = group.replace(/_/g, ' ');
+            return { label: words.charAt(0).toUpperCase() + words.slice(1), zero_based: false, decimals: 1 };
+        }
+        function metricOrder(metric) { return (catalog().metrics || {})[metric]?.order ?? 1e9; }
+        function metricColor(metric) {
+            const metrics = catalog().metrics || {};
+            const group = groupOf(metric);
+            const inGroup = Object.keys(metrics).filter(m => metrics[m].group === group)
+                .sort((a, b) => metricOrder(a) - metricOrder(b));
+            return SIGNAL_PALETTE[Math.max(0, inGroup.indexOf(metric)) % SIGNAL_PALETTE.length];
+        }
+
+        // Physical Powerwalls with data, numbered by the server like the Console
+        function powerwallUnits(seriesList) {
+            const multiGw = new Set(seriesList.map(s => s.gateway)).size > 1;
+            const byKey = new Map();
+            for (const s of seriesList) {
+                const pw = s.powerwall || 'PW?';
+                const name = (multiGw ? `${state.gatewayNames[s.gateway] || s.gateway} ` : '') + pw;
+                if (!byKey.has(name)) {
+                    byKey.set(name, { key: name, label: name, gateway: s.gateway, order: s.powerwall_order ?? 1e9, devices: new Set() });
+                }
+                byKey.get(name).devices.add(s.device);
+            }
+            const units = Array.from(byKey.values()).sort((a, b) =>
+                a.gateway.localeCompare(b.gateway) || a.order - b.order || a.label.localeCompare(b.label));
+            for (const u of units) {
+                const serials = new Set(Array.from(u.devices).map(d => String(d).split('--').pop()));
+                u.title = Array.from(serials).join(', ');
+            }
+            return units;
+        }
+        function unitOf(series, units) {
+            return units.find(u => u.gateway === series.gateway && u.devices.has(series.device));
+        }
+
+        // One card per signal group with data, in catalog order
+        function renderSignalCards() {
+            keepPlace($('signal-cards'), renderSignalCardsNow);
+        }
+        function renderSignalCardsNow() {
+            const wrap = $('signal-cards');
+            wrap.replaceChildren();
+            C.prune();
+            const trend = state.deviceTrend;
+            const series = (trend && !trend.error && trend.series) || [];
+            const rank = g => groupInfo(g).order ?? 1e9;
+            const groups = Array.from(new Set(series.map(s => groupOf(s.metric))))
+                .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+            if (!groups.length) {
+                const { body } = makeCard(wrap, 'signals', 'Powerwall temperatures and fans');
+                body.innerHTML = `<div class="empty">${trend && trend.error ? `Couldn't load temperature and fan history: ${esc(trend.error)}` : signalsEmpty()}</div>`;
+                return;
+            }
+            const units = powerwallUnits(series);
+            if (state.pw !== 'all' && !units.some(u => u.label === state.pw)) {
+                state.pw = 'all';  // e.g. pw=PW9: no such unit
+                writeUrl();
+            }
+            for (const group of groups) {
+                const { body, note, header } = makeCard(wrap, `signal-${group}`, groupInfo(group).label);
+                renderSignalCard(group, body, note, units, header);
+            }
+        }
+
+        function renderSignalCard(group, body, note, allUnits, header) {
+            const trend = state.deviceTrend;
+            const metricsInfo = catalog().metrics || {};
+            const info = groupInfo(group);
+            const dp = info.decimals ?? 1;
+            const inGroup = (trend.series || []).filter(s => groupOf(s.metric) === group);
+            const daily = trend.resolution === 'daily';
+            const step = trend.bucket_seconds || 60;
+            note.textContent = daily
+                ? `One point per day: daily average, hover for the day's low–high${state.retentionText ? ` · detailed samples kept ${state.retentionText}` : ''}`
+                : `Averaged over ${fmtStep(step)} steps`;
+
+            const controls = document.createElement('div');
+            controls.className = 'chips';
+            body.appendChild(controls);
+
+            // °C / °F only where there are temperatures
+            if (inGroup.some(s => s.unit === '°C')) {
+                const seg = document.createElement('div');
+                seg.className = 'segmented temp-unit';
+                seg.setAttribute('role', 'group');
+                seg.setAttribute('aria-label', 'Temperature unit');
+                for (const [value, label] of [['C', '°C'], ['F', '°F']]) {
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.textContent = label;
+                    b.setAttribute('aria-pressed', String(state.unit === value));
+                    b.addEventListener('click', () => {
+                        state.unit = value;
+                        storageSet(UNIT_KEY, value);
+                        renderSignalCards();
+                    });
+                    seg.appendChild(b);
+                }
+                header.insertBefore(seg, note);
+            }
+
+            // Powerwall selector: All, or one unit at a time. One choice
+            // (pw=) for every card; numbering is the same on every card.
+            const units = allUnits.filter(u => inGroup.some(s => unitOf(s, [u])));
+            const selUnit = units.find(u => u.label === state.pw);
+            const showUnitSuffix = state.pw === 'all' && units.length > 1;
+            const shown = state.pw === 'all' ? inGroup : inGroup.filter(s => selUnit && unitOf(s, [selUnit]));
+            if (units.length > 1 || (state.pw !== 'all' && !selUnit)) {
+                const seg = document.createElement('div');
+                seg.className = 'segmented unit-select';
+                seg.setAttribute('role', 'group');
+                seg.setAttribute('aria-label', 'Powerwall');
+                for (const u of [{ label: 'All', title: 'All Powerwalls' }, ...units]) {
+                    const value = u.label === 'All' ? 'all' : u.label;
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.textContent = u.label;
+                    b.title = u.title;
+                    b.setAttribute('aria-pressed', String(state.pw === value));
+                    b.addEventListener('click', () => { state.pw = value; writeUrl(); renderSignalCards(); });
+                    seg.appendChild(b);
+                }
+                controls.appendChild(seg);
+            }
+            if (!shown.length) {
+                // The selected unit has no readings in this group (e.g. an
+                // expansion pack has no inverter fan)
+                const empty = document.createElement('div');
+                empty.className = 'empty';
+                empty.textContent = `No ${info.label.toLowerCase()} readings for ${state.pw} in this range.`;
+                body.appendChild(empty);
+                return;
+            }
+
+            const metrics = Array.from(new Set(shown.map(s => s.metric))).sort((a, b) => metricOrder(a) - metricOrder(b));
+            let chartCanvas = null;
+            let cfg = null;
+            if (metrics.length > 1) {
+                const lab = document.createElement('span');
+                lab.className = 'chip-label';
+                lab.textContent = 'Show';
+                controls.appendChild(lab);
+                for (const m of metrics) {
+                    controls.appendChild(chipButton(metricsInfo[m]?.label || m, metricColor(m), !state.hidden.has(m), on => {
+                        setHidden(m, !on);
+                        updateVisibility();
+                    }, true));
+                }
+            }
+            if (showUnitSuffix) {
+                // Line style tells the units apart when all are shown
+                const key = document.createElement('span');
+                key.className = 'chip-label unit-key';
+                units.forEach((u, i) => {
+                    const item = document.createElement('span');
+                    const sw = document.createElement('span');
+                    sw.className = 'swatch line';
+                    const dash = DEVICE_DASHES[i % DEVICE_DASHES.length];
+                    sw.style.background = dash.length
+                        ? `repeating-linear-gradient(90deg, #8b949e 0 ${dash[0] / 2}px, transparent ${dash[0] / 2}px ${(dash[0] + dash[1]) / 2}px)`
+                        : '#8b949e';
+                    item.append(sw, document.createTextNode(u.label));
+                    key.appendChild(item);
+                });
+                controls.appendChild(key);
+            }
+
+            const unit = unitLabel(shown[0]?.unit || '');
+            const win = trend.window;
+            // Daily points outside the chosen From..To days are left out
+            const inRange = p => !daily || ((!state.from || p.day >= state.from) && (!state.to || p.day <= state.to));
+            const series = shown
+                .slice()
+                .sort((a, b) => {
+                    const ua = unitOf(a, units), ub = unitOf(b, units);
+                    return ((ua ? units.indexOf(ua) : 1e9) - (ub ? units.indexOf(ub) : 1e9))
+                        || metricOrder(a.metric) - metricOrder(b.metric);
+                })
+                .map(s => {
+                    const u = unitOf(s, units);
+                    const uIdx = Math.max(0, units.indexOf(u));
+                    return {
+                        id: `${s.gateway}|${s.device}|${s.metric}`,
+                        metric: s.metric,
+                        label: (metricsInfo[s.metric]?.label || s.label || s.metric) + (showUnitSuffix && u ? ` · ${u.label}` : ''),
+                        color: metricColor(s.metric),
+                        dash: showUnitSuffix ? DEVICE_DASHES[uIdx % DEVICE_DASHES.length] : [],
+                        type: 'line',
+                        band: daily,
+                        visible: !state.hidden.has(s.metric),
+                        unit: s.unit,
+                        points: s.points.filter(inRange).map(p => ({
+                            x: daily ? dayX(p.day) : p.ts + step / 2,
+                            y: toUnit(p.avg, s.unit),
+                            lo: toUnit(p.min, s.unit),
+                            hi: toUnit(p.max, s.unit),
+                            n: p.n || 1,
+                        })),
+                    };
+                });
+            let xMin, xMax;
+            if (daily) {
+                const firstDay = state.from || localDay(new Date(win.start * 1000));
+                const lastDay = localDay(new Date(Math.min(win.end, Date.now() / 1000) * 1000));
+                xMin = dayX(firstDay) - DAY / 2;
+                xMax = dayX(state.to && state.to < lastDay ? state.to : lastDay) + DAY / 2;
+            } else {
+                xMin = win.start;
+                xMax = Math.min(win.end, Date.now() / 1000);
+            }
+            cfg = {
+                xMode: daily ? 'day' : 'time',
+                xMin,
+                xMax: Math.max(xMax, xMin + 60),
+                gap: daily ? DAY : step,
+                zeroBased: !!info.zero_based,
+                yUnit: unit,
+                series,
+                formatX: daily ? x => fmtDayLong(xDay(x)) : x => fmtTimeLong(x - step / 2, step < 60),
+                formatValue: p => daily
+                    ? `${fmtNum(p.y, dp)} (${fmtNum(p.lo, dp)}–${fmtNum(p.hi, dp)}) ${unit}`
+                    : `${fmtNum(p.y, dp)} ${unit}`,
+            };
+            const statsId = `signal-${group}-stats`;
+            chartCanvas = C.makeChart(body, true);
+            chartCanvas.setAttribute('aria-label', `${info.label} chart`);
+            chartCanvas.setAttribute('aria-describedby', statsId);
+            C.drawChart(chartCanvas, cfg);
+
+            // Low / average / high / last over the range (the chart's text alternative)
+            const statsWrap = document.createElement('div');
+            statsWrap.className = 'table-scroll stats-table';
+            statsWrap.id = statsId;
+            body.appendChild(statsWrap);
+            function renderStats() {
+                let html = `<table><caption class="sr-only">${esc(info.label)}: low, average, high and last value for the range</caption>` +
+                    `<thead><tr><th>Series<span class="unit-head"> (${esc(unit)})</span></th><th>Low</th>` +
+                    `<th title="Weighted by sample count">Average</th><th>High</th>` +
+                    `<th title="${daily ? "Average of the last day" : "Average of the last step"}">Last</th></tr></thead><tbody>`;
+                const u = `<span class="unit"> ${esc(unit)}</span>`;
+                let any = false;
+                for (const s of series) {
+                    if (!s.visible) continue;
+                    const pts = s.points.filter(p => p.y != null);
+                    if (!pts.length) continue;
+                    any = true;
+                    let lo = Infinity, hi = -Infinity, loX = null, hiX = null, total = 0, weight = 0;
+                    for (const p of pts) {
+                        const l = p.lo ?? p.y, h = p.hi ?? p.y;
+                        if (l < lo) { lo = l; loX = p.x; }
+                        if (h > hi) { hi = h; hiX = p.x; }
+                        total += p.y * p.n;
+                        weight += p.n;
+                    }
+                    html += `<tr><td><span class="dot" style="background:${s.color}"></span>${esc(s.label)}</td>` +
+                        `<td title="${esc(cfg.formatX(loX))}">${fmtNum(lo, dp)}${u}</td>` +
+                        `<td>${fmtNum(total / weight, dp)}${u}</td>` +
+                        `<td title="${esc(cfg.formatX(hiX))}">${fmtNum(hi, dp)}${u}</td>` +
+                        `<td title="${esc(cfg.formatX(pts[pts.length - 1].x))}">${fmtNum(pts[pts.length - 1].y, dp)}${u}</td></tr>`;
+                }
+                statsWrap.innerHTML = any ? html + '</tbody></table>' : '';
+            }
+            function updateVisibility() {
+                for (const s of series) s.visible = !state.hidden.has(s.metric);
+                C.drawChart(chartCanvas, cfg);
+                renderStats();
+            }
+            renderStats();
+        }
+
+        // ---------------------------------------------------------------
+        // Loading: one AbortController per reload; only the latest writes
+        // ---------------------------------------------------------------
+        function fmtDuration(sec) {
+            if (sec == null || sec < 0) return null;
+            if (sec === 0) return 'indefinitely';
+            if (sec % DAY === 0) return `${sec / DAY} day${sec === DAY ? '' : 's'}`;
+            if (sec % 3600 === 0) return `${sec / 3600} hours`;
+            return `${Math.round(sec / 60)} minutes`;
+        }
+
+        async function loadGateways() {
+            try {
+                const status = await getJSON('/api/timeseries/status');
+                const names = status.gateway_names || {};
+                const ids = new Set([...Object.keys(names), ...(status.gateways || [])]);
+                for (const id of ids) state.gatewayNames[id] = names[id] || id;
+                const sel = $('gateway-select');
+                if (ids.size && state.gateway && !ids.has(state.gateway)) {
+                    state.gateway = '';  // unknown gateway= : show all gateways
+                }
+                if (ids.size > 1) {
+                    for (const id of ids) {
+                        const o = document.createElement('option');
+                        o.value = id;
+                        o.textContent = state.gatewayNames[id];
+                        sel.appendChild(o);
+                    }
+                } else {
+                    sel.closest('.control-group').hidden = true;
+                }
+                state.retentionText = fmtDuration(status.signal_retention_seconds);
+            } catch (e) { /* selector is optional */ }
+        }
+
+        let current = null;  // the AbortController of the latest reload
+        async function reload(signalsToo) {
+            if (current) current.abort();
+            const ctl = new AbortController();
+            current = ctl;
+            const timer = setTimeout(() => { ctl.timedOut = true; ctl.abort(); }, FETCH_TIMEOUT_MS);
+            const live = () => current === ctl;
+            // An older, slower response never overwrites a newer one; a
+            // timed-out request reports an error instead of hanging
+            const failure = e => (ctl.timedOut ? 'request timed out' : e.message);
+            writeUrl();
+            syncControls();
+            try {
+                const energy = fetchEnergy(ctl.signal).then(result => {
+                    if (!live()) return;
+                    state.energyDays = result.days;
+                    state.powerTrend = result.power;
+                    if (!result.enabled) {
+                        renderEnergyMessage('Time-series storage is turned off. Remove <code>PW_TIMESERIES_RETENTION=-1</code> to start recording daily energy.');
+                    } else {
+                        renderEnergy();
+                    }
+                }, e => {
+                    if (!live() || (e.name === 'AbortError' && !ctl.timedOut)) return;
+                    renderEnergyMessage(`Couldn't load daily energy: ${esc(failure(e))}`);
+                });
+
+                let info = state.devicesInfo;
+                if (signalsToo || !info) {
+                    try {
+                        info = await fetchSignals(ctl.signal);
+                    } catch (e) {
+                        if (!live() || (e.name === 'AbortError' && !ctl.timedOut)) return;
+                        info = { error: failure(e) };
+                    }
+                    if (!live()) return;
+                    state.devicesInfo = info;
+                }
+                let trend;
+                try {
+                    trend = await fetchSignalTrend(ctl.signal, info);
+                } catch (e) {
+                    if (!live() || (e.name === 'AbortError' && !ctl.timedOut)) return;
+                    trend = { error: failure(e) };
+                }
+                if (!live()) return;
+                state.deviceTrend = trend;
+                renderSignalCards();
+                await energy;
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+        document.querySelectorAll('#range-presets button').forEach(b => b.addEventListener('click', () => {
+            applyPreset(b.dataset.range);
+            reload(false);
+        }));
+        function onDateChange() {
+            const from = validDay($('from-date').value) ? $('from-date').value : null;
+            const to = validDay($('to-date').value) ? $('to-date').value : localDay(new Date());
+            setCustomRange(from, to);
+            reload(false);
+        }
+        $('from-date').addEventListener('change', onDateChange);
+        $('to-date').addEventListener('change', onDateChange);
+        $('gateway-select').addEventListener('change', e => {
+            state.gateway = e.target.value;
+            state.pw = 'all';
+            reload(true);
+        });
+
+        // Refresh while the range includes today: every minute for the 1h/6h
+        // views (so new samples show up), every 5 minutes otherwise
+        let lastRefresh = Date.now();
+        setInterval(() => {
+            if (document.hidden) return;
+            if (Date.now() - lastRefresh < (SUBDAY.has(state.range) ? 60 * 1000 : REFRESH_MS) - 1000) return;
+            if (!state.to || state.to >= localDay(new Date())) {
+                lastRefresh = Date.now();
+                if (state.range !== 'custom') applyPreset(state.range);
+                reload(true);
+            }
+        }, 60 * 1000);
+
+        readUrl();
+        syncControls();
+        loadGateways().then(() => reload(true));
+    })();
+    </script>
+</body>
+</html>

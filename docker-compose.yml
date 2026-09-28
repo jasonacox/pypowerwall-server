@@ -43,6 +43,9 @@ services:
       # /data/timeseries.db by default; mount the volume to keep history:
       # - PW_TIMESERIES_RETENTION=24h       # raw sample window; -1 disables
       # - PW_TIMESERIES_DAILY_RETENTION=0   # daily kWh rows; 0 = unlimited
+      # Powerwall temperature/fan history (shown on /history):
+      # - PW_TIMESERIES_SIGNAL_RETENTION=30d  # -1 = don't record
+      # - PW_TIMESERIES_SIGNAL_INTERVAL=60s   # 30s minimum (~2x disk)
     volumes:
       - pws-data:/data
     # Health check - verifies the server process is running and responding.

@@ -66,7 +66,7 @@ import logging
 import math
 import time
 from copy import deepcopy
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
@@ -230,6 +230,9 @@ class GatewayManager:
             str, GatewayConfig
         ] = {}  # Gateways waiting for lazy initialization
         self._preserve_stale_count: Dict[str, int] = {}  # Multi-PW snapshot preservation staleness tracker
+        # Gateways whose current vitals were copied from the previous poll by
+        # the multi-PW guard: not fresh readings, so not recorded as history.
+        self._vitals_preserved: Set[str] = set()
 
         # TEDAPI SolarOnly fallback tracking (per gateway).
         # Distinct from _consecutive_failures: is_degraded = transient transport
@@ -330,6 +333,7 @@ class GatewayManager:
         The guard is capped at ``_PRESERVE_STALENESS_CAP`` consecutive polls — after
         that, the partial data passes through so downstream consumers see reality.
         """
+        self._vitals_preserved.discard(gateway_id)
         previous = self._last_successful_data.get(gateway_id)
         if not previous:
             return data
@@ -385,6 +389,7 @@ class GatewayManager:
                 self._PRESERVE_STALENESS_CAP,
             )
             data.vitals = deepcopy(previous.vitals)
+            self._vitals_preserved.add(gateway_id)
             preserved_any = True
 
         if (
@@ -1478,6 +1483,7 @@ class GatewayManager:
             # Persist the sample for daily energy statistics (never raises;
             # no-op when the store is disabled).
             await self._record_timeseries_sample(gateway_id, gateway, data)
+            await self._record_signal_sample(gateway_id, gateway, data)
 
             # Publish to MQTT after the cache is updated (never raises here).
             self._schedule_mqtt_publish(gateway_id)
@@ -1573,6 +1579,55 @@ class GatewayManager:
             )
         except Exception as e:
             logger.debug(f"Time-series sample recording failed for {gateway_id}: {e}")
+
+    async def _record_signal_sample(
+        self, gateway_id: str, gateway: Gateway, data: PowerwallData
+    ) -> None:
+        """Feed this poll's Powerwall temperatures and fan readings into the
+        TimeSeriesStore.
+
+        Signals come from the vitals and fan_speeds already fetched this
+        cycle (no extra gateway calls). The store keeps at most one snapshot
+        per PW_TIMESERIES_SIGNAL_INTERVAL, so most calls return immediately.
+        Like power samples, failures are logged and swallowed and a hung
+        write is capped by a timeout.
+
+        Args:
+            gateway_id: Gateway identifier.
+            gateway: Gateway config (its timezone keys the daily rollups).
+            data: This poll's data (vitals, fan_speeds, timestamp).
+        """
+        try:
+            from app.core.timeseries import (
+                extract_device_metrics,
+                get_timeseries_store,
+            )
+
+            store = get_timeseries_store()
+            if not store.signals_enabled:
+                return
+            # Vitals copied forward from the previous poll by the multi-PW
+            # guard are not fresh readings: record only this poll's fans
+            vitals = None if gateway_id in self._vitals_preserved else data.vitals
+            metrics = extract_device_metrics(vitals, data.fan_speeds)
+            if not metrics:
+                return
+            ts = data.timestamp
+            if ts is None or ts < 1e9:
+                ts = datetime.now().timestamp()
+            await asyncio.wait_for(
+                store.record_signal_sample(
+                    gateway_id, ts, metrics, timezone=gateway.timezone
+                ),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Device signal write timed out for %s — polling continues",
+                gateway_id,
+            )
+        except Exception as e:
+            logger.debug(f"Device signal recording failed for {gateway_id}: {e}")
 
     def _schedule_mqtt_publish(self, gateway_id: str) -> None:
         """Schedule an MQTT publish of the current cached status for a gateway.

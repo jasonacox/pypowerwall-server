@@ -30,6 +30,7 @@ The **MQTT** panel shows the live MQTT settings if the `PW_MQTT_BROKER` environm
 - **Real-Time Updates** - WebSocket streaming with 1-second updates and background polling with intelligent caching
 - **Complete API** - Full backward compatibility with pypowerwall proxy plus new multi-gateway and aggregate endpoints
 - **Console Web UI** - Tesla Power Flow animation, management console, and auto-generated API documentation at /docs
+- **History** - Daily energy totals for any date range plus Powerwall temperature and fan history at `/history`, stored locally in SQLite
 - **Optional Control Mode** - Token-protected `/control/*` API to set backup reserve and operating mode, plus a Powerwall Control card in the web Console (enabled by `PW_CONTROL_SECRET`; read-only by default)
 - **MQTT Integration** - Publish live Powerwall metrics to any MQTT broker; built-in Home Assistant auto-discovery; see [mqtt-tools/README.md](mqtt-tools/README.md)
 
@@ -91,7 +92,7 @@ docker run -d \
 
 > **Note:** `PW_WIFI_HOST` is the IP address pypowerwall uses for the WiFi fallback path in v1r mode. It defaults to `192.168.91.1`. Only set it if your gateway is on a different IP (e.g. behind a travel router).
 >
-> **Note:** The `-v pws-data:/data` mount persists the daily energy history (SQLite time-series store) across container upgrades. Omit it if you run with `PW_TIMESERIES_RETENTION=-1` (subsystem disabled).
+> **Note:** The `-v pws-data:/data` mount persists the daily energy, temperature and fan history (SQLite time-series store) across container upgrades. Omit it if you run with `PW_TIMESERIES_RETENTION=-1` (subsystem disabled).
 
 #### Basic LAN Mode (Powerwall 3, No Gateway Password or RSA Key)
 
@@ -295,6 +296,8 @@ Raise it if a slow local gateway logs poll timeouts.
 PW_TIMESERIES_RETENTION=24h            # Raw 5s sample retention (default: 24h)
 PW_TIMESERIES_DAILY_RETENTION=0        # Daily kWh aggregate retention (default: 0 = unlimited)
 PW_TIMESERIES_PATH=/data/timeseries.db  # SQLite path (default: /data/timeseries.db if /data exists)
+PW_TIMESERIES_SIGNAL_RETENTION=30d     # Temperature/fan sample retention (default: 30d; -1 = don't record)
+PW_TIMESERIES_SIGNAL_INTERVAL=60s      # Seconds between temperature/fan samples (default: 60s; minimum 30s)
 ```
 The server records every poll cycle's power readings to a local SQLite
 store (WAL mode) and derives daily energy totals per gateway via trapezoidal
@@ -316,6 +319,62 @@ integrated — no fabricated energy. Set `PW_TIMESERIES_RETENTION=-1` to
 disable the subsystem entirely for headless proxy deployments (no SQLite
 file, no writes, UI panel hidden). Retention accepts `90s`, `48h`, `7d`,
 `30d`, `365d` style values; `0` = unlimited.
+
+**Powerwall temperatures and fans.** The same store records each
+Powerwall's temperatures (battery pack max/min, shunt, inverter ambient;
+Powerwall 2 ambient) and inverter fans (speed in rpm and duty cycle in %)
+once per `PW_TIMESERIES_SIGNAL_INTERVAL`: `60s` by default, or `30s` (the
+minimum) for finer detail. Lower values are raised to 30s with a warning:
+these readings change slowly, and finer sampling mostly costs disk and
+SD-card wear.
+The readings come from the vitals and fan data each poll already fetches,
+so this adds no gateway calls; they need a TEDAPI connection (Powerwall 3
+temperatures need pypowerwall 0.17.4 or later). A daily low/average/high
+for every signal is kept alongside, under `PW_TIMESERIES_DAILY_RETENTION`,
+so long-range history survives the raw samples being pruned. Set
+`PW_TIMESERIES_SIGNAL_RETENTION=-1` to stop recording them while keeping
+energy history.
+
+Disk use for the raw samples, per Powerwall 3 (8 signals):
+
+| `PW_TIMESERIES_SIGNAL_INTERVAL` | Per day | 7 days | 30 days (default retention) |
+|---|---|---|---|
+| `60s` (default) | ~0.4 MB | ~3 MB | ~12 MB |
+| `30s` (minimum) | ~0.8 MB | ~6 MB | ~24 MB |
+
+**History page (`/history`).** Look up daily energy for any date range
+(1 hour to all stored history) with range totals, a per-day chart, a
+table and CSV download. On the **1h / 6h / 24h** ranges the energy card
+instead shows the same **Energy Trend** chart as the console: solar, home,
+battery and grid kW plus battery level % on the right axis, from the raw
+samples kept for `PW_TIMESERIES_RETENTION`.
+
+Below it the page draws **one chart card per signal group** (Powerwall
+temperatures, Fan speed, Fan duty cycle), built entirely from the catalog
+at `/api/timeseries/signals`: a new metric, or a whole new group, appears
+with no page changes. Each card shows **Show** toggles when a group has
+several metrics, and low / average / high / last values for the range (the
+average is weighted by sample count; hover a value for its time). The
+temperature card has its own °C/°F switch in its header. With more than one
+Powerwall, an **All / PW1 / PW2 …** selector shows one unit at a time, or
+all of them told apart by line style. Units are numbered by the server
+exactly as the Console and `/pod` number them (battery-list order, with
+expansion packs labelled after their leader, e.g. `PW1 Exp 1`), and every
+series from `/api/timeseries/signals` and `/signal_trend` carries that
+`powerwall` label. Ranges up to 14 days use the raw samples, averaged into
+about 360 steps per chart (never finer than `PW_TIMESERIES_SIGNAL_INTERVAL`,
+with the low/high of each step); longer ranges, and any request that would
+scan more than about 500k raw rows, use the daily low/average/high. The **1h** and **6h** ranges show
+every stored sample and refresh every minute; the energy card shows today
+for those ranges, since energy is totalled per day.
+
+The range, gateway, selected Powerwall (`pw=`) and any series you switch
+off (`hide=`, also remembered in the browser) are kept in the URL, so a
+view can be bookmarked, e.g. `/history?range=90d` or
+`/history?range=6h&pw=PW2&hide=fan_b_rpm`. Under `PROXY_BASE_URL` it is at
+`<base>/history`. The Console's Energy Trend and the History charts share
+one script, `app/static/js/charts.js`, and stylesheet,
+`app/static/css/charts.css`.
 
 ### Configuration File (gateways.yaml)
 
@@ -489,6 +548,8 @@ The default budget (1000 requests / 60s per IP) is set well above a normal dashb
 ## Console
 
 The management console is at `/console` (the Power Flow animation is at `/`).
+The **History** link in the console header (and on the Daily Energy card)
+opens the History page at `/history` (see **History page** under Environment Variables).
 
 ### Card Visibility and Kiosk Mode
 
@@ -637,12 +698,16 @@ return `503`; a Tesla-side error returns `502`, and an invalid POST body `400`.
 - `GET /api/aggregate/soe` - Total battery capacity and charge
 - `GET /api/aggregate/status` - Health status of all gateways
 
-**Time-Series Endpoints (Daily Energy):**
+**Time-Series Endpoints (Daily Energy, Temperatures, Fans):**
 - `GET /api/timeseries/today` - Today's running kWh totals per gateway
-- `GET /api/timeseries/daily?days=7` - Daily kWh totals (per gateway/category)
+- `GET /api/timeseries/daily?days=7` - Daily kWh totals (per gateway/category); `start`/`end` (`YYYY-MM-DD`) select any range of local days instead, e.g. `?start=2026-01-01&end=2026-06-30`
 - `GET /api/timeseries/trend?hours=24` - Bucketed kW + battery level for charting (per-gateway mean, summed across gateways)
 - `GET /api/timeseries/samples` - Raw samples (troubleshooting; filters: `gateway`, `start`, `end`, `limit`) — includes battery level (`soe`)
 - `GET /api/timeseries/status` - Subsystem status, retention settings, DB size
+- `GET /api/timeseries/signals` - Recorded temperature/fan series per gateway and device (each with its `powerwall` label, e.g. `PW1` / `PW1 Exp 1`, and the time range it covers), plus the `metrics` / `groups` catalog and gateway names
+- `GET /api/timeseries/signal_trend` - Temperature/fan history for charting, with avg/min/max and sample count per point (filters: `metrics`, `gateway`, `devices`, `start`, `end`, `hours`; `resolution=auto|raw|daily`; `raw` is served as daily beyond 14 days or ~500k rows)
+
+On `/signal_trend`, `start` / `end` are epoch seconds between 0 and 4102444800 (2100-01-01); other values return 422. `/trend` rejects only non-finite values (`nan`, `inf`).
 
 All report `{"enabled": false, ...}` when disabled (`PW_TIMESERIES_RETENTION=-1`).
 
@@ -892,6 +957,7 @@ pypowerwall-server/
 │   │   └── transform.py        # UI data transformations
 │   └── static/
 │       ├── index.html          # Management console
+│       ├── history.html        # History page (/history)
 │       ├── example.html        # iFrame demo
 │       └── powerflow/          # Power flow UI assets
 ├── tests/

@@ -1,10 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    {PROXY_BASE_SCRIPT}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {PROXY_BASE_SCRIPT}
     <title>PyPowerwall Server</title>
+    <script src="{PROXY_BASE}/static/js/charts.js?v={SERVER_VERSION}"></script>
+    <link rel="stylesheet" href="{PROXY_BASE}/static/css/charts.css?v={SERVER_VERSION}">
     <style>
         * {
             margin: 0;
@@ -276,78 +278,21 @@
             font-size: 0.8em;
             color: var(--text-secondary);
         }
-        .energy-trend-legend {
+        /* The shared Energy Trend (charts.css) fills the rest of the card */
+        #energy-trend-host {
+            flex: 1 1 auto;
+            min-height: 0;
             display: flex;
-            flex-wrap: wrap;
+            flex-direction: column;
+        }
+        #energy-trend-host .energy-trend-legend,
+        #energy-trend-host .energy-trend-note {
             flex-shrink: 0;
-            gap: 6px 16px;
-            font-size: 0.8em;
-            color: var(--text-secondary);
-            margin-bottom: 8px;
         }
-        .energy-trend-legend .key {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            cursor: pointer;
-            user-select: none;
-            transition: opacity 0.15s ease;
-            /* button reset — keys are <button> for keyboard access, styled as plain text */
-            border: 0;
-            background: none;
-            padding: 0;
-            font: inherit;
-            color: inherit;
-        }
-        .energy-trend-legend .key:focus-visible {
-            outline: 1px solid #58a6ff;
-            outline-offset: 2px;
-            border-radius: 3px;
-        }
-        .energy-trend-legend .key.off {
-            opacity: 0.35;
-        }
-        #energy-trend-tooltip {
-            position: absolute;
-            display: none;
-            background: rgba(13, 17, 23, 0.95);
-            border: 1px solid rgba(139, 148, 158, 0.4);
-            border-radius: 6px;
-            padding: 6px 9px;
-            font-size: 11px;
-            line-height: 1.6;
-            color: var(--text-color, #c9d1d9);
-            pointer-events: none;
-            z-index: 5;
-            white-space: nowrap;
-        }
-        #energy-trend-tooltip .tt-time {
-            font-weight: 600;
-            margin-bottom: 2px;
-        }
-        #energy-trend-tooltip .tt-dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 6px;
-            vertical-align: middle;
-        }
-        .energy-trend-legend .swatch {
-            display: inline-block;
-            width: 16px;
-            height: 3px;
-            border-radius: 2px;
-        }
-        .energy-trend-legend .swatch.dashed {
-            background: repeating-linear-gradient(90deg, var(--battery-color) 0 5px, transparent 5px 9px);
-        }
-        #energy-trend-chart {
-            width: 100%;
+        #energy-trend-host .energy-trend-chart {
             flex: 1 1 auto;
             min-height: 140px;
             height: auto;
-            display: block;
         }
         .energy-trend-ranges {
             display: flex;
@@ -372,13 +317,6 @@
             color: var(--text-primary, #e6edf3);
             border-color: var(--text-secondary);
             background: rgba(139, 148, 158, 0.2);
-        }
-        .energy-trend-note {
-            flex-shrink: 0;
-            font-size: 0.8em;
-            color: var(--text-muted);
-            margin-top: 6px;
-            min-height: 1em;
         }
         
         .energy-grid {
@@ -1370,6 +1308,13 @@
             font-size: 0.8em;
             color: var(--text-secondary);
         }
+        .daily-energy-hint a {
+            color: var(--accent-blue);
+            text-decoration: none;
+        }
+        .daily-energy-hint a:hover {
+            text-decoration: underline;
+        }
         .daily-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -1843,6 +1788,7 @@
             </div>
             <div class="header-links">
                 <a href="{PROXY_BASE}/">Power Flow</a>
+                <a href="{PROXY_BASE}/history">History</a>
                 <a href="{PROXY_BASE}/docs">API Docs</a>
                 <a href="{PROXY_BASE}/api/gateways">Gateways API</a>
                 <a href="https://github.com/jasonacox/pypowerwall-server" target="_blank">GitHub</a>
@@ -1963,16 +1909,8 @@
                         <button data-range="day">Day</button>
                         <button data-range="fit">Fit</button>
                     </div>
-                    <div class="energy-trend-legend">
-                        <button type="button" class="key" data-series="solar_kw"><span class="swatch" style="background: var(--solar-color)"></span>Solar kW</button>
-                        <button type="button" class="key" data-series="home_kw"><span class="swatch" style="background: var(--home-color)"></span>Home kW</button>
-                        <button type="button" class="key" data-series="battery_kw"><span class="swatch" style="background: var(--battery-color)"></span>Battery kW</button>
-                        <button type="button" class="key" data-series="grid_kw"><span class="swatch" style="background: var(--grid-color)"></span>Grid kW</button>
-                        <button type="button" class="key" data-series="battery_level"><span class="swatch dashed"></span>Battery Level % <span style="color: var(--text-muted)">(right axis)</span></button>
-                    </div>
-                    <canvas id="energy-trend-chart"></canvas>
-                    <div id="energy-trend-tooltip"></div>
-                    <div class="energy-trend-note" id="energy-trend-note"></div>
+                    <!-- Legend, chart, tooltip and note: PWCharts.energyTrend (/static/js/charts.js) -->
+                    <div id="energy-trend-host"></div>
                 </div>
                 </div>
             </div>
@@ -2347,7 +2285,7 @@
                         </span>
                         Daily Energy
                     </div>
-                    <div class="daily-energy-hint">kWh per day — local time-series storage</div>
+                    <div class="daily-energy-hint">kWh per day — local time-series storage · <a href="{PROXY_BASE}/history">Full history</a></div>
                 </div>
                 <div id="daily-energy-content" class="daily-energy-content">
                     <div class="no-strings">Loading daily energy...</div>
@@ -2943,268 +2881,15 @@
             }
         }
 
-        // Standard colors: solar yellow, home blue, battery green, grid gray
-        const TREND_COLORS = {
-            solar: '#f0c000',
-            home: '#58a6ff',
-            battery: '#3fb950',
-            grid: '#8b949e'
-        };
-
-        // Click a legend key to show/hide that series
-        const energyTrendHidden = new Set();
-        const TREND_SERIES = [
-            { key: 'solar_kw',    label: 'Solar',         color: TREND_COLORS.solar,   axis: 'kw' },
-            { key: 'home_kw',     label: 'Home',          color: TREND_COLORS.home,    axis: 'kw' },
-            { key: 'battery_kw',  label: 'Battery',       color: TREND_COLORS.battery, axis: 'kw' },
-            { key: 'grid_kw',     label: 'Grid',          color: TREND_COLORS.grid,    axis: 'kw' },
-            { key: 'battery_level', label: 'Battery Level', color: TREND_COLORS.battery, axis: 'pct' }
-        ];
-
-        // Nearest data point to the cursor (null when not hovering)
-        let energyTrendHoverPoint = null;
-
+        // Legend, drawing, hover, tooltip and resize live in /static/js/charts.js
+        // (PWCharts.energyTrend), shared with the History page so fixes land once.
+        const energyTrendChart = PWCharts.energyTrend(document.getElementById('energy-trend-host'));
+        energyTrendChart.note.id = 'energy-trend-note';
         function drawEnergyTrendChart() {
-            const canvas = document.getElementById('energy-trend-chart');
-            if (!canvas) return;
-            const rect = canvas.getBoundingClientRect();
-            canvas.width = rect.width;
-            canvas.height = rect.height;
-            const ctx = canvas.getContext('2d');
-            const W = canvas.width, H = canvas.height;
-            ctx.clearRect(0, 0, W, H);
-            const points = energyTrendPoints;
-            if (!points || points.length < 2 || W < 100) {
-                // No drawable data — clear hover state so no stale tooltip lingers
-                energyTrendHoverPoint = null;
-                const staleTip = document.getElementById('energy-trend-tooltip');
-                if (staleTip) staleTip.style.display = 'none';
-                return;
-            }
-
-            const padL = 48, padR = 44, padT = 12, padB = 24;
-            const plotW = W - padL - padR, plotH = H - padT - padB;
-            const dom = energyTrendDomain || { t0: points[0].ts, t1: points[points.length - 1].ts };
-            const x0 = dom.t0, x1 = dom.t1;
-            const xSpan = (x1 - x0) || 1;
-            const X = ts => padL + ((ts - x0) / xSpan) * plotW;
-
-            // kW scale (left axis) across visible series only, zero included
-            let minKw = 0, maxKw = 0;
-            for (const p of points) {
-                for (const s of TREND_SERIES) {
-                    if (s.axis !== 'kw' || energyTrendHidden.has(s.key)) continue;
-                    minKw = Math.min(minKw, p[s.key]);
-                    maxKw = Math.max(maxKw, p[s.key]);
-                }
-            }
-            if (maxKw === minKw) maxKw = minKw + 1;
-            const Y = kw => padT + (1 - (kw - minKw) / (maxKw - minKw)) * plotH;
-            // Battery level scale (right axis, fixed 0-100%)
-            const Ypct = pct => padT + (1 - Math.max(0, Math.min(100, pct)) / 100) * plotH;
-
-            // Horizontal gridlines + left kW labels / right % labels
-            ctx.font = '11px system-ui, sans-serif';
-            ctx.textAlign = 'right';
-            ctx.textBaseline = 'middle';
-            for (let i = 0; i <= 4; i++) {
-                const kw = minKw + ((maxKw - minKw) * i) / 4;
-                const y = Y(kw);
-                ctx.strokeStyle = 'rgba(139, 148, 158, 0.15)';
-                ctx.lineWidth = 1;
-                ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
-                ctx.fillStyle = 'rgba(139, 148, 158, 0.8)';
-                ctx.fillText(kw.toFixed(1), padL - 6, y);
-                ctx.textAlign = 'left';
-                ctx.fillText(`${Math.round(i * 25)}%`, W - padR + 6, y);
-                ctx.textAlign = 'right';
-            }
-
-            // Zero line (battery/grid swing negative)
-            if (minKw < 0) {
-                const zy = Y(0);
-                ctx.strokeStyle = 'rgba(139, 148, 158, 0.4)';
-                ctx.setLineDash([4, 4]);
-                ctx.beginPath(); ctx.moveTo(padL, zy); ctx.lineTo(W - padR, zy); ctx.stroke();
-                ctx.setLineDash([]);
-                ctx.fillStyle = 'rgba(139, 148, 158, 0.9)';
-                ctx.textAlign = 'right';
-                ctx.textBaseline = 'middle';
-                ctx.fillText('0', padL - 6, zy);
-            }
-
-            // Time axis labels (~6 ticks), e.g. "4p"
-            ctx.fillStyle = 'rgba(139, 148, 158, 0.8)';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'top';
-            const ticks = Math.min(6, points.length - 1);
-            for (let i = 0; i <= ticks; i++) {
-                const ts = x0 + (xSpan * i) / ticks;
-                const d = new Date(ts * 1000);
-                const h = d.getHours();
-                const label = `${h % 12 || 12}${h >= 12 ? 'p' : 'a'}`;
-                ctx.fillText(label, X(ts), H - padB + 6);
-            }
-
-            const drawSeries = (key, color, dashed, yScale, fill) => {
-                // Collect contiguous segments (gaps where v == null)
-                const segments = [];
-                let seg = [];
-                for (const p of points) {
-                    const v = p[key];
-                    if (v == null) {
-                        if (seg.length > 1) segments.push(seg);
-                        seg = [];
-                    } else {
-                        seg.push([X(p.ts), yScale(v)]);
-                    }
-                }
-                if (seg.length > 1) segments.push(seg);
-                for (const s of segments) {
-                    if (fill) {
-                        // Translucent fill between line and zero axis
-                        const zy = Y(0);
-                        ctx.fillStyle = color;
-                        ctx.globalAlpha = 0.12;
-                        ctx.beginPath();
-                        ctx.moveTo(s[0][0], zy);
-                        for (const [sx, sy] of s) ctx.lineTo(sx, sy);
-                        ctx.lineTo(s[s.length - 1][0], zy);
-                        ctx.closePath();
-                        ctx.fill();
-                        ctx.globalAlpha = 1;
-                    }
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = 1.8;
-                    if (dashed) ctx.setLineDash([5, 4]);
-                    ctx.beginPath();
-                    ctx.moveTo(s[0][0], s[0][1]);
-                    for (let i = 1; i < s.length; i++) ctx.lineTo(s[i][0], s[i][1]);
-                    ctx.stroke();
-                    ctx.setLineDash([]);
-                }
-            };
-
-            for (const s of TREND_SERIES) {
-                if (energyTrendHidden.has(s.key)) continue;
-                drawSeries(s.key, s.color, s.key === 'battery_level', s.axis === 'pct' ? Ypct : Y, s.axis === 'kw');
-            }
-
-            // Hover crosshair + value dots
-            if (energyTrendHoverPoint) {
-                const hx = X(energyTrendHoverPoint.ts);
-                ctx.strokeStyle = 'rgba(139, 148, 158, 0.5)';
-                ctx.lineWidth = 1;
-                ctx.setLineDash([3, 3]);
-                ctx.beginPath(); ctx.moveTo(hx, padT); ctx.lineTo(hx, H - padB); ctx.stroke();
-                ctx.setLineDash([]);
-                for (const s of TREND_SERIES) {
-                    if (energyTrendHidden.has(s.key)) continue;
-                    const v = energyTrendHoverPoint[s.key];
-                    if (v == null) continue;
-                    const hy = s.axis === 'pct' ? Ypct(v) : Y(v);
-                    ctx.fillStyle = s.color;
-                    ctx.beginPath(); ctx.arc(hx, hy, 3.5, 0, Math.PI * 2); ctx.fill();
-                    ctx.strokeStyle = 'rgba(13, 17, 23, 0.9)';
-                    ctx.lineWidth = 1.5; ctx.stroke();
-                }
-            }
+            energyTrendChart.setData(energyTrendPoints, energyTrendDomain);
         }
 
         document.getElementById('energy-card').addEventListener('click', toggleEnergyTrend);
-        window.addEventListener('resize', () => {
-            if (energyTrendActive) drawEnergyTrendChart();
-        });
-
-        // Legend toggle: click a key to show/hide that series
-        document.querySelectorAll('.energy-trend-legend .key[data-series]').forEach(keyEl => {
-            keyEl.addEventListener('click', e => {
-                e.stopPropagation();  // don't flip the card back to summary mode
-                const k = keyEl.dataset.series;
-                if (energyTrendHidden.has(k)) {
-                    energyTrendHidden.delete(k);
-                    keyEl.classList.remove('off');
-                } else {
-                    energyTrendHidden.add(k);
-                    keyEl.classList.add('off');
-                }
-                drawEnergyTrendChart();
-                updateEnergyTrendTooltip();
-            });
-        });
-
-        // Hover: crosshair + tooltip with time and each series' value
-        const trendCanvas = document.getElementById('energy-trend-chart');
-        const trendTooltip = document.getElementById('energy-trend-tooltip');
-
-        function fmtHoverTime(ts) {
-            const d = new Date(ts * 1000);
-            const h = d.getHours() % 12 || 12;
-            const m = String(d.getMinutes()).padStart(2, '0');
-            const ap = d.getHours() >= 12 ? 'pm' : 'am';
-            return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${h}:${m}${ap}`;
-        }
-
-        function updateEnergyTrendTooltip() {
-            if (!energyTrendHoverPoint) {
-                trendTooltip.style.display = 'none';
-                return;
-            }
-            const p = energyTrendHoverPoint;
-            let html = `<div class="tt-time">${fmtHoverTime(p.ts)}</div>`;
-            for (const s of TREND_SERIES) {
-                if (energyTrendHidden.has(s.key)) continue;
-                const v = p[s.key];
-                if (v == null) continue;
-                html += `<div><span class="tt-dot" style="background:${s.color}"></span>${s.label}: <b>${v.toFixed(s.axis === 'pct' ? 0 : 2)} ${s.axis === 'pct' ? '%' : 'kW'}</b></div>`;
-            }
-            trendTooltip.innerHTML = html;
-            trendTooltip.style.display = 'block';
-        }
-
-        trendCanvas.addEventListener('mousemove', e => {
-            const points = energyTrendPoints;
-            if (!points || points.length < 2) return;
-            const rect = trendCanvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const W = rect.width, H = rect.height;
-            const padL = 48, padR = 44, padT = 12, padB = 24;
-            const plotW = W - padL - padR;
-            if (plotW <= 0 || x < padL || x > W - padR) {
-                energyTrendHoverPoint = null;
-                trendTooltip.style.display = 'none';
-                drawEnergyTrendChart();
-                return;
-            }
-            const dom = energyTrendDomain || { t0: points[0].ts, t1: points[points.length - 1].ts };
-            const xSpan = (dom.t1 - dom.t0) || 1;
-            const ts = dom.t0 + ((x - padL) / plotW) * xSpan;
-            // nearest data point by timestamp
-            let best = null, bestD = Infinity;
-            for (const p of points) {
-                const d = Math.abs(p.ts - ts);
-                if (d < bestD) { bestD = d; best = p; }
-            }
-            if (best === energyTrendHoverPoint) return;
-            energyTrendHoverPoint = best;
-            drawEnergyTrendChart();
-            updateEnergyTrendTooltip();
-            // position tooltip near the cursor, clamped inside the panel
-            const panel = document.getElementById('energy-trend').getBoundingClientRect();
-            const tipW = trendTooltip.offsetWidth, tipH = trendTooltip.offsetHeight;
-            let left = e.clientX - panel.left + 14;
-            if (left + tipW > panel.width - 4) left = e.clientX - panel.left - tipW - 14;
-            let top = e.clientY - panel.top - tipH - 10;
-            if (top < 2) top = e.clientY - panel.top + 14;
-            trendTooltip.style.left = `${left}px`;
-            trendTooltip.style.top = `${top}px`;
-        });
-
-        trendCanvas.addEventListener('mouseleave', () => {
-            energyTrendHoverPoint = null;
-            trendTooltip.style.display = 'none';
-            drawEnergyTrendChart();
-        });
 
         async function loadStats() {
             try {

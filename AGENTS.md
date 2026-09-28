@@ -405,6 +405,10 @@ The `track_requests` middleware in `app/main.py` does double duty: request stati
 | `app/mqtt/publisher.py` | `MqttPublisher` — connection loop, topic publishing, LWT, TLS, reconnect |
 | `app/mqtt/ha_discovery.py` | Home Assistant auto-discovery payload builder (pure function) |
 | `app/static/index.html` | Console UI dashboard — Powerwall status, health panel, battery graphics, MQTT broker panel |
+| `app/static/history.html` | History page (`/history`) — daily energy for any date range, plus one chart card per signal group built from the `/api/timeseries/signals` catalog (no per-metric page code); dependency-free canvas charts |
+| `app/static/js/charts.js` | `window.PWCharts` — chart helpers (`drawChart`, `xTicks`, `attachHover`) and the Energy Trend (`PWCharts.energyTrend`) shared by the Console and History pages; fix chart bugs here once |
+| `app/static/css/charts.css` | Chart styles shared by the Console and History pages (pairs with `charts.js`) |
+| `app/core/timeseries.py` | SQLite time-series store — power samples, daily kWh, Powerwall temperature/fan signal series (`SIGNAL_METRICS` registry: one entry per metric — signals, label, unit, group, order; `SIGNAL_GROUPS` chart groups). Metric ids are stored, so they are permanent once released |
 | `app/static/powerflow/app.js` | ⚠️ **PATCHED** vendored Tesla Gateway web UI — `isAuthenticated` always returns `true` (issue #7). **Do NOT replace with a clean copy.** |
 | `mqtt-tools/README.md` | Broker setup guide, CLI monitoring, GUI usage, HA integration steps |
 | `mqtt-tools/monitor.py` | Live tkinter GUI — connects to broker, shows real-time Powerwall telemetry |

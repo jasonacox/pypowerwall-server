@@ -1,6 +1,21 @@
 # Release Notes
 
 ## Version History
+
+### [0.8.0] - Upcoming
+
+**Added:**
+- **History page (`/history`)** — look up daily energy for any date range (1 hour to all stored history): range totals (solar, best solar day, home, battery in/out, grid import/export, self-powered %), a per-day chart with series toggles, a table and CSV download; on the 1h/6h/24h ranges it shows the console's Energy Trend chart instead (solar, home, battery and grid kW plus battery level % on a right axis). The range, gateway, selected Powerwall (`pw=`) and switched-off series (`hide=`) are kept in the URL for bookmarking. Linked from the console header and the Daily Energy card. Charts are drawn on canvas with no external libraries, so the page works without internet access. (#130)
+- **Powerwall temperature and fan history** — the time-series store now records each Powerwall's battery pack max/min, shunt and inverter ambient temperatures (Powerwall 2 ambient too) and inverter fan speed (rpm) and duty cycle (%) once a minute by default, from data each poll already fetches. Signals are stored as generic per-device series, so adding one needs no schema change, with a daily low/average/high kept long-term. New settings `PW_TIMESERIES_SIGNAL_RETENTION` (default `30d`; `-1` stops recording) and `PW_TIMESERIES_SIGNAL_INTERVAL` (default `60s`; minimum `30s`). The History page draws one chart card per signal group from the catalog (a new metric or group needs no page change), each with a Powerwall selector (All / PW1 / PW2 …, one unit at a time to cut clutter), 1h/6h ranges for fine detail (steps down to the sample interval), a °C/°F switch and low/average/high for the range. `PCH_heatsinkTemp` is not recorded since it reads a constant on current firmware. (#130)
+- **Time-series API** — `GET /api/timeseries/daily` accepts `start`/`end` (`YYYY-MM-DD`) for any range of days; new `GET /api/timeseries/signals` and `GET /api/timeseries/signal_trend`; `/api/timeseries/status` reports signal sample counts and settings. History reads run on their own read-only SQLite connection, so a long query never delays recording. (#130)
+
+**Fixed:**
+- **Console Energy Trend: shared chart code** — the chart now lives in `app/static/js/charts.js` (with `app/static/css/charts.css`), shared with the History page; tick labels fall on the hour, legend buttons report their state to screen readers, it also gains sharper rendering on high-DPI screens and tap-to-inspect on touch screens. (#130)
+- **Console Energy Trend: overlapping axis labels** — when battery or grid power goes negative, the kW label nearest the zero line no longer prints on top of the "0" label. (#130)
+
+**Upgrade note:**
+- Temperature and fan recording is on by default. At the default 60s interval and 30-day retention it grows the time-series database by about 12 MB per Powerwall 3 (energy history alone is about 1.5 MB). Set `PW_TIMESERIES_SIGNAL_RETENTION=-1` to turn it off; existing samples still age out. (#130)
+
 ### [0.7.1] - 2026-09-27
 
 **Fixed:**
