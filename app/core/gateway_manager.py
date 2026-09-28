@@ -265,6 +265,11 @@ class GatewayManager:
         # alongside a TEDAPI gateway. This enables hybrid operation:
         # TEDAPI for fast local reads, cloud for control writes.
         self._cloud_control: Optional[pypowerwall.Powerwall] = None
+        # Gateway id the shared cloud connection was built from. It is
+        # created with that gateway's email/authpath (auto_select, no
+        # explicit site), so it is only bound to that site: writers must
+        # use it solely for this gateway, never for another one.
+        self._cloud_control_gateway_id: Optional[str] = None
 
         # Hybrid cloud-link health (issue #87): the shared cloud connection
         # is a second link with its own failure profile, tracked separately
@@ -622,6 +627,9 @@ class GatewayManager:
                     ),
                     timeout=15.0,
                 )
+                # Bound to the building gateway's site (built from its
+                # email/authpath): writers must only use it for config.id.
+                self._cloud_control_gateway_id = config.id
                 logger.info(
                     "Cloud control connection established for write operations"
                 )

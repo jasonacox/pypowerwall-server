@@ -93,6 +93,16 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Control-channel safety limits. Commands act on physical hardware, so the
+# inbound path is bounded: oversized payloads are rejected before parsing
+# (a 1 MB payload must never reach a Tesla write), the broker-side queue is
+# capped, and bursts collapse to latest-wins per control instead of N serial
+# Tesla writes.
+MAX_CONTROL_PAYLOAD_BYTES = 1024
+MAX_QUEUED_CONTROL_MESSAGES = 100
+CONTROL_COALESCE_WINDOW_S = 0.05
+CONTROL_MAX_BATCH = 100
+
 
 class MqttPublisher:
     """Async MQTT publisher with persistent connection and reconnect logic."""
@@ -105,7 +115,17 @@ class MqttPublisher:
         # Per gateway: the optional entities (strings, remote-meter CTs)
         # already announced; a gateway key means base discovery was sent
         self._discovery_sent: Dict[str, frozenset] = {}
+        # Per gateway: control config topics already announced (for stale
+        # entity removal when MQTT_CONTROLS bits are turned off)
+        self._discovery_controls_sent: Dict[str, set] = {}
+        # Per gateway: last announced (mask, is_v1r, grid_capable) control
+        # state. The signature union only grows, so a mask shrink to 0
+        # (whose signature carries no controls key at all) would never
+        # re-fire discovery — this state check catches it so stale
+        # entities are actually removed.
+        self._discovery_controls_state: Dict[str, tuple] = {}
         self._backoff: int = 2           # current reconnect backoff in seconds
+        self._controls_warn_done: bool = False  # half-configured controls warning
 
     # ------------------------------------------------------------------
     # Public API
@@ -164,11 +184,33 @@ class MqttPublisher:
                 pass
         logger.info("MQTT publisher stopped.")
 
+    def _control_announce_state(self, status) -> tuple:
+        """(mask, is_v1r, grid_capable) for control discovery on this snapshot.
+
+        Single place computing what _publish_ha_discovery announces and what
+        the discovery signature tracks, so both stay in sync.
+        """
+        from app.config import settings  # late import
+        from app.mqtt.ha_discovery import is_v1r_gateway
+
+        mask = settings.mqtt_controls_mask
+        if mask == 0 or not settings.mqtt_controls_available:
+            return (0, False, False)
+        gw = status.gateway if status else None
+        data = status.data if status else None
+        return (
+            mask,
+            is_v1r_gateway(gw, data),
+            _grid_controls_capable(gw, data),
+        )
+
     async def _publish_ha_discovery(self, gateway_id: str, status) -> None:
         """Publish Home Assistant auto-discovery payloads for a gateway.
 
         Called once per gateway on first connection (tracked in _discovery_sent).
         Re-sent after every broker reconnect so HA re-discovers after restarts.
+        Control entities whose MQTT_CONTROLS bit was turned off are removed
+        by publishing an empty retained config (HA drops the entity).
 
         Args:
             gateway_id: Gateway identifier.
@@ -198,6 +240,10 @@ class MqttPublisher:
                 extract_remote_meters(status.data.vitals) if status.data else {}
             )
 
+            # Controls follow the MQTT_CONTROLS bitmask; islanding buttons
+            # only for v1r transport, grid controls only where executable.
+            controls_mask, is_v1r, grid_capable = self._control_announce_state(status)
+
             payloads = build_discovery_payloads(
                 gateway_id=gateway_id,
                 gateway_name=gateway_name,
@@ -206,9 +252,26 @@ class MqttPublisher:
                 version=version,
                 string_ids=string_ids,
                 remote_meters=remote_meters or None,
+                controls=controls_mask,
+                is_v1r=is_v1r,
+                grid_capable=grid_capable,
             )
             for topic, payload in payloads:
                 await self._safe_publish(topic, payload, retain=True, qos=settings.mqtt_qos)
+
+            # Stale control entities (bit turned off, capability lost) are
+            # removed by publishing an empty retained config — HA drops them.
+            current_controls = _control_config_topics(payloads)
+            previous_controls = self._discovery_controls_sent.get(gateway_id, set())
+            for stale in sorted(previous_controls - current_controls):
+                await self._safe_publish(
+                    stale, "", retain=True, qos=settings.mqtt_qos
+                )
+                logger.info(
+                    f"MQTT HA discovery removed control entity '{stale}' "
+                    f"for gateway '{gateway_id}'"
+                )
+            self._discovery_controls_sent[gateway_id] = current_controls
 
             logger.info(
                 f"MQTT HA discovery published for gateway '{gateway_id}' "
@@ -231,22 +294,34 @@ class MqttPublisher:
             return
 
         # Send HA discovery payloads the first time we see this gateway, and
-        # again whenever a snapshot reports strings or remote-meter CTs not
-        # announced yet (re-sent after reconnect too: _discovery_sent is
-        # cleared there). Storing the union means a later snapshot without
-        # them (e.g. a vitals timeout) doesn't re-send.
+        # again whenever a snapshot reports strings, remote-meter CTs or the
+        # v1r capability not announced yet (re-sent after reconnect too:
+        # _discovery_sent is cleared there). Storing the union means a later
+        # snapshot without them (e.g. a vitals timeout) doesn't re-send.
         from app.mqtt.ha_discovery import discovery_signature
 
         data = status.data if status else None
+        controls_mask, controls_v1r, controls_grid = self._control_announce_state(status)
+        controls_state = (controls_mask, controls_v1r, controls_grid)
         signature = discovery_signature(
-            data.strings if data else None, data.vitals if data else None
+            data.strings if data else None,
+            data.vitals if data else None,
+            controls=controls_mask,
+            is_v1r=controls_v1r,
+            grid_capable=controls_grid,
         )
         announced = self._discovery_sent.get(gateway_id)
-        if announced is None or not signature <= announced:
+        last_controls = self._discovery_controls_state.get(gateway_id)
+        if (
+            announced is None
+            or not signature <= announced
+            or last_controls != controls_state
+        ):
             from app.config import settings  # late import
             if settings.mqtt_ha_discovery:
                 await self._publish_ha_discovery(gateway_id, status)
             self._discovery_sent[gateway_id] = (announced or frozenset()) | signature
+            self._discovery_controls_state[gateway_id] = controls_state
 
         try:
             from app.config import settings  # late import
@@ -649,6 +724,9 @@ class MqttPublisher:
                     identifier=settings.mqtt_client_id,
                     will=will,
                     tls_context=tls_context,
+                    # Bound the inbound queue: command bursts must not grow
+                    # memory without limit (latest-wins collapses them anyway).
+                    max_queued_incoming_messages=MAX_QUEUED_CONTROL_MESSAGES,
                 )
 
                 logger.info(
@@ -661,6 +739,8 @@ class MqttPublisher:
                     self._backoff = 2  # reset on successful connect
                     # Clear discovery set so HA payloads are re-sent after reconnect
                     self._discovery_sent.clear()
+                    self._discovery_controls_sent.clear()
+                    self._discovery_controls_state.clear()
                     logger.info(
                         f"MQTT connected to {settings.mqtt_host}:{settings.mqtt_port}"
                     )
@@ -676,12 +756,73 @@ class MqttPublisher:
                         retain=True, qos=settings.mqtt_qos,
                     )
 
+                    # Subscribe to control command topics if controls are enabled (broker-trust, no token in payload).
+                    # Topic pattern: {prefix}/{gateway_id}/control/{control}/set  e.g. pypowerwall/home/control/reserve/set
+                    control_task = None
+                    if settings.mqtt_controls_available:
+                        try:
+                            await client.subscribe(
+                                f"{settings.mqtt_topic_prefix}/+/control/+/set", qos=1
+                            )
+                            enabled = settings.mqtt_control_names()
+                            logger.info(
+                                "MQTT controls subscribed to %s/+/control/+/set "
+                                "(enabled: %s)",
+                                settings.mqtt_topic_prefix,
+                                ", ".join(enabled),
+                            )
+                            if settings.mqtt_control_allowed("islanding"):
+                                logger.warning(
+                                    "MQTT ISLANDING control is enabled: broker "
+                                    "clients can open the grid contactor — "
+                                    "restrict broker access and ACL "
+                                    "pypowerwall/+/control/# accordingly"
+                                )
+                            control_task = asyncio.create_task(
+                                self._control_message_loop(client),
+                                name="mqtt-control-handler",
+                            )
+                        except Exception as e:
+                            logger.warning(f"MQTT control subscribe failed: {e}")
+                    elif (
+                        not self._controls_warn_done
+                        and settings.mqtt_controls_mask != 0
+                        and settings.control_secret
+                    ):
+                        # Bits requested + secret but no broker user/password:
+                        # controls stay off (fail closed). Warn once so the
+                        # silent off-state after upgrade is discoverable.
+                        self._controls_warn_done = True
+                        logger.warning(
+                            "MQTT controls requested (MQTT_CONTROLS + "
+                            "PW_CONTROL_SECRET) but disabled: set MQTT_USERNAME "
+                            "and MQTT_PASSWORD so the broker can enforce the "
+                            "control-topic ACL"
+                        )
+
                     # Inner heartbeat loop: stays alive until a publish failure
                     # sets _connected=False, or until shutdown is requested.
                     # The 5-second sleep matches the default poll interval so we
-                    # detect disconnect promptly without busy-waiting.
-                    while self._connected and not self._shutdown:
-                        await asyncio.sleep(5)
+                    # detect disconnect promptly without busy-waiting. It also
+                    # watches the control handler: if that task died silently,
+                    # reconnect (which recreates it) instead of losing commands.
+                    try:
+                        while self._connected and not self._shutdown:
+                            if control_task is not None and control_task.done():
+                                logger.warning(
+                                    "MQTT control handler ended unexpectedly — "
+                                    "reconnecting..."
+                                )
+                                self._connected = False
+                                break
+                            await asyncio.sleep(5)
+                    finally:
+                        if control_task and not control_task.done():
+                            control_task.cancel()
+                            try:
+                                await control_task
+                            except asyncio.CancelledError:
+                                pass
 
                     # If we exited the inner loop due to a publish failure
                     # (not shutdown), let the context manager close cleanly then
@@ -707,6 +848,454 @@ class MqttPublisher:
 
         self._connected = False
         self._client = None
+
+    async def _control_message_loop(self, client) -> None:
+        """Handle incoming HA control commands via MQTT (broker-trust, no token).
+
+        Subscribes to ``{prefix}/+/control/+/set`` after connect.  Each message
+        is validated (MQTT_CONTROLS bit, type/range/allowlist, capability) and
+        routed on a single path like the HTTP ``POST /control/*`` endpoints
+        (write_lock, timeout, islanding cooldown) — never retried on another
+        path, since a timeout leaves the first write running.
+        ``PW_CONTROL_SECRET`` is never read from the payload — trust comes from
+        broker authentication (``MQTT_USERNAME``/``PASSWORD`` + optional ``MQTT_TLS``)
+        and ACL ``pypowerwall/+/control/#``.
+
+        Inbound safety: payloads over 1 KB are rejected before parsing,
+        retained replays are cleared with a warning (``retain=false`` is
+        expected from HA), and bursts collapse to latest-wins per control
+        instead of N serial Tesla writes.
+        """
+        try:
+            message_iter = client.messages.__aiter__()
+            while not self._shutdown:
+                try:
+                    first = await message_iter.__anext__()
+                except StopAsyncIteration:
+                    break
+                batch = await self._collect_control_burst(message_iter, first)
+                for topic, payload_bytes in await self._coalesce_controls(
+                    client, batch
+                ):
+                    await self._handle_control_message(
+                        client, topic, payload_bytes
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"MQTT control message loop error: {e}")
+        if not self._shutdown:
+            # Iterator exhausted (broker closed the stream) or unexpected
+            # error: force a reconnect instead of silently losing commands.
+            logger.warning("MQTT control message loop ended — forcing reconnect")
+            self._connected = False
+
+    async def _collect_control_burst(self, message_iter, first) -> list:
+        """Collect a burst of immediately-available messages (latest-wins).
+
+        Waits briefly for followers so 50 rapid commands collapse instead of
+        becoming 50 serial Tesla writes; a lone command costs one short idle
+        window. Bounded so a flood cannot grow memory without limit.
+        """
+        batch = [first]
+        for _ in range(CONTROL_MAX_BATCH - 1):
+            try:
+                nxt = await asyncio.wait_for(
+                    message_iter.__anext__(),
+                    timeout=CONTROL_COALESCE_WINDOW_S,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                break  # idle (TimeoutError) or closed (StopAsyncIteration)
+            batch.append(nxt)
+        return batch
+
+    async def _coalesce_controls(self, client, batch) -> list:
+        """Filter a burst to executable commands, latest per topic wins.
+
+        Retained replays are warned about and cleared; oversized payloads
+        are rejected; undecodable topics are dropped. Returns
+        [(topic, payload_bytes)] with only the last message per topic.
+        """
+        candidates: dict = {}
+        for message in batch:
+            try:
+                retained = bool(getattr(message, "retain", False))
+            except Exception:
+                retained = False
+            try:
+                topic = (
+                    message.topic.value
+                    if hasattr(message.topic, "value")
+                    else str(message.topic)
+                )
+                payload_bytes = (
+                    bytes(message.payload)
+                    if isinstance(message.payload, (bytes, bytearray))
+                    else str(message.payload).encode("utf-8", "replace")
+                )
+            except Exception as e:
+                logger.warning(f"MQTT control message decode failed: {e}")
+                continue
+            if retained:
+                await self._warn_retained_command(client, topic)
+                continue
+            if len(payload_bytes) > MAX_CONTROL_PAYLOAD_BYTES:
+                logger.warning(
+                    f"MQTT control command on '{topic}' rejected: payload "
+                    f"{len(payload_bytes)} bytes exceeds "
+                    f"{MAX_CONTROL_PAYLOAD_BYTES} byte cap"
+                )
+                continue
+            candidates[topic] = payload_bytes
+        return list(candidates.items())
+
+    async def _warn_retained_command(self, client, topic: str) -> None:
+        """Warn about a retained command replay and clear it from the broker.
+
+        A retained ``.../control/+/set`` would otherwise re-execute on every
+        reconnect, so it is never executed — and removed so it cannot fire
+        later. Clearing is awaited inline (deterministic, still best-effort:
+        a topic we cannot publish to just logs).
+        """
+        logger.warning(
+            f"MQTT control command on '{topic}' ignored: retained commands "
+            "are not executed (publish with retain=false)"
+        )
+        publish = getattr(client, "publish", None)
+        if publish is None:
+            return
+        try:
+            await publish(topic, "", qos=1, retain=True)
+        except Exception as e:
+            logger.debug(f"MQTT retained clear failed for '{topic}': {e}")
+
+    async def _handle_control_message(
+        self, client, topic: str, payload_bytes: bytes
+    ) -> None:
+        """Validate and dispatch one control command (all work inside try)."""
+        try:
+            from app.config import MQTT_CONTROL_BITS
+            from app.config import settings as _settings
+            from app.core.gateway_manager import gateway_manager
+
+            prefix = _settings.mqtt_topic_prefix
+            parts = topic.split("/")
+            # Expect 5 parts: prefix / gw / control / ctrl / set
+            if (
+                len(parts) != 5
+                or parts[0] != prefix
+                or parts[2] != "control"
+                or parts[4] != "set"
+            ):
+                logger.warning(f"MQTT control: malformed topic '{topic}'")
+                return
+            gateway_id = parts[1]
+            control = parts[3]
+
+            # Validate gateway exists (inside the per-message try so one bad
+            # lookup can never kill the loop)
+            gw = gateway_manager.gateways.get(gateway_id)
+            if gw is None:
+                logger.warning(
+                    f"MQTT control: unknown gateway '{gateway_id}' "
+                    f"for '{control}'"
+                )
+                return
+            if control not in MQTT_CONTROL_BITS:
+                logger.warning(
+                    f"MQTT control: unknown control '{control}' "
+                    f"for '{gateway_id}'"
+                )
+                return
+            if not _settings.mqtt_control_allowed(control):
+                logger.warning(
+                    f"MQTT control {control} for '{gateway_id}' rejected: "
+                    "MQTT_CONTROLS bit not set"
+                )
+                return
+
+            # Parse JSON payload (size already capped before coalescing)
+            try:
+                payload = (
+                    json.loads(payload_bytes.decode("utf-8"))
+                    if payload_bytes
+                    else {}
+                )
+                if not isinstance(payload, dict):
+                    raise ValueError("payload not a dict")
+            except Exception as e:
+                logger.warning(
+                    f"MQTT control {control} for '{gateway_id}' rejected: "
+                    f"bad JSON ({e})"
+                )
+                return
+
+            # Route to gateway_manager (broker-trust, no token check)
+            if control == "reserve":
+                val = payload.get("value")
+                # bool is an int subclass — True/False must not pass as 1/0
+                if (
+                    not isinstance(val, int)
+                    or isinstance(val, bool)
+                    or not 0 <= val <= 100
+                ):
+                    logger.warning(
+                        f"MQTT control reserve for '{gateway_id}' rejected: "
+                        f"invalid value '{_short(val)}'"
+                    )
+                    return
+                result, path = await _route_gateway_control(
+                    gateway_id, "set_reserve", val, timeout=10.0
+                )
+                audit = f"value={val}"
+
+            elif control == "mode":
+                val = payload.get("value")
+                if val not in ("self_consumption", "backup", "autonomous"):
+                    logger.warning(
+                        f"MQTT control mode for '{gateway_id}' rejected: "
+                        f"invalid value '{_short(val)}'"
+                    )
+                    return
+                result, path = await _route_gateway_control(
+                    gateway_id, "set_mode", val, timeout=10.0
+                )
+                audit = f"value={val}"
+
+            elif control == "grid_charging":
+                val = payload.get("value")
+                if not isinstance(val, bool):
+                    logger.warning(
+                        f"MQTT control grid_charging for '{gateway_id}' "
+                        f"rejected: invalid value '{_short(val)}'"
+                    )
+                    return
+                if not _grid_controls_capable(gateway_manager, gw):
+                    logger.warning(
+                        f"MQTT control grid_charging for '{gateway_id}' "
+                        "rejected: gateway cannot execute it"
+                    )
+                    return
+                result, path = await _route_gateway_control(
+                    gateway_id, "set_grid_charging", val, timeout=10.0
+                )
+                audit = f"value={val}"
+
+            elif control == "grid_export":
+                val = payload.get("value")
+                if val not in ("battery_ok", "pv_only", "never"):
+                    logger.warning(
+                        f"MQTT control grid_export for '{gateway_id}' "
+                        f"rejected: invalid value '{_short(val)}'"
+                    )
+                    return
+                if not _grid_controls_capable(gateway_manager, gw):
+                    logger.warning(
+                        f"MQTT control grid_export for '{gateway_id}' "
+                        "rejected: gateway cannot execute it"
+                    )
+                    return
+                result, path = await _route_gateway_control(
+                    gateway_id, "set_grid_export", val, timeout=10.0
+                )
+                audit = f"value={val}"
+
+            elif control == "islanding":
+                action = payload.get("action")
+                confirm = payload.get("confirm")
+                if action not in ("off_grid", "on_grid") or confirm is not True:
+                    logger.warning(
+                        f"MQTT control islanding for '{gateway_id}' rejected: "
+                        "need action off_grid/on_grid with confirm:true"
+                    )
+                    return
+                if not _gateway_is_v1r(gateway_manager, gateway_id):
+                    logger.warning(
+                        f"MQTT control islanding for '{gateway_id}' rejected: "
+                        "no confirmed v1r transport"
+                    )
+                    return
+                method = (
+                    "go_off_grid" if action == "off_grid" else "reconnect_grid"
+                )
+                kwargs = {"confirm": True} if action == "off_grid" else {}
+                try:
+                    # Local v1r/TEDAPI only, same 10 s timeout as HTTP —
+                    # never the shared cloud connection, never retried.
+                    result = await gateway_manager.local_control(
+                        gateway_id, method, timeout=10.0, **kwargs
+                    )
+                    path = "local"
+                except Exception as e:
+                    # Islanding cooldown / in-progress errors bubble as
+                    # exceptions (same machinery as the WebUI path)
+                    logger.warning(
+                        f"MQTT control islanding {action} for '{gateway_id}' "
+                        f"failed: {e}"
+                    )
+                    return
+                if not _island_ack_ok(result):
+                    logger.warning(
+                        f"MQTT control islanding {action} for '{gateway_id}' "
+                        "not acknowledged; check grid status"
+                    )
+                    return
+                audit = f"action={action}"
+            else:  # pragma: no cover — unreachable via MQTT_CONTROL_BITS gate
+                return
+
+            if _is_error_result(result):
+                logger.warning(
+                    f"MQTT control {control} for '{gateway_id}' failed: "
+                    f"gateway reported {_short(result)}"
+                )
+            elif result is not None:
+                logger.info(
+                    f"MQTT control {control} for '{gateway_id}' applied "
+                    f"({audit} via {path})"
+                )
+            else:
+                logger.warning(
+                    f"MQTT control {control} for '{gateway_id}' failed: "
+                    "no result (offline/unsupported)"
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"MQTT control handler error for '{topic}': {e}")
+
+
+def _short(val: object, limit: int = 200) -> str:
+    """Truncate a value for log lines (payloads are capped, values vary)."""
+    text = str(val)
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _is_error_result(result: object) -> bool:
+    """True when a library response reports an error instead of a value."""
+    return isinstance(result, dict) and ("error" in result or "ERROR" in result)
+
+
+def _island_ack_ok(result: object) -> bool:
+    """Hardware acknowledgement check, same rule as HTTP POST /control/islanding.
+
+    Only ``{"result": 1}`` counts (int, not bool); anything else — including
+    error dicts — must never be presented as a successful contactor command.
+    """
+    if not isinstance(result, dict) or _is_error_result(result):
+        return False
+    ack = result.get("result")
+    return isinstance(ack, int) and not isinstance(ack, bool) and ack == 1
+
+
+def _grid_controls_capable(gateway_manager, gateway) -> bool:
+    """True when this gateway can actually execute grid setter commands.
+
+    The grid setters are logging stubs on plain local/hybrid connections
+    and TEDAPI full — only cloud/FleetAPI, a hybrid cloud bound to this
+    gateway, or a confirmed v1r transport execute them. Used both for
+    discovery (don't announce what can't run) and dispatch (defense in
+    depth, since anyone with broker access can publish).
+    """
+    if gateway is None:
+        return False
+    if getattr(gateway, "cloud_mode", False) or getattr(gateway, "fleetapi", False):
+        return True
+    try:
+        bound = getattr(gateway_manager, "_cloud_control_gateway_id", None)
+        if (
+            gateway_manager._cloud_control is not None
+            and bound is not None
+            and bound == gateway.id
+        ):
+            return True
+    except Exception:
+        pass
+    try:
+        status = gateway_manager.get_gateway(gateway.id)
+        data = status.data if status else None
+        mode = getattr(data, "tedapi_mode", None)
+        return bool(getattr(gateway, "rsa_key_configured", False) and mode == "v1r")
+    except Exception:
+        return False
+
+
+def _control_config_topics(payloads: list) -> set:
+    """Config topics of control entities in a discovery payload list."""
+    topics = set()
+    for topic, payload in payloads:
+        try:
+            doc = json.loads(payload)
+        except Exception:
+            continue
+        if isinstance(doc, dict) and "/control/" in str(doc.get("command_topic", "")):
+            topics.add(topic)
+    return topics
+
+
+def _gateway_is_v1r(gateway_manager, gateway_id: str) -> bool:
+    """True when the addressed gateway uses the v1r transport (PW2 + PW3).
+
+    Fail-closed like the Console gate: unknown mode (cold start, cloud
+    failover) rejects. Discovery only announces the islanding buttons for
+    such gateways; the control loop enforces the same rule since MQTT
+    topics can be published by anyone with broker access.
+    """
+    try:
+        from app.mqtt.ha_discovery import is_v1r_gateway
+
+        gw = gateway_manager.gateways.get(gateway_id)
+        status = gateway_manager.get_gateway(gateway_id)
+        return is_v1r_gateway(gw, status.data if status else None)
+    except Exception:
+        return False
+
+
+async def _route_gateway_control(
+    gateway_id: str, method: str, *args, timeout: float = 10.0
+):
+    """Route a validated control write on exactly one path (no retry).
+
+    Same single-path rule as the HTTP ``POST /control/*`` routes: a timeout
+    leaves the first write running in its worker thread, so retrying on
+    another path can land the command twice — potentially on another site.
+
+    - cloud_mode/FleetAPI gateways: their own connection (targets its site).
+    - Other gateways: the shared hybrid cloud connection, but ONLY for the
+      gateway it was built from (recorded id — the connection carries that
+      gateway's credentials and cannot target another site).
+    - Otherwise the gateway's own local connection (v1r/local stubs answer
+      with ``{'error': ...}``, which the caller treats as a failure).
+
+    Returns (result, path) with path in {"cloud", "local", "none"}.
+    """
+    from app.core.gateway_manager import gateway_manager
+
+    gw = gateway_manager.gateways.get(gateway_id)
+    if gw is not None and (
+        getattr(gw, "cloud_mode", False) or getattr(gw, "fleetapi", False)
+    ):
+        result = await gateway_manager.local_control(
+            gateway_id, method, *args, timeout=timeout
+        )
+        return result, "local"
+    if (
+        gateway_manager._cloud_control is not None
+        and getattr(gateway_manager, "_cloud_control_gateway_id", None)
+        == gateway_id
+    ):
+        result = await gateway_manager.cloud_control(
+            method, *args, timeout=timeout
+        )
+        return result, "cloud"
+    if gw is None:
+        return None, "none"
+    result = await gateway_manager.local_control(
+        gateway_id, method, *args, timeout=timeout
+    )
+    return result, "local"
 
 
 def _safe_float(val) -> Optional[float]:

@@ -95,6 +95,7 @@ All use `MQTT_` prefix (no `PW_` prefix — MQTT is not a Powerwall concept).
 | `MQTT_HA_PREFIX` | `homeassistant` | HA discovery topic prefix |
 | `MQTT_CLIENT_ID` | `pypowerwall-server` | MQTT client identifier |
 | `MQTT_KEEPALIVE` | `60` | Broker keepalive interval (seconds) |
+| `MQTT_CONTROLS` | `0` | Bitmask opt-in for HA controls via broker-trust (requires `PW_CONTROL_SECRET` + `MQTT_USERNAME`/`PASSWORD`): `1` reserve, `2` mode, `4` grid_charging, `8` grid_export, `16` islanding — e.g. `15` = all but islanding, `31` = all, `0` = monitoring only |
 
 Add to `app/config.py` Settings class:
 
@@ -114,10 +115,21 @@ mqtt_ha_discovery: bool = Field(default=True, alias="MQTT_HA_DISCOVERY")
 mqtt_ha_prefix: str = Field(default="homeassistant", alias="MQTT_HA_PREFIX")
 mqtt_client_id: str = Field(default="pypowerwall-server", alias="MQTT_CLIENT_ID")
 mqtt_keepalive: int = Field(default=60, alias="MQTT_KEEPALIVE")
+mqtt_controls: int = Field(default=0, alias="MQTT_CONTROLS")
 
 @property
 def mqtt_enabled(self) -> bool:
     return bool(self.mqtt_host)
+
+@property
+def mqtt_controls_available(self) -> bool:
+    return bool(
+        self.mqtt_host
+        and self.mqtt_username
+        and self.mqtt_password
+        and self.mqtt_controls_mask != 0
+        and self.control_secret
+    )
 ```
 
 ---
@@ -148,6 +160,18 @@ Base path: `{MQTT_TOPIC_PREFIX}/{gateway_id}/`
 
 Optional topics are published only when the source value is available; the
 last retained value persists until the gateway's `availability` goes `offline`.
+
+### Control command topics (HA controls, opt-in `MQTT_CONTROLS` bitmask + `PW_CONTROL_SECRET`, broker-trust, `retain=false`)
+
+| Topic | Bit | Payload | Notes |
+|-------|-----|---------|-------|
+| `pypowerwall/{gw}/control/reserve/set` | `1` | `{"value": 20}` | `0-100` int, `0` = min backup |
+| `pypowerwall/{gw}/control/mode/set` | `2` | `{"value": "self_consumption"}` | `self_consumption`/`backup`/`autonomous` |
+| `pypowerwall/{gw}/control/grid_charging/set` | `4` | `{"value": true}` | `true`/`false` bool strict; only announced where executable (cloud/FleetAPI, bound hybrid cloud, or confirmed v1r) |
+| `pypowerwall/{gw}/control/grid_export/set` | `8` | `{"value": "battery_ok"}` | `battery_ok`/`pv_only`/`never`; same capability rule |
+| `pypowerwall/{gw}/control/islanding/set` | `16` | `{"action":"off_grid","confirm":true}` | `off_grid`/`on_grid` + `confirm:true`, confirmed v1r only, `result == 1` ack, 30s cooldown |
+
+`PW_CONTROL_SECRET` never sent via MQTT — controls trust broker authentication (`MQTT_USERNAME`/`PASSWORD` + optional `MQTT_TLS`) and ACL `pypowerwall/+/control/#`. Controls stay disabled unless `MQTT_USERNAME` and `MQTT_PASSWORD` are both set, so an open broker can never accept commands. The server can only check that *it* connects with credentials: the broker itself must reject anonymous clients and enforce the topic ACL, otherwise any broker client can operate every enabled control. Islanding (bit `16`, physical grid contactor) needs its own explicit opt-in — `MQTT_CONTROLS=15` enables everything except islanding. Commands for a disabled bit are rejected with a warning, and turning a bit off removes the entity from Home Assistant (empty retained config).
 
 ### Lifetime energy topics (Wh accumulators)
 
@@ -296,6 +320,16 @@ Binary sensors:
 | Gateway Online | `connectivity` |
 | Grid Connected | `connectivity` |
 | Grid Charging | — |
+
+Controls (opt-in `MQTT_CONTROLS` bitmask + `PW_CONTROL_SECRET`, broker-trust, autodiscovery — only entities whose bit is set are announced):
+| Entity | Bit | HA type | Options / Range | Icon |
+|--------|-----|---------|-----------------|------|
+| Backup Reserve Control | `1` | `number` | `0-100 %` `step 1` | `mdi:battery-lock` |
+| Operation Mode Control | `2` | `select` | `self_consumption`, `backup`, `autonomous` | `mdi:cog` |
+| Grid Charging Control | `4` | `switch` | `ON` `{"value":true}` / `OFF` `{"value":false}` | `mdi:battery-charging-outline` |
+| Grid Export Control | `8` | `select` | `battery_ok`, `pv_only`, `never` | `mdi:transmission-tower-export` |
+| Go Off Grid | `16` | `button` | `{"action":"off_grid","confirm":true}` confirmed-v1r-only | `mdi:transmission-tower-off` |
+| Reconnect Grid | `16` | `button` | `{"action":"on_grid","confirm":true}` confirmed-v1r-only | `mdi:transmission-tower` |
 
 Remote meter sensors (one set of five per CT, `entity_category: diagnostic`,
 named e.g. `Remote Meter EM…B10BC CT0 (solar) Voltage`, unique ID
@@ -449,9 +483,9 @@ Powerwall (default)
 ## Security Considerations
 
 - `MQTT_PASSWORD` is never logged or exposed in API responses
-- TLS support (`MQTT_TLS=yes`) for production broker connections
+- TLS support (`MQTT_TLS=yes`) for production broker connections (optional; `MQTT_TLS=no` `1883` LAN is supported via `MQTT_USERNAME`/`PASSWORD` + ACL)
 - `MQTT_TLS_INSECURE` defaults to `no` — must be explicitly enabled for dev
-- No MQTT subscribe / inbound command handling in this design (publish-only); control commands remain exclusively through the existing `POST /control/*` HTTP endpoints
+- Controls via MQTT use broker-trust (`MQTT_USERNAME`/`PASSWORD` + ACL `pypowerwall/+/control/#`, `retain=false`) and never send `PW_CONTROL_SECRET` in the payload; HTTP `POST /control/*` remains `Bearer <PW_CONTROL_SECRET>` protected. With `MQTT_CONTROLS=0` (default) no `subscribe` is started and MQTT stays publish-only for monitoring. The server can only verify that *it* connects with credentials — the broker itself must reject anonymous clients and enforce the topic ACL, otherwise any broker client can operate every enabled control. Anyone able to publish to the control topics can control the battery: that is the documented contract, and islanding (physical grid contactor) additionally needs its own bit (`16`).
 
 
 ## Test Instructions - Quick Start

@@ -741,6 +741,12 @@
             border-radius: 10px;
             padding: 16px;
         }
+        /* Gap below the token panel so it doesn't touch the
+           Operating Mode / Battery columns (which have no top margin;
+           the columns→Grid gap already comes from .control-section-columns). */
+        #control-token-section {
+            margin-bottom: 16px;
+        }
         .control-section-title {
             font-size: 0.75em;
             font-weight: 700;

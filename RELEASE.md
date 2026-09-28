@@ -1,6 +1,11 @@
 # Release Notes
 
 ## Version History
+### [0.7.2] - Upcoming
+
+**Added:**
+- **MQTT HA controls via broker-trust (opt-in `MQTT_CONTROLS` bitmask + `PW_CONTROL_SECRET`) —** six Home Assistant control entities via autodiscovery: `reserve` (`number` 0-100 %, bit `1`), `mode` (`select` 3, bit `2`), `grid_charging` (`switch`, bit `4`), `grid_export` (`select` 3, bit `8`), `Go Off Grid`/`Reconnect Grid` (`button` 2×, confirmed-v1r-only, PW2 + PW3, bit `16`) on `pypowerwall/{gw}/control/+/set` (`retain=false`, `PW_CONTROL_SECRET` never in payload, broker ACL `pypowerwall/+/control/#`). Default `0` keeps MQTT monitoring-only; `15` enables everything except islanding, which needs its own explicit bit. Commands run on a single path (no cross-site retry), islanding requires hardware `result == 1`, and every guard (bitmask, allowlists, `confirm:true`, retained/size caps) is covered by a failing-when-removed test.
+
 ### [0.7.1] - 2026-09-27
 
 **Fixed:**

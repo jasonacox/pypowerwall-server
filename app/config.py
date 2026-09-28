@@ -193,13 +193,31 @@ import json
 import logging
 import os
 from typing import List, Optional
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 logger = logging.getLogger(__name__)
 
 # Server version
 SERVER_VERSION = "0.7.1"
+
+# MQTT control bitmask values for MQTT_CONTROLS (bits only, no names).
+# Default 0 keeps MQTT monitoring-only, exactly as before controls existed.
+# Islanding (physical grid contactor!) needs its own explicit opt-in bit.
+MQTT_CONTROL_RESERVE = 1
+MQTT_CONTROL_MODE = 2
+MQTT_CONTROL_GRID_CHARGING = 4
+MQTT_CONTROL_GRID_EXPORT = 8
+MQTT_CONTROL_ISLANDING = 16
+MQTT_CONTROLS_ALL = 31
+MQTT_CONTROL_BITS = {
+    "reserve": MQTT_CONTROL_RESERVE,
+    "mode": MQTT_CONTROL_MODE,
+    "grid_charging": MQTT_CONTROL_GRID_CHARGING,
+    "grid_export": MQTT_CONTROL_GRID_EXPORT,
+    "islanding": MQTT_CONTROL_ISLANDING,
+}
+_MQTT_CONTROL_NAMES = {bit: name for name, bit in MQTT_CONTROL_BITS.items()}
 
 
 class GatewayConfig(BaseModel):
@@ -360,11 +378,71 @@ class Settings(BaseSettings):
     mqtt_ha_prefix: str = Field(default="homeassistant", alias="MQTT_HA_PREFIX")
     mqtt_client_id: str = Field(default="pypowerwall-server", alias="MQTT_CLIENT_ID")
     mqtt_keepalive: int = Field(default=60, alias="MQTT_KEEPALIVE")
+    mqtt_controls: int = Field(
+        default=0, alias="MQTT_CONTROLS"
+    )  # Bitmask opt-in for MQTT controls (0 = monitoring only; 1 reserve,
+    # 2 mode, 4 grid_charging, 8 grid_export, 16 islanding; e.g. 15 = all
+    # but islanding, 31 = all). Islanding needs its own explicit bit.
+
+    @field_validator("mqtt_controls")
+    @classmethod
+    def _sanitize_control_bits(cls, v: int) -> int:
+        if v < 0:
+            logger.warning(
+                f"Ignoring invalid MQTT_CONTROLS={v}: must be 0-31, using 0 "
+                "(monitoring only)"
+            )
+            return 0
+        unknown = v & ~MQTT_CONTROLS_ALL
+        if unknown:
+            logger.warning(
+                f"Ignoring unknown MQTT_CONTROLS bits {unknown:#x}: "
+                f"valid bits are 1/2/4/8/16, using {v & MQTT_CONTROLS_ALL}"
+            )
+        return v & MQTT_CONTROLS_ALL
+
+    @property
+    def mqtt_controls_mask(self) -> int:
+        """Effective MQTT control bitmask (unknown bits stripped)."""
+        v = self.mqtt_controls
+        return (v & MQTT_CONTROLS_ALL) if v > 0 else 0
+
+    def mqtt_control_names(self) -> List[str]:
+        """Names of the enabled MQTT controls, for startup logging."""
+        return [
+            _MQTT_CONTROL_NAMES[bit]
+            for bit in sorted(_MQTT_CONTROL_NAMES)
+            if self.mqtt_controls_mask & bit
+        ]
+
+    def mqtt_control_allowed(self, control: str) -> bool:
+        """True when the MQTT_CONTROLS bitmask enables this control."""
+        return bool(
+            self.mqtt_controls_mask & MQTT_CONTROL_BITS.get(control, 0)
+        )
 
     @property
     def mqtt_enabled(self) -> bool:
         """MQTT publishing is enabled when MQTT_HOST is set."""
         return bool(self.mqtt_host)
+
+    @property
+    def mqtt_controls_available(self) -> bool:
+        """MQTT controls need authenticated broker access: without
+        MQTT_USERNAME/MQTT_PASSWORD the broker cannot enforce the
+        pypowerwall/+/control/# ACL that control trust relies on.
+
+        Note this only checks that *we* connect with credentials — it
+        cannot tell whether the broker rejects anonymous clients or
+        enforces a topic ACL, so the broker must be configured for both
+        (see MQTT.md)."""
+        return bool(
+            self.mqtt_host
+            and self.mqtt_username
+            and self.mqtt_password
+            and self.mqtt_controls_mask != 0
+            and self.control_secret
+        )
 
     # Gateway configuration
     gateways: List[GatewayConfig] = Field(default_factory=list)
