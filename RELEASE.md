@@ -40,6 +40,14 @@
   - PW3 `get_battery_block()` fix for basic/WiFi TEDAPI mode (jasonacox/pypowerwall#396), `python -m pypowerwall register` honoring `-authpath` (jasonacox/pypowerwall#383), and the 0.18.0 packaging changes.
 - **Python 3.13 in CI** — the `pytest` and simulator workflows now test Python 3.10–3.13 (previously 3.10–3.12, which is why the race went unnoticed), and `pyproject.toml` lists the 3.13 classifier. `requires-python = ">=3.10"` already allowed 3.13 installs.
 
+### [0.6.7] - Upcoming
+
+**Added:**
+- **TEDAPI bearer auth and V2026_06 signed queries** — new `PW_TEDAPI_AUTH_MODE` (`basic` | `bearer`) and `PW_TEDAPI_API_VERSION` (`V2024_06` | `V2026_06`) settings, plus per-gateway `tedapi_auth_mode` / `tedapi_api_version` overrides in `PW_GATEWAYS` / the YAML config, are passed through to `pypowerwall.Powerwall()`. Bearer mode gives wired-LAN TEDAPI access on solar-only gateways (not Powerwall 2 or 3 — use `rsa_key_path` on PW3), and `V2026_06` selects pypowerwall's Tesla-signed query set. Values are coerced by pypowerwall's own helpers (a typo logs a warning and falls back instead of failing every poll). `/stats` reports both settings (`config.PW_TEDAPI_*`, top-level `tedapi_auth_mode` / `tedapi_api_version`, per-gateway requested/active values), `/health` adds `auth_mode` / `tedapi_api_version` per gateway, `/api/gateways` includes the resolved values, and the Console labels bearer gateways "TEDAPI (bearer)". CLI: `--tedapi-auth-mode`, `--tedapi-api-version`.
+
+**Fixed:**
+- **`/stats` reported `PW_NEG_SOLAR` as always `true`** — it now reflects the actual `PW_NEG_SOLAR` setting (default `false`).
+
 ### [0.6.6] - 2026-09-13
 
 **Added:**

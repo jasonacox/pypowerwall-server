@@ -64,6 +64,11 @@ class Gateway(BaseModel):
     cloud_mode: bool = False
     fleetapi: bool = False
     type: str = "powerwall"  # "powerwall" | "inverter" (solar-only, no batteries)
+    # Requested TEDAPI transport, resolved from the per-gateway config and the
+    # PW_TEDAPI_AUTH_MODE / PW_TEDAPI_API_VERSION defaults and already coerced
+    # to valid pypowerwall enum values (stored as plain strings).
+    tedapi_auth_mode: str = "basic"  # "basic" | "bearer"
+    tedapi_api_version: str = "V2024_06"  # "V2024_06" | "V2026_06"
     online: bool = False
     last_error: Optional[str] = None
 
@@ -163,6 +168,10 @@ class PowerwallData(BaseModel):
     grid_export: Optional[str] = None
     pw3: Optional[bool] = None  # True if Powerwall 3 system
     tedapi_mode: Optional[str] = None  # TEDAPI mode (e.g., "FleetAPI")
+    # Active TEDAPI transport as reported by the live pypowerwall client (may
+    # differ from the requested values, e.g. hybrid mode always speaks basic).
+    tedapi_auth_mode: Optional[str] = None  # "basic" | "bearer"
+    tedapi_api_version: Optional[str] = None  # "V2024_06" | "V2026_06"
     tedapi_config: Optional[Dict[str, Any]] = None  # Cached /tedapi/config response; battery_blocks[].type used for model detection
     timestamp: Optional[float] = None
 

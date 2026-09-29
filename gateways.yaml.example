@@ -62,6 +62,18 @@ gateways:
     gw_pwd: your_gateway_password
     timezone: America/Los_Angeles
 
+  # Example 7: Wired-LAN TEDAPI access with bearer auth + Tesla-signed queries
+  # Solar-only gateways only (not Powerwall 2 or 3 - use rsa_key_path on PW3).
+  # Both fields default to PW_TEDAPI_AUTH_MODE / PW_TEDAPI_API_VERSION when omitted.
+  - id: east-inverter
+    name: East Array Inverter (wired LAN)
+    host: 192.168.1.60
+    gw_pwd: your_gateway_password
+    tedapi_auth_mode: bearer        # basic (default) | bearer
+    tedapi_api_version: V2026_06    # V2024_06 (default) | V2026_06 (needs protobuf >= 6.33.6)
+    type: inverter
+    timezone: America/Los_Angeles
+
 # Configuration Notes:
 #
 # Authentication Modes:
@@ -84,3 +96,5 @@ gateways:
 #   timezone: Local timezone (e.g., America/Los_Angeles)
 #   cloud_mode: true for cloud-only access
 #   fleetapi: true for FleetAPI access
+#   tedapi_auth_mode: TEDAPI auth transport - basic (default) | bearer (wired LAN, solar-only)
+#   tedapi_api_version: TEDAPI query set - V2024_06 (default) | V2026_06 (Tesla-signed queries)

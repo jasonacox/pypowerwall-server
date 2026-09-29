@@ -3236,7 +3236,7 @@
                     mode = (stats.cloud_control?.configured || stats.cloudcontrol) ? 'Hybrid' : 'Basic LAN';
                 } else if (stats.tedapi) {
                     const hasRsaKey = Object.values(gatewayMeta).some(gw => gw.rsa_key_configured);
-                    mode = hasRsaKey ? 'TEDAPI v1r' : 'TEDAPI';
+                    mode = hasRsaKey ? 'TEDAPI v1r' : (stats.tedapi_auth_mode === 'bearer' ? 'TEDAPI (bearer)' : 'TEDAPI');
                 } else {
                     mode = 'Local';
                 }
@@ -3970,7 +3970,7 @@
                     // Handle both nested and flat response formats
                     const gw = status.gateway || status;
                     const isOnline = status.online ?? false;
-                    const mode = gw.fleetapi ? 'FleetAPI' : gw.cloud_mode ? 'Cloud' : gw.basic_lan ? 'Basic LAN' : gw.rsa_key_configured ? 'TEDAPI v1r' : 'TEDAPI';
+                    const mode = gw.fleetapi ? 'FleetAPI' : gw.cloud_mode ? 'Cloud' : gw.basic_lan ? 'Basic LAN' : gw.rsa_key_configured ? 'TEDAPI v1r' : gw.tedapi_auth_mode === 'bearer' ? 'TEDAPI (bearer)' : 'TEDAPI';
                     const hostInfo = (gw.cloud_mode || gw.fleetapi)
                         ? (gw.site_id || gw.email || id)
                         : (gw.host || id);

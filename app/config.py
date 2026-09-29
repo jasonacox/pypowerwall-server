@@ -237,6 +237,12 @@ class GatewayConfig(BaseModel):
     cloud_mode: bool = False
     fleetapi: bool = False
     type: str = "powerwall"  # "powerwall" | "inverter" (solar-only, no batteries)
+    # TEDAPI transport overrides. None = inherit the global PW_TEDAPI_AUTH_MODE /
+    # PW_TEDAPI_API_VERSION defaults. Validated at gateway registration
+    # (case-insensitively, falling back with a logged warning on a typo), never
+    # here, so a bad value in one entry cannot abort config loading.
+    tedapi_auth_mode: Optional[str] = None  # "basic" | "bearer"
+    tedapi_api_version: Optional[str] = None  # "V2024_06" | "V2026_06"
 
     @model_validator(mode="after")
     def _default_name_to_id(self):
@@ -329,6 +335,17 @@ class Settings(BaseSettings):
     neg_solar: bool = Field(
         default=False, alias="PW_NEG_SOLAR"
     )  # Allow negative solar values (default: no)
+
+    # TEDAPI transport defaults (same env names as the pypowerwall proxy).
+    # Per-gateway `tedapi_auth_mode` / `tedapi_api_version` override these.
+    #   auth mode:   "basic" (gateway Wi-Fi, default) | "bearer" (wired LAN on
+    #                solar-only gateways; not supported on Powerwall 2 or 3)
+    #   api version: "V2024_06" (default) | "V2026_06" (Tesla-signed query set;
+    #                needs protobuf >= 6.33.6 at runtime)
+    tedapi_auth_mode: str = Field(default="basic", alias="PW_TEDAPI_AUTH_MODE")
+    tedapi_api_version: str = Field(
+        default="V2024_06", alias="PW_TEDAPI_API_VERSION"
+    )
 
     # CORS configuration
     cors_origins: List[str] = Field(default=["*"], alias="CORS_ORIGINS")
@@ -540,6 +557,8 @@ class Settings(BaseSettings):
                     authpath=self.pw_authpath,
                     timezone=self.pw_timezone,
                     cloud_mode=bool(self.pw_email and not self.pw_host),
+                    tedapi_auth_mode=self.tedapi_auth_mode,
+                    tedapi_api_version=self.tedapi_api_version,
                 )
             ]
 

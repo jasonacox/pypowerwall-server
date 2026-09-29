@@ -226,6 +226,23 @@ PW_WIFI_HOST=192.168.91.1                         # WiFi fallback IP for v1r mod
 PW_TIMEZONE=America/Los_Angeles
 ```
 
+**Single Gateway Mode (TEDAPI bearer over wired LAN — solar-only):**
+```bash
+PW_HOST=192.168.1.50                      # Gateway's LAN IP (not the 192.168.91.1 Wi-Fi AP)
+PW_GW_PWD=your_gateway_password
+PW_TEDAPI_AUTH_MODE=bearer                # basic (default, Wi-Fi AP only) | bearer (wired LAN or Wi-Fi)
+PW_TEDAPI_API_VERSION=V2026_06            # V2024_06 (default) | V2026_06 (Tesla-signed query set)
+PW_TIMEZONE=America/Los_Angeles
+```
+Bearer mode is hardware-verified on solar-only (inverter) gateways over both a Wi-Fi
+static route and the wired LAN IP. It is **not** supported on Powerwall 2 or Powerwall 3 —
+use `PW_RSA_KEY_PATH` (TEDAPI v1r) for PW3 wired access. `V2026_06` selects pypowerwall's
+Tesla-signed query set (needed on firmware that rejects the legacy queries); it requires
+`protobuf >= 6.33.6` at runtime — the Docker image resolves this automatically, and a
+too-old install is reported at startup with the `pip install` command to run. Both
+settings can also be set per gateway (`tedapi_auth_mode`, `tedapi_api_version`) in
+`PW_GATEWAYS` / the YAML config, overriding these defaults.
+
 **Single Gateway Mode (With Cloud Control):**
 ```bash
 PW_HOST=192.168.91.1
@@ -387,6 +404,7 @@ gateways:
 **TEDAPI connection modes:**
 - `host` + `gw_pwd` → TEDAPI (standard, uses gateway Wi-Fi password)
 - `host` + `gw_pwd` + `rsa_key_path` → TEDAPI v1r (RSA-4096 encrypted channel + customer password from gw_pwd; shown as "TEDAPI v1r" in console)
+- `host` + `gw_pwd` + `tedapi_auth_mode: bearer` → TEDAPI over the wired LAN IP (solar-only gateways only; shown as "TEDAPI (bearer)" in console)
 - `wifi_host` → Optional WiFi fallback IP for v1r mode (default `192.168.91.1`; only needed when your gateway is on a non-standard IP)
 
 **Optional fields:**
@@ -394,6 +412,9 @@ gateways:
 - `type`: Gateway device type — `powerwall` (default, has batteries) or `inverter` (solar-only; suppresses battery panels in the console)
 - `rsa_key_path`: RSA-4096 private key PEM path for TEDAPI v1r LAN authentication (requires `gw_pwd` — see above)
 - `wifi_host`: WiFi host IP for TEDAPI v1r WiFi fallback (default `192.168.91.1`; set this when your gateway's WiFi AP is on a different subnet, e.g. behind a travel router)
+- `tedapi_auth_mode`: TEDAPI auth transport — `basic` (gateway Wi-Fi AP, default) or `bearer` (wired LAN on solar-only gateways; not PW2 or PW3). Defaults to `PW_TEDAPI_AUTH_MODE`.
+- `tedapi_api_version`: TEDAPI query set — `V2024_06` (default) or `V2026_06` (Tesla-signed queries; needs `protobuf >= 6.33.6`). Defaults to `PW_TEDAPI_API_VERSION`.
+  - Precedence: per-gateway value → `PW_TEDAPI_*` environment default → library default. Unknown values log a warning and fall back (they never abort startup). pypowerwall only honours these in full TEDAPI mode (`host` + `gw_pwd`, no `password`); Basic LAN, hybrid (`gw_pwd` + `password`) and cloud gateways ignore them. `/stats` reports the requested and active values per gateway, so a request pypowerwall did not honour is visible there.
 
 ### Reverse Proxy / HTTPS Proxy
 

@@ -705,10 +705,18 @@ async def health_check():
         if is_online:
             online_count += 1
 
+        # TEDAPI transport: what the live client reports once it has, else
+        # the requested configuration (proxy /health "transport" analogue).
+        gw = gateway_manager.gateways[gateway_id]
+        gw_data = status.data if status else None
         detail = {
             "id": gateway_id,
             "online": is_online,
             "error": status.error if status and status.error else None,
+            "auth_mode": (gw_data.tedapi_auth_mode if gw_data else None)
+            or gw.tedapi_auth_mode,
+            "tedapi_api_version": (gw_data.tedapi_api_version if gw_data else None)
+            or gw.tedapi_api_version,
         }
 
         gateway_details.append(detail)
@@ -782,6 +790,9 @@ Environment Variables:
   PW_PORT            Server port (default: 8675)
   PW_BIND_ADDRESS    Server bind address (default: 0.0.0.0)
   PW_CONFIG          Path to YAML/JSON configuration file
+  PW_TEDAPI_AUTH_MODE     TEDAPI auth transport: basic | bearer (default: basic;
+                          bearer = wired-LAN access on solar-only gateways)
+  PW_TEDAPI_API_VERSION   TEDAPI query set: V2024_06 | V2026_06 (default: V2024_06)
   PW_RATE_LIMIT_ENABLED         Enable per-IP rate limiting (default: false)
   PW_RATE_LIMIT_MAX_REQUESTS    Requests per window per IP (default: 1000)
   PW_RATE_LIMIT_WINDOW_SECONDS  Rate limit window in seconds (default: 60)
@@ -818,6 +829,18 @@ For more information, visit: https://github.com/jasonacox/pypowerwall-server
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--config", help="Path to YAML/JSON configuration file")
+    parser.add_argument(
+        "--tedapi-auth-mode",
+        dest="tedapi_auth_mode",
+        choices=["basic", "bearer"],
+        help="TEDAPI auth transport (default: basic; bearer = wired-LAN solar-only)",
+    )
+    parser.add_argument(
+        "--tedapi-api-version",
+        dest="tedapi_api_version",
+        choices=["V2024_06", "V2026_06"],
+        help="TEDAPI query set / API version (default: V2024_06)",
+    )
     parser.add_argument(
         "--reload", action="store_true", help="Enable auto-reload for development"
     )
@@ -897,6 +920,10 @@ For more information, visit: https://github.com/jasonacox/pypowerwall-server
         os.environ["PW_DEBUG"] = "true"
     if args.config:
         os.environ["PW_CONFIG"] = args.config
+    if args.tedapi_auth_mode:
+        os.environ["PW_TEDAPI_AUTH_MODE"] = args.tedapi_auth_mode
+    if args.tedapi_api_version:
+        os.environ["PW_TEDAPI_API_VERSION"] = args.tedapi_api_version
     if args.rate_limit:
         os.environ["PW_RATE_LIMIT_ENABLED"] = "true"
     if args.rate_limit_max_requests:

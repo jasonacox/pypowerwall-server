@@ -71,6 +71,8 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 import pypowerwall
+from pypowerwall.tedapi.api_version import TEDAPIApiVersion
+from pypowerwall.tedapi.auth_mode import AuthMode
 from app.models.gateway import Gateway, GatewayStatus, PowerwallData, AggregateData
 from app.core.scaling import raw_to_tesla_battery_percent
 from app.config import GatewayConfig
@@ -230,7 +232,6 @@ class GatewayManager:
             str, GatewayConfig
         ] = {}  # Gateways waiting for lazy initialization
         self._preserve_stale_count: Dict[str, int] = {}  # Multi-PW snapshot preservation staleness tracker
-
         # TEDAPI SolarOnly fallback tracking (per gateway).
         # Distinct from _consecutive_failures: is_degraded = transient transport
         # failures; is_fallback_mode = TEDAPI has fallen back to SolarOnly mode
@@ -488,6 +489,23 @@ class GatewayManager:
                 if config.email and not config.host:
                     config.cloud_mode = True
 
+                # Requested TEDAPI transport: per-gateway value, else the
+                # PW_TEDAPI_* default. pypowerwall's own coerce helpers warn
+                # and fall back on a typo (Powerwall() itself would raise), so
+                # a bad value never becomes a permanently failing poll.
+                # pypowerwall honours these only in full TEDAPI mode; /stats
+                # shows the transport the live client actually uses.
+                requested_mode = (
+                    config.tedapi_auth_mode or settings.tedapi_auth_mode or ""
+                ).strip()
+                requested_version = (
+                    config.tedapi_api_version or settings.tedapi_api_version or ""
+                ).strip().upper()
+                tedapi_auth_mode = str(
+                    AuthMode.coerce(requested_mode, default=AuthMode.BASIC)
+                )
+                tedapi_api_version = str(TEDAPIApiVersion.coerce(requested_version))
+
                 gateway = Gateway(
                     id=config.id,
                     name=config.name,
@@ -503,6 +521,8 @@ class GatewayManager:
                     cloud_mode=config.cloud_mode,
                     fleetapi=config.fleetapi,
                     type=config.type,
+                    tedapi_auth_mode=tedapi_auth_mode,
+                    tedapi_api_version=tedapi_api_version,
                 )
 
                 # Store gateway - connection will be created lazily on first poll
@@ -525,7 +545,10 @@ class GatewayManager:
                 elif basic_lan:
                     mode = "Basic LAN"
                 else:
-                    mode = "TEDAPI"
+                    mode = (
+                        f"TEDAPI (auth={tedapi_auth_mode}, "
+                        f"queries={tedapi_api_version})"
+                    )
 
                 logger.info(
                     f"Registered gateway: {config.id} ({config.name}) - {mode} mode - connection pending"
@@ -905,6 +928,17 @@ class GatewayManager:
         except Exception:
             pass
 
+        # Active TEDAPI transport as reported by the live client. It can differ
+        # from the requested one (hybrid mode always speaks basic); /stats shows
+        # both. Only real strings are recorded: AuthMode / TEDAPIApiVersion are
+        # str enums, a Mock attribute or a client without the concept is not.
+        active_mode = getattr(getattr(pw, "tedapi", None), "auth_mode", None)
+        if isinstance(active_mode, str):
+            data.tedapi_auth_mode = str(active_mode)
+        active_version = getattr(pw, "tedapi_api_version", None)
+        if isinstance(active_version, str):
+            data.tedapi_api_version = str(active_version)
+
         # Cache TEDAPI config for battery block type enrichment (PW3 systems)
         # battery_blocks[].type gives "Powerwall3" / "Powerwall3Follower" etc.,
         # which is more useful for model detection than system_status Type ("ACPW").
@@ -1276,6 +1310,10 @@ class GatewayManager:
                             "timeout": settings.timeout,
                             "poolmaxsize": settings.pool_maxsize,
                             "pwcacheexpire": pwcacheexpire,
+                            # Requested TEDAPI transport (pypowerwall ignores
+                            # these outside full TEDAPI mode).
+                            "tedapi_auth_mode": self.gateways[gateway_id].tedapi_auth_mode,
+                            "tedapi_api_version": self.gateways[gateway_id].tedapi_api_version,
                         }
                         # Per-gateway password (PW_GATEWAYS/config file) or the
                         # legacy PW_PASSWORD env var. Without gw_pwd/rsa_key this
