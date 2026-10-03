@@ -206,6 +206,42 @@ pypowerwall/default/online      → true
 pypowerwall/default/availability → online
 ```
 
+### Per-unit temperatures and fan speeds
+
+Powerwall temperature and fan speed readings are published per physical unit,
+keyed by that unit's serial number (the same units as the web console's
+Powerwall Status table). These come from gateway vitals, so they are
+available in TEDAPI modes and Powerwall 2 local mode — not in cloud-only
+mode. Only the signals each unit reports are published (a Powerwall 2 unit
+has fan rpm but no duty cycle; an expansion pack has pack temps but no
+fans):
+
+| Topic suffix | Type | Example value | Notes |
+|---|---|---|---|
+| `devices/{serial}/temperature/pack_max` | float | `23.5` | Battery pack max temp °C (PW3) |
+| `devices/{serial}/temperature/pack_min` | float | `22.1` | Battery pack min temp °C (PW3) |
+| `devices/{serial}/temperature/shunt` | float | `24.0` | Shunt temp °C (PW3) |
+| `devices/{serial}/temperature/ambient` | float | `31.2` | Inverter ambient temp °C (PW3) |
+| `devices/{serial}/temperature/controller` | float | `25.0` | Thermal controller temp °C (PW2/2+) |
+| `devices/{serial}/fan/a/rpm` | float | `1200` | Fan A measured rpm (PW3) |
+| `devices/{serial}/fan/a/duty` | float | `35.5` | Fan A duty cycle % (PW3) |
+| `devices/{serial}/fan/b/rpm` | float | `1180` | Fan B measured rpm (PW3) |
+| `devices/{serial}/fan/b/duty` | float | `33.2` | Fan B duty cycle % (PW3) |
+| `devices/{serial}/fan/rpm` | float | `810` | Fan measured rpm (PW2/2+) |
+| `devices/{serial}/fan/target_rpm` | float | `900` | Fan target rpm (PW2/2+) |
+| `devices/{serial}` | JSON | `{...}` | All signals for that unit |
+
+**Example**:
+```
+pypowerwall/default/devices/TG2312H0001/temperature/pack_max → 23.5
+pypowerwall/default/devices/TG2312H0001/fan/a/rpm            → 1200
+pypowerwall/default/devices/TG123456789/fan/rpm              → 810
+```
+
+When `MQTT_HA_DISCOVERY` is enabled these become Home Assistant sensors
+(diagnostics, grouped under the gateway's device) — e.g. *Powerwall
+TG2312H0001 Pack Temp Max* — ready for automations and history charts.
+
 ---
 
 ## 4. Command-Line Monitoring

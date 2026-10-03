@@ -543,7 +543,7 @@ export MQTT_HA_DISCOVERY=true        # auto-configure Home Assistant sensors (de
 | `MQTT_CLIENT_ID` | `pypowerwall-server` | MQTT client identifier |
 | `MQTT_KEEPALIVE` | `60` | Connection keepalive in seconds |
 
-Topics are published under `{MQTT_TOPIC_PREFIX}/{gateway_id}/` — e.g. `pypowerwall/default/battery`, `pypowerwall/default/solar`, etc. See [mqtt-tools/README.md](mqtt-tools/README.md) for the full topic list, broker setup guide, Home Assistant integration steps, and the live monitor GUI.
+Topics are published under `{MQTT_TOPIC_PREFIX}/{gateway_id}/` — e.g. `pypowerwall/default/battery`, `pypowerwall/default/solar`, etc. Per-unit Powerwall temperatures and fan speeds are published under `devices/{serial}/…` (e.g. `pypowerwall/default/devices/TG2312H0001/fan/a/rpm`) and show up as Home Assistant sensors when discovery is enabled. See [mqtt-tools/README.md](mqtt-tools/README.md) for the full topic list, broker setup guide, Home Assistant integration steps, and the live monitor GUI.
 
 ## API Endpoints
 

@@ -39,6 +39,22 @@ config.json type "trm_mb", surfaced by pypowerwall as TRM--<din> vitals blocks):
     meters/remote/{din}/ct{n}/energy_imported — CT lifetime energy imported (Wh, total_increasing)
     meters/remote/{din}/ct{n}/energy_exported — CT lifetime energy exported (Wh, total_increasing)
 
+Per-unit device sensors (when device_signals provided — Powerwall temperature
+and fan readings from vitals, keyed by unit serial):
+    devices/{serial}/temperature/pack_max     — Battery pack max temperature (°C, PW3)
+    devices/{serial}/temperature/pack_min     — Battery pack min temperature (°C, PW3)
+    devices/{serial}/temperature/shunt        — Shunt temperature (°C, PW3)
+    devices/{serial}/temperature/ambient      — Inverter ambient temperature (°C, PW3)
+    devices/{serial}/temperature/controller   — Thermal controller temperature (°C, PW2/2+)
+    devices/{serial}/fan/a/rpm                — Fan A measured speed (rpm, PW3)
+    devices/{serial}/fan/a/duty               — Fan A drive duty cycle (%, PW3)
+    devices/{serial}/fan/b/rpm                — Fan B measured speed (rpm, PW3)
+    devices/{serial}/fan/b/duty               — Fan B drive duty cycle (%, PW3)
+    devices/{serial}/fan/rpm                  — Fan measured speed (rpm, PW2/2+)
+    devices/{serial}/fan/target_rpm           — Fan target speed (rpm, PW2/2+)
+    Only the signals each unit reports are discovered (a PW2 unit gets no
+    fan duty sensors; an expansion pack gets pack temps but no fans).
+
 Lifetime energy sensors (Wh, device_class=energy, state_class=total_increasing):
     grid_energy_imported     — Grid energy imported, lifetime (from aggregates site)
     grid_energy_exported     — Grid energy exported, lifetime (from aggregates site)
@@ -81,6 +97,186 @@ logger = logging.getLogger(__name__)
 # Matches the per-CT fields pypowerwall flattens onto each TRM--<din> vitals
 # block, e.g. "TRM_CT0_InstVoltage" -> ct index "0", metric "InstVoltage".
 _TRM_CT_FIELD_RE = re.compile(r"^TRM_CT(\d+)_(.+)$")
+
+
+# ---------------------------------------------------------------------------
+# Per-unit device signals (Powerwall temperatures and fan speeds)
+# ---------------------------------------------------------------------------
+
+# Vitals signal fields per device block type -> canonical signal keys.
+# Mirrors the web console's powerwallTempsBySerial() / powerwallFansBySerial()
+# (PW3: pack temps on TEPOD, fans + inverter ambient on TEPINV; PW2/2+: thermal
+# controller ambient on TETHC, fan on PVAC).
+_VITALS_DEVICE_FIELDS = {
+    "TEPOD": {
+        "HVP_PackTempMax": "temp_pack_max",
+        "HVP_PackTempMin": "temp_pack_min",
+        "HVP_ShuntTemperature": "temp_shunt",
+    },
+    "TEPINV": {
+        "PCH_AmbientTemp": "temp_ambient",
+        "PCH_FanSpeed_A": "fan_a_rpm",
+        "PCH_FanDuty_A": "fan_a_duty",
+        "PCH_FanSpeed_B": "fan_b_rpm",
+        "PCH_FanDuty_B": "fan_b_duty",
+    },
+    "TETHC": {
+        "THC_AmbientTemp": "temp_controller",
+    },
+    "PVAC": {
+        "PVAC_Fan_Speed_Actual_RPM": "fan_rpm",
+        "PVAC_Fan_Speed_Target_RPM": "fan_target_rpm",
+    },
+}
+
+# get_fan_speeds() payload fields (keys "PVAC--<part>--<serial>" or
+# "TEPINV--<part>--<serial>") -> the same canonical signal keys.  Used only to
+# fill gaps the vitals snapshot did not carry.
+_FAN_SPEEDS_FIELDS = {
+    "PVAC": {
+        "PVAC_Fan_Speed_Actual_RPM": "fan_rpm",
+        "PVAC_Fan_Speed_Target_RPM": "fan_target_rpm",
+    },
+    "TEPINV": {
+        "PCH_FanSpeed_A": "fan_a_rpm",
+        "PCH_FanDuty_A": "fan_a_duty",
+        "PCH_FanSpeed_B": "fan_b_rpm",
+        "PCH_FanDuty_B": "fan_b_duty",
+    },
+}
+
+# Canonical per-device signal catalogue: (MQTT topic suffix, signal key,
+# HA entity label, unit, device_class, icon).
+DEVICE_SIGNAL_CATALOGUE = [
+    ("temperature/pack_max", "temp_pack_max", "Pack Temp Max", "°C", "temperature", "mdi:thermometer-high"),
+    ("temperature/pack_min", "temp_pack_min", "Pack Temp Min", "°C", "temperature", "mdi:thermometer-low"),
+    ("temperature/shunt", "temp_shunt", "Shunt Temp", "°C", "temperature", "mdi:thermometer"),
+    ("temperature/ambient", "temp_ambient", "Inverter Ambient Temp", "°C", "temperature", "mdi:thermometer"),
+    ("temperature/controller", "temp_controller", "Controller Ambient Temp", "°C", "temperature", "mdi:thermometer"),
+    ("fan/a/rpm", "fan_a_rpm", "Fan A Speed", "rpm", None, "mdi:fan"),
+    ("fan/a/duty", "fan_a_duty", "Fan A Duty", "%", None, "mdi:percent"),
+    ("fan/b/rpm", "fan_b_rpm", "Fan B Speed", "rpm", None, "mdi:fan"),
+    ("fan/b/duty", "fan_b_duty", "Fan B Duty", "%", None, "mdi:percent"),
+    ("fan/rpm", "fan_rpm", "Fan Speed", "rpm", None, "mdi:fan"),
+    ("fan/target_rpm", "fan_target_rpm", "Fan Target Speed", "rpm", None, "mdi:speedometer"),
+]
+
+
+def _safe_float(val) -> Optional[float]:
+    """Convert a value to float, returning None on failure."""
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def _device_block_serial(key: str, block: dict) -> Optional[str]:
+    """Resolve the unit serial for a vitals block.
+
+    Prefers the block's own serialNumber field (as the web console does);
+    falls back to the last "--" segment of the device key.  Returns None for
+    empty serials or serials carrying MQTT topic wildcards ('/', '+', '#').
+    """
+    serial = block.get("serialNumber")
+    if not (isinstance(serial, str) and serial):
+        parts = key.split("--")
+        serial = parts[-1] if len(parts) > 1 else None
+    if not serial or any(ch in serial for ch in "/+#"):
+        return None
+    return serial
+
+
+def _apply_fields(signals: Dict[str, float], block: dict, field_map: dict) -> None:
+    """Copy known numeric fields from a device block into a signal dict.
+
+    First writer wins: signals already present (e.g. from TEPINV) are never
+    overwritten (e.g. by a same-serial PVAC block without fan readings).
+    """
+    for field, signal_key in field_map.items():
+        if signal_key in signals:
+            continue
+        value = _safe_float(block.get(field))
+        if value is not None:
+            signals[signal_key] = value
+
+
+def _has_pw3_fans(signals: Dict[str, float]) -> bool:
+    """True once a unit has TEPINV (PW3) fan readings.
+
+    As in the web console, a same-serial PVAC block never contributes its
+    PW2-style fan readings to a unit that already has PW3 fans, whatever the
+    block order - it would create duplicate fan entities for one unit.
+    """
+    return "fan_a_rpm" in signals or "fan_b_rpm" in signals
+
+
+def extract_device_signals(
+    vitals: Optional[Dict[str, Any]],
+    fan_speeds: Optional[Dict[str, Any]],
+) -> Dict[str, Dict[str, float]]:
+    """Extract per-Powerwall-unit temperature and fan readings.
+
+    Combines a pw.vitals() payload with the get_fan_speeds() payload cached
+    by the poll loop, normalized to canonical signal keys and keyed by unit
+    serial (the same keying as the web console's Powerwall Status table):
+
+        {"TG123456789H1234": {"temp_pack_max": 23.5, "fan_a_rpm": 1200.0, ...}}
+
+    Vitals is the primary source — it carries PW3 pack temps (TEPOD), PW3
+    inverter fans (TEPINV), PW2/2+ thermal-controller temps (TETHC) and PW2
+    fans (PVAC), each with the unit's serialNumber.  TEPINV blocks are
+    processed before PVAC so a PW3 unit's real fans win over any same-serial
+    PVAC block (which carries no fan readings on PW3).  The fan_speeds
+    payload only fills signals vitals did not report this poll.
+
+    Returns {} for missing/malformed input — never raises.
+    """
+    devices: Dict[str, Dict[str, float]] = {}
+
+    def entry(serial: str) -> Dict[str, float]:
+        return devices.setdefault(serial, {})
+
+    if isinstance(vitals, dict):
+        # TEPINV first so its fans win over a same-serial PVAC block
+        ordered = sorted(
+            vitals.items(),
+            key=lambda kv: 0 if isinstance(kv[0], str) and kv[0].startswith("TEPINV--") else 1,
+        )
+        for key, block in ordered:
+            if not isinstance(key, str) or not isinstance(block, dict):
+                continue
+            prefix = key.split("--", 1)[0]
+            field_map = _VITALS_DEVICE_FIELDS.get(prefix)
+            if field_map is None:
+                continue
+            serial = _device_block_serial(key, block)
+            if serial is None:
+                continue
+            signals = entry(serial)
+            if prefix == "PVAC" and _has_pw3_fans(signals):
+                continue  # a PW3 unit's PVAC block adds nothing
+            _apply_fields(signals, block, field_map)
+
+    if isinstance(fan_speeds, dict):
+        for key, block in fan_speeds.items():
+            if not isinstance(key, str) or not isinstance(block, dict):
+                continue
+            parts = key.split("--")
+            prefix = parts[0]
+            field_map = _FAN_SPEEDS_FIELDS.get(prefix)
+            if field_map is None or len(parts) < 3:
+                continue
+            serial = parts[-1]
+            if not serial or any(ch in serial for ch in "/+#"):
+                continue
+            signals = entry(serial)
+            if prefix == "PVAC" and _has_pw3_fans(signals):
+                continue
+            _apply_fields(signals, block, field_map)
+
+    return {serial: signals for serial, signals in devices.items() if signals}
 
 
 def extract_remote_meters(
@@ -133,20 +329,25 @@ def extract_remote_meters(
 
 
 def discovery_signature(
-    strings: Optional[Dict[str, Any]], vitals: Optional[Dict[str, Any]]
+    strings: Optional[Dict[str, Any]],
+    vitals: Optional[Dict[str, Any]],
+    fan_speeds: Optional[Dict[str, Any]] = None,
 ) -> frozenset:
     """The optional (data-dependent) entities a snapshot would announce.
 
-    Solar strings and remote-meter CTs are only discovered when a poll
-    reports them. The publisher compares this signature with what it has
-    already announced, so a family first seen on a later poll (e.g. after the
-    first poll's vitals timed out) still gets discovered.
+    Solar strings, remote-meter CTs and per-unit temperature/fan signals are
+    only discovered when a poll reports them. The publisher compares this
+    signature with what it has already announced, so a family first seen on
+    a later poll (e.g. after the first poll's vitals timed out) still gets
+    discovered.
     """
     signature = set()
     if isinstance(strings, dict):
         signature.update(("string", sid) for sid in strings)
     for din, cts in extract_remote_meters(vitals).items():
         signature.update(("remote_meter", din, ct) for ct in cts)
+    for serial, signals in extract_device_signals(vitals, fan_speeds).items():
+        signature.update(("device", serial, key) for key in signals)
     return frozenset(signature)
 
 
@@ -169,6 +370,7 @@ def build_discovery_payloads(
     version: Optional[str] = None,
     string_ids: Optional[Sequence[str]] = None,
     remote_meters: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None,
+    device_signals: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> list[tuple[str, str]]:
     """Build all HA auto-discovery (topic, payload) pairs for a gateway.
 
@@ -187,6 +389,11 @@ def build_discovery_payloads(
                        extract_remote_meters(pw.vitals()) - {din: {ct_index:
                        {metric: value}}}.  When provided, per-CT sensors are
                        added so HA auto-discovers each wireless CT meter.
+        device_signals: Per-unit Powerwall temperature/fan readings as
+                       returned by extract_device_signals(pw.vitals(),
+                       get_fan_speeds()) - {serial: {signal_key: value}}.  When
+                       provided, per-unit temperature and fan sensors are
+                       added so HA auto-discovers them.
 
     Returns:
         List of (topic, json_payload_str) tuples, one per sensor/binary sensor.
@@ -576,5 +783,24 @@ def build_discovery_payloads(
                             entity_category="diagnostic",
                         )
                     )
+
+    # --- Per-unit device sensors (Powerwall temperatures and fans) ---
+    if device_signals:
+        devices_prefix = f"{data_prefix}/devices"
+        for serial, signals in device_signals.items():
+            serial_slug = re.sub(r"[^a-z0-9]+", "_", serial.lower()).strip("_")
+            for topic_suffix, key, label, unit, dc, icon in DEVICE_SIGNAL_CATALOGUE:
+                if key not in signals:
+                    continue
+                results.append(sensor(
+                    f"device_{serial_slug}_{key}",
+                    f"Powerwall {serial} {label}",
+                    f"{devices_prefix}/{serial}/{topic_suffix}",
+                    unit=unit,
+                    device_class=dc,
+                    state_class="measurement",
+                    icon=icon,
+                    entity_category="diagnostic",
+                ))
 
     return results

@@ -1120,3 +1120,198 @@ class TestGridBackupTopics:
             ]
         )
         assert summary["grid_connected"] is None
+
+
+class TestMqttDeviceSignalTopics:
+    """Verify per-unit Powerwall temperature/fan MQTT topics are published
+    correctly - sourced from vitals + get_fan_speeds(), mirroring the
+    strings and remote-meter publishing patterns."""
+
+    def _make_publisher(self, monkeypatch) -> MqttPublisher:
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "mqtt_host", "localhost")
+        monkeypatch.setattr(settings, "mqtt_port", 1883)
+        monkeypatch.setattr(settings, "mqtt_topic_prefix", "pypowerwall")
+        monkeypatch.setattr(settings, "mqtt_qos", 1)
+        monkeypatch.setattr(settings, "mqtt_retain", True)
+        pub = MqttPublisher()
+        mock_client = AsyncMock()
+        pub._client = mock_client
+        pub._connected = True
+        return pub
+
+    def _make_status_with_vitals(
+        self, vitals: dict, fan_speeds: dict | None = None
+    ) -> GatewayStatus:
+        gateway = Gateway(
+            id="test-gw", name="Test", host="192.168.91.1", gw_pwd="test", online=True
+        )
+        data = PowerwallData(
+            soe=80.0,
+            soe_raw=82.0,
+            aggregates={
+                "solar": {"instant_power": 5000.0},
+                "site": {"instant_power": 0.0},
+                "load": {"instant_power": 5000.0},
+                "battery": {"instant_power": 0.0},
+            },
+            grid_status="UP",
+            mode="self_consumption",
+            reserve=20.0,
+            version="23.44.0",
+            vitals=vitals,
+            fan_speeds=fan_speeds,
+            timestamp=1_000_000.0,
+        )
+        return GatewayStatus(
+            gateway=gateway, data=data, online=True, last_updated=1_000_000.0
+        )
+
+    @pytest.mark.asyncio
+    async def test_pw3_unit_topics_published(self, monkeypatch):
+        """A PW3 unit publishes pack/inverter temps and both fans (rpm as
+        whole numbers, duty and temps to one decimal)."""
+        pub = self._make_publisher(monkeypatch)
+        status = self._make_status_with_vitals(
+            {
+                "TEPOD--1081100-38-F--TG2312H0001": {
+                    "serialNumber": "TG2312H0001",
+                    "HVP_PackTempMax": 23.45,
+                    "HVP_PackTempMin": 22.12,
+                    "HVP_ShuntTemperature": 24.0,
+                },
+                "TEPINV--1707000-21-M--TG2312H0001": {
+                    "serialNumber": "TG2312H0001",
+                    "PCH_AmbientTemp": 31.24,
+                    "PCH_FanSpeed_A": 1200.0,
+                    "PCH_FanDuty_A": 35.55,
+                    "PCH_FanSpeed_B": 1180.0,
+                    "PCH_FanDuty_B": 33.2,
+                },
+            }
+        )
+        await pub.publish_gateway("test-gw", status)
+
+        published = {c.args[0]: c.args[1] for c in pub._client.publish.call_args_list}
+        prefix = "pypowerwall/test-gw/devices/TG2312H0001"
+
+        assert published[f"{prefix}/temperature/pack_max"] == "23.4"
+        assert published[f"{prefix}/temperature/pack_min"] == "22.1"
+        assert published[f"{prefix}/temperature/shunt"] == "24.0"
+        assert published[f"{prefix}/temperature/ambient"] == "31.2"
+        assert published[f"{prefix}/fan/a/rpm"] == "1200"
+        assert published[f"{prefix}/fan/a/duty"] == "35.5"
+        assert published[f"{prefix}/fan/b/rpm"] == "1180"
+        assert published[f"{prefix}/fan/b/duty"] == "33.2"
+
+    @pytest.mark.asyncio
+    async def test_pw2_unit_topics_published(self, monkeypatch):
+        """A PW2 unit publishes controller temp and single-fan rpm/target."""
+        pub = self._make_publisher(monkeypatch)
+        status = self._make_status_with_vitals(
+            {
+                "TETHC--1081100-08-C--TG123456789": {
+                    "serialNumber": "TG123456789",
+                    "THC_AmbientTemp": 25.02,
+                },
+                "PVAC--1081100-08-C--TG123456789": {
+                    "PVAC_Fan_Speed_Actual_RPM": 810,
+                    "PVAC_Fan_Speed_Target_RPM": 900,
+                },
+            }
+        )
+        await pub.publish_gateway("test-gw", status)
+
+        published = {c.args[0]: c.args[1] for c in pub._client.publish.call_args_list}
+        prefix = "pypowerwall/test-gw/devices/TG123456789"
+
+        assert published[f"{prefix}/temperature/controller"] == "25.0"
+        assert published[f"{prefix}/fan/rpm"] == "810"
+        assert published[f"{prefix}/fan/target_rpm"] == "900"
+        # No PW3 fan entities for a PW2 unit
+        assert f"{prefix}/fan/a/rpm" not in published
+        assert f"{prefix}/fan/a/duty" not in published
+
+    @pytest.mark.asyncio
+    async def test_fan_speeds_only_publishes(self, monkeypatch):
+        """fan_speeds alone (vitals absent) still publishes fan topics."""
+        pub = self._make_publisher(monkeypatch)
+        status = self._make_status_with_vitals(
+            None,
+            {
+                "PVAC--1081100-08-C--TG123456789": {
+                    "PVAC_Fan_Speed_Actual_RPM": 810,
+                    "PVAC_Fan_Speed_Target_RPM": 900,
+                }
+            },
+        )
+        await pub.publish_gateway("test-gw", status)
+
+        published = {c.args[0]: c.args[1] for c in pub._client.publish.call_args_list}
+        prefix = "pypowerwall/test-gw/devices/TG123456789"
+        assert published[f"{prefix}/fan/rpm"] == "810"
+        assert published[f"{prefix}/fan/target_rpm"] == "900"
+
+    @pytest.mark.asyncio
+    async def test_per_device_json_topic(self, monkeypatch):
+        """Full per-unit signals are published as JSON on the bare device topic."""
+        pub = self._make_publisher(monkeypatch)
+        status = self._make_status_with_vitals(
+            {
+                "TEPOD--1081100-38-F--TG2312H0001": {
+                    "serialNumber": "TG2312H0001",
+                    "HVP_PackTempMax": 23.5,
+                },
+            }
+        )
+        await pub.publish_gateway("test-gw", status)
+
+        published = {c.args[0]: c.args[1] for c in pub._client.publish.call_args_list}
+        topic = "pypowerwall/test-gw/devices/TG2312H0001"
+        assert topic in published
+        data = json.loads(published[topic])
+        assert data == {"temp_pack_max": 23.5}
+
+    @pytest.mark.asyncio
+    async def test_no_vitals_no_device_topics(self, monkeypatch):
+        """Without vitals or fan_speeds (e.g. cloud mode) no device topics
+        are published and no device discovery is sent."""
+        pub = self._make_publisher(monkeypatch)
+        await pub.publish_gateway("test-gw", make_status())
+
+        published = {c.args[0] for c in pub._client.publish.call_args_list}
+        assert not [t for t in published if "/devices/" in t]
+
+    @pytest.mark.asyncio
+    async def test_device_discovery_published_once(self, monkeypatch):
+        """Device-sensor HA discovery fires on the first poll that reports
+        the signals, and not again on the next."""
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "mqtt_ha_discovery", True)
+        monkeypatch.setattr(settings, "mqtt_ha_prefix", "homeassistant")
+        pub = self._make_publisher(monkeypatch)
+        status = self._make_status_with_vitals(
+            {
+                "TEPOD--1081100-38-F--TG2312H0001": {
+                    "serialNumber": "TG2312H0001",
+                    "HVP_PackTempMax": 23.5,
+                },
+            }
+        )
+        await pub.publish_gateway("test-gw", status)
+        first = [
+            c.args[0]
+            for c in pub._client.publish.call_args_list
+            if c.args[0].startswith("homeassistant/") and "_device_" in c.args[0]
+        ]
+        assert len(first) == 1  # only temp_pack_max reported
+
+        await pub.publish_gateway("test-gw", status)
+        second = [
+            c.args[0]
+            for c in pub._client.publish.call_args_list
+            if c.args[0].startswith("homeassistant/") and "_device_" in c.args[0]
+        ]
+        assert second == first  # no duplicates

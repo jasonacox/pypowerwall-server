@@ -76,6 +76,23 @@ Topic layout
     {prefix}/{gateway_id}/meters/remote/{din}/ct{n}/energy_exported  int   — Wh, lifetime
     {prefix}/{gateway_id}/meters/remote/{din}/ct{n}                  JSON  — full per-CT data
 
+    Per-unit device signals (Powerwall temperatures and fan speeds, from
+    vitals + get_fan_speeds(), keyed by unit serial):
+    {prefix}/{gateway_id}/devices/{serial}/temperature/pack_max     float — °C (PW3 battery pack)
+    {prefix}/{gateway_id}/devices/{serial}/temperature/pack_min     float — °C (PW3 battery pack)
+    {prefix}/{gateway_id}/devices/{serial}/temperature/shunt        float — °C (PW3 shunt)
+    {prefix}/{gateway_id}/devices/{serial}/temperature/ambient      float — °C (PW3 inverter ambient)
+    {prefix}/{gateway_id}/devices/{serial}/temperature/controller   float — °C (PW2/2+ TETHC ambient)
+    {prefix}/{gateway_id}/devices/{serial}/fan/a/rpm                float — rpm (PW3 fan A)
+    {prefix}/{gateway_id}/devices/{serial}/fan/a/duty               float — %   (PW3 fan A duty)
+    {prefix}/{gateway_id}/devices/{serial}/fan/b/rpm                float — rpm (PW3 fan B)
+    {prefix}/{gateway_id}/devices/{serial}/fan/b/duty               float — %   (PW3 fan B duty)
+    {prefix}/{gateway_id}/devices/{serial}/fan/rpm                  float — rpm (PW2/2+ fan)
+    {prefix}/{gateway_id}/devices/{serial}/fan/target_rpm           float — rpm (PW2/2+ fan target)
+    {prefix}/{gateway_id}/devices/{serial}                          JSON  — full per-unit signals
+    Only the signals each unit reports are published - a PW2 unit gets fan
+    rpm but no duty, and an expansion pack gets pack temps but no fans.
+
     Remote-meter lifetime energy is converted from Tesla's watt-seconds to
     whole Wh; the per-CT JSON includes Location ("site" / "solar" / "load").
 
@@ -180,6 +197,7 @@ class MqttPublisher:
             from app.config import settings  # late import
             from app.mqtt.ha_discovery import (
                 build_discovery_payloads,
+                extract_device_signals,
                 extract_remote_meters,
             )
 
@@ -198,6 +216,12 @@ class MqttPublisher:
                 extract_remote_meters(status.data.vitals) if status.data else {}
             )
 
+            device_signals = (
+                extract_device_signals(status.data.vitals, status.data.fan_speeds)
+                if status.data
+                else {}
+            )
+
             payloads = build_discovery_payloads(
                 gateway_id=gateway_id,
                 gateway_name=gateway_name,
@@ -206,6 +230,7 @@ class MqttPublisher:
                 version=version,
                 string_ids=string_ids,
                 remote_meters=remote_meters or None,
+                device_signals=device_signals or None,
             )
             for topic, payload in payloads:
                 await self._safe_publish(topic, payload, retain=True, qos=settings.mqtt_qos)
@@ -231,15 +256,17 @@ class MqttPublisher:
             return
 
         # Send HA discovery payloads the first time we see this gateway, and
-        # again whenever a snapshot reports strings or remote-meter CTs not
-        # announced yet (re-sent after reconnect too: _discovery_sent is
-        # cleared there). Storing the union means a later snapshot without
-        # them (e.g. a vitals timeout) doesn't re-send.
+        # again whenever a snapshot reports strings, remote-meter CTs or
+        # per-unit device signals not announced yet (re-sent after reconnect
+        # too: _discovery_sent is cleared there). Storing the union means a
+        # later snapshot without them (e.g. a vitals timeout) doesn't re-send.
         from app.mqtt.ha_discovery import discovery_signature
 
         data = status.data if status else None
         signature = discovery_signature(
-            data.strings if data else None, data.vitals if data else None
+            data.strings if data else None,
+            data.vitals if data else None,
+            data.fan_speeds if data else None,
         )
         announced = self._discovery_sent.get(gateway_id)
         if announced is None or not signature <= announced:
@@ -534,6 +561,34 @@ class MqttPublisher:
                             await self._safe_publish(
                                 ct_prefix, json.dumps(fields), retain, qos
                             )
+
+                # Per-unit device signal topics (Powerwall temperatures
+                # and fan speeds, keyed by unit serial — the same units as
+                # the web console's Powerwall Status table)
+                from app.mqtt.ha_discovery import (
+                    DEVICE_SIGNAL_CATALOGUE,
+                    extract_device_signals,
+                )
+
+                for serial, signals in extract_device_signals(
+                    data.vitals, data.fan_speeds
+                ).items():
+                    device_prefix = f"{prefix}/devices/{serial}"
+                    for topic_suffix, key, _label, _unit, _dc, _icon in (
+                        DEVICE_SIGNAL_CATALOGUE
+                    ):
+                        value = signals.get(key)
+                        if value is None:
+                            continue
+                        await self._safe_publish(
+                            f"{device_prefix}/{topic_suffix}",
+                            f"{value:.0f}" if key.endswith("_rpm") else f"{value:.1f}",
+                            retain, qos,
+                        )
+                    # Full per-unit JSON for consumers that want everything
+                    await self._safe_publish(
+                        device_prefix, json.dumps(signals), retain, qos
+                    )
 
                 # Summary JSON topic
                 summary = {
