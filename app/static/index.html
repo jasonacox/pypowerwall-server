@@ -1,10 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    {PROXY_BASE_SCRIPT}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {PROXY_BASE_SCRIPT}
     <title>PyPowerwall Server</title>
+    <script src="{PROXY_BASE}/static/js/charts.js?v={SERVER_VERSION}"></script>
+    <link rel="stylesheet" href="{PROXY_BASE}/static/css/charts.css?v={SERVER_VERSION}">
+    <script src="{PROXY_BASE}/static/js/page.js?v={SERVER_VERSION}"></script>
+    <link rel="stylesheet" href="{PROXY_BASE}/static/css/page.css?v={SERVER_VERSION}">
     <style>
         * {
             margin: 0;
@@ -46,64 +50,8 @@
             padding: 20px;
         }
         
-        /* Header */
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 16px 0;
-            margin-bottom: 24px;
-            border-bottom: 1px solid var(--border-color);
-        }
-        
-        .logo {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        
-        .logo-icon {
-            font-size: 2em;
-        }
-        
-        .logo h1 {
-            font-size: 1.5em;
-            font-weight: 600;
-            background: linear-gradient(90deg, var(--accent-blue), var(--accent-green));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-        
-        .version-badge {
-            font-size: 0.75em;
-            padding: 4px 10px;
-            border-radius: 12px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .header-links {
-            display: flex;
-            gap: 16px;
-        }
-        
-        .header-links a {
-            color: var(--text-secondary);
-            text-decoration: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            transition: all 0.2s ease;
-            font-size: 0.9em;
-        }
-        
-        .header-links a:hover {
-            color: var(--text-primary);
-            background: var(--bg-card);
-        }
-        
+        /* Header, Cards menu and kiosk mode: /static/css/page.css */
+
         /* Status Banner */
         .status-banner {
             background: var(--bg-card);
@@ -276,78 +224,21 @@
             font-size: 0.8em;
             color: var(--text-secondary);
         }
-        .energy-trend-legend {
+        /* The shared Energy Trend (charts.css) fills the rest of the card */
+        #energy-trend-host {
+            flex: 1 1 auto;
+            min-height: 0;
             display: flex;
-            flex-wrap: wrap;
+            flex-direction: column;
+        }
+        #energy-trend-host .energy-trend-legend,
+        #energy-trend-host .energy-trend-note {
             flex-shrink: 0;
-            gap: 6px 16px;
-            font-size: 0.8em;
-            color: var(--text-secondary);
-            margin-bottom: 8px;
         }
-        .energy-trend-legend .key {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            cursor: pointer;
-            user-select: none;
-            transition: opacity 0.15s ease;
-            /* button reset — keys are <button> for keyboard access, styled as plain text */
-            border: 0;
-            background: none;
-            padding: 0;
-            font: inherit;
-            color: inherit;
-        }
-        .energy-trend-legend .key:focus-visible {
-            outline: 1px solid #58a6ff;
-            outline-offset: 2px;
-            border-radius: 3px;
-        }
-        .energy-trend-legend .key.off {
-            opacity: 0.35;
-        }
-        #energy-trend-tooltip {
-            position: absolute;
-            display: none;
-            background: rgba(13, 17, 23, 0.95);
-            border: 1px solid rgba(139, 148, 158, 0.4);
-            border-radius: 6px;
-            padding: 6px 9px;
-            font-size: 11px;
-            line-height: 1.6;
-            color: var(--text-color, #c9d1d9);
-            pointer-events: none;
-            z-index: 5;
-            white-space: nowrap;
-        }
-        #energy-trend-tooltip .tt-time {
-            font-weight: 600;
-            margin-bottom: 2px;
-        }
-        #energy-trend-tooltip .tt-dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 6px;
-            vertical-align: middle;
-        }
-        .energy-trend-legend .swatch {
-            display: inline-block;
-            width: 16px;
-            height: 3px;
-            border-radius: 2px;
-        }
-        .energy-trend-legend .swatch.dashed {
-            background: repeating-linear-gradient(90deg, var(--battery-color) 0 5px, transparent 5px 9px);
-        }
-        #energy-trend-chart {
-            width: 100%;
+        #energy-trend-host .energy-trend-chart {
             flex: 1 1 auto;
             min-height: 140px;
             height: auto;
-            display: block;
         }
         .energy-trend-ranges {
             display: flex;
@@ -372,13 +263,6 @@
             color: var(--text-primary, #e6edf3);
             border-color: var(--text-secondary);
             background: rgba(139, 148, 158, 0.2);
-        }
-        .energy-trend-note {
-            flex-shrink: 0;
-            font-size: 0.8em;
-            color: var(--text-muted);
-            margin-top: 6px;
-            min-height: 1em;
         }
         
         .energy-grid {
@@ -1407,6 +1291,13 @@
             font-size: 0.8em;
             color: var(--text-secondary);
         }
+        .daily-energy-hint a {
+            color: var(--accent-blue);
+            text-decoration: none;
+        }
+        .daily-energy-hint a:hover {
+            text-decoration: underline;
+        }
         .daily-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -1639,16 +1530,6 @@
                 padding: 12px;
             }
             
-            header {
-                flex-direction: column;
-                gap: 16px;
-            }
-            
-            .header-links {
-                flex-wrap: wrap;
-                justify-content: center;
-            }
-            
             .energy-grid {
                 grid-template-columns: 1fr;
             }
@@ -1683,26 +1564,8 @@
             100% { background-position: -200% 0; }
         }
         
-        /* Scrollbar */
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-        
-        ::-webkit-scrollbar-track {
-            background: var(--bg-secondary);
-            border-radius: 4px;
-        }
-        
-        ::-webkit-scrollbar-thumb {
-            background: var(--border-color);
-            border-radius: 4px;
-        }
-        
-        ::-webkit-scrollbar-thumb:hover {
-            background: var(--text-muted);
-        }
-        
+        /* Scrollbar: /static/css/page.css */
+
         /* Mini Trend Charts */
         .energy-item {
             position: relative;
@@ -1743,130 +1606,20 @@
             margin-top: 0;
             padding-top: 0;
         }
-        /* ---- Card visibility + kiosk mode ----------------------------------
-           Hidden cards use a class with !important so they stay hidden even
-           when feature checks later reset card.style.display = ''. */
-        .card.user-hidden {
-            display: none !important;
-        }
-        /* The two extra header links would push the header wider than the
-           page on narrow screens; let it wrap instead */
-        header {
-            flex-wrap: wrap;
-            gap: 12px;
-        }
-        .header-links {
-            flex-wrap: wrap;
-        }
+        /* ---- Card visibility + kiosk mode (shared parts: page.css) ---- */
         /* When cards are hidden, the remaining cards in a row share its width
-           (--card-span is set by applyCardLayout()). Desktop only: at 900px
-           and below every card already spans the full width. */
+           (--card-span is set by balanceRows() at the end of the page).
+           Desktop only: at 900px and below every card already spans the
+           full width. */
         @media (min-width: 901px) {
             .dashboard-grid.cards-customized .card[data-card-span] {
                 grid-column: span var(--card-span);
             }
         }
-        .card-menu {
-            position: fixed;
-            top: 72px;
-            right: 20px;
-            z-index: 1000;
-            min-width: 240px;
-            max-height: calc(100vh - 100px);
-            overflow-y: auto;
-            padding: 14px 16px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 10px;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-            color: var(--text-primary);
-            font-size: 0.9em;
-        }
-        .card-menu[hidden] {
-            display: none;
-        }
-        .card-menu h4 {
-            margin: 0 0 8px;
-            font-size: 0.8em;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: var(--text-secondary);
-        }
-        .card-menu label {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 5px 0;
-            cursor: pointer;
-        }
-        .card-menu .card-menu-note {
-            color: var(--text-secondary);
-            font-size: 0.8em;
-            margin-left: auto;
-        }
-        .card-menu hr {
-            border: none;
-            border-top: 1px solid var(--border-color);
-            margin: 10px 0;
-        }
-        .card-menu button {
-            width: 100%;
-            padding: 6px;
-            border-radius: 6px;
-            border: 1px solid var(--border-color);
-            background: transparent;
-            color: var(--text-secondary);
-            cursor: pointer;
-        }
-        .card-menu button:hover {
-            color: var(--text-primary);
-        }
-        /* Kiosk: no header or status banner, tighter margins, no hover glow */
-        /* The status banner stays visible while disconnected, so a wall
-           display never shows frozen data without a warning */
-        body.kiosk header,
+        /* The status banner stays visible in kiosk while disconnected, so a
+           wall display never shows frozen data without a warning */
         body.kiosk #status-banner.connected {
             display: none;
-        }
-        body.kiosk .container {
-            max-width: none;
-            padding: 12px;
-        }
-        body.kiosk .card:hover {
-            border-color: var(--border-color);
-            box-shadow: none;
-        }
-        body.kiosk .card-menu {
-            top: 52px;
-        }
-        /* Floating controls, only in kiosk. Faint until hovered or tapped. */
-        .kiosk-controls {
-            display: none;
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            z-index: 999;
-            gap: 6px;
-            opacity: 0.15;
-            transition: opacity 0.3s ease;
-        }
-        body.kiosk .kiosk-controls {
-            display: flex;
-        }
-        .kiosk-controls:hover,
-        .kiosk-controls:focus-within,
-        .kiosk-controls.active {
-            opacity: 1;
-        }
-        .kiosk-controls button {
-            padding: 6px 12px;
-            border-radius: 6px;
-            border: 1px solid var(--border-color);
-            background: var(--bg-secondary);
-            color: var(--text-primary);
-            font-size: 0.85em;
-            cursor: pointer;
         }
     </style>
 </head>
@@ -1876,16 +1629,21 @@
             <div class="logo">
                 <span class="logo-icon">⚡</span>
                 <h1>PyPowerwall Server</h1>
-                <span id="version-badge" class="version-badge">v--</span>
+                <span id="version-badge" class="version-badge">v{SERVER_VERSION}</span>
             </div>
-            <div class="header-links">
+            <!-- The header, Cards menu and kiosk controls are the same on
+                 history.html: keep them identical (styles and behavior are
+                 shared in /static/css/page.css and /static/js/page.js) -->
+            <nav class="header-links" aria-label="Pages">
+                <a href="{PROXY_BASE}/console" aria-current="page">Console</a>
+                <a href="{PROXY_BASE}/history">History</a>
                 <a href="{PROXY_BASE}/">Power Flow</a>
                 <a href="{PROXY_BASE}/docs">API Docs</a>
                 <a href="{PROXY_BASE}/api/gateways">Gateways API</a>
-                <a href="https://github.com/jasonacox/pypowerwall-server" target="_blank">GitHub</a>
+                <a href="https://github.com/jasonacox/pypowerwall-server" target="_blank" rel="noopener">GitHub</a>
                 <a href="#" id="card-menu-toggle" role="button" aria-controls="card-menu" aria-expanded="false" title="Show or hide cards">Cards</a>
                 <a href="#" id="kiosk-toggle" role="button" title="Kiosk mode (Esc to exit)">Kiosk</a>
-            </div>
+            </nav>
         </header>
 
         <div class="kiosk-controls" id="kiosk-controls">
@@ -2000,16 +1758,8 @@
                         <button data-range="day">Day</button>
                         <button data-range="fit">Fit</button>
                     </div>
-                    <div class="energy-trend-legend">
-                        <button type="button" class="key" data-series="solar_kw"><span class="swatch" style="background: var(--solar-color)"></span>Solar kW</button>
-                        <button type="button" class="key" data-series="home_kw"><span class="swatch" style="background: var(--home-color)"></span>Home kW</button>
-                        <button type="button" class="key" data-series="battery_kw"><span class="swatch" style="background: var(--battery-color)"></span>Battery kW</button>
-                        <button type="button" class="key" data-series="grid_kw"><span class="swatch" style="background: var(--grid-color)"></span>Grid kW</button>
-                        <button type="button" class="key" data-series="battery_level"><span class="swatch dashed"></span>Battery Level % <span style="color: var(--text-muted)">(right axis)</span></button>
-                    </div>
-                    <canvas id="energy-trend-chart"></canvas>
-                    <div id="energy-trend-tooltip"></div>
-                    <div class="energy-trend-note" id="energy-trend-note"></div>
+                    <!-- Legend, chart, tooltip and note: PWCharts.energyTrend (/static/js/charts.js) -->
+                    <div id="energy-trend-host"></div>
                 </div>
                 </div>
             </div>
@@ -2384,7 +2134,7 @@
                         </span>
                         Daily Energy
                     </div>
-                    <div class="daily-energy-hint">kWh per day — local time-series storage</div>
+                    <div class="daily-energy-hint">kWh per day — local time-series storage · <a href="{PROXY_BASE}/history">Full history</a></div>
                 </div>
                 <div id="daily-energy-content" class="daily-energy-content">
                     <div class="no-strings">Loading daily energy...</div>
@@ -2943,7 +2693,7 @@
                 if (!data.enabled) {
                     energyTrendPoints = null;
                     drawEnergyTrendChart();
-                    note.textContent = 'Energy Trend needs local time-series storage (PW_TIMESERIES_RETENTION not -1).';
+                    note.textContent = PWCharts.trendNote({ enabled: false });
                     return;
                 }
                 const points = data.points || [];
@@ -2966,282 +2716,28 @@
                 if (points.length < 2) {
                     energyTrendPoints = null;
                     drawEnergyTrendChart();
-                    note.textContent = 'Not enough raw samples in this window yet \u2014 the trend appears as data accumulates.';
+                    note.textContent = PWCharts.trendNote(data);
                     return;
                 }
                 energyTrendPoints = points;
-                const bucketMin = Math.round((data.bucket_seconds || 240) / 60);
-                note.textContent = `${label} \u00b7 ${bucketMin >= 60 ? (bucketMin / 60) + 'h' : bucketMin + ' min'} resolution \u00b7 ${points.length} points`;
+                note.textContent = PWCharts.trendNote(data, label);
                 drawEnergyTrendChart();
             } catch (e) {
                 energyTrendPoints = null;
                 drawEnergyTrendChart();
-                note.textContent = `Trend data unavailable: ${e.message}`;
+                note.textContent = PWCharts.trendNote({ error: e.message });
             }
         }
 
-        // Standard colors: solar yellow, home blue, battery green, grid gray
-        const TREND_COLORS = {
-            solar: '#f0c000',
-            home: '#58a6ff',
-            battery: '#3fb950',
-            grid: '#8b949e'
-        };
-
-        // Click a legend key to show/hide that series
-        const energyTrendHidden = new Set();
-        const TREND_SERIES = [
-            { key: 'solar_kw',    label: 'Solar',         color: TREND_COLORS.solar,   axis: 'kw' },
-            { key: 'home_kw',     label: 'Home',          color: TREND_COLORS.home,    axis: 'kw' },
-            { key: 'battery_kw',  label: 'Battery',       color: TREND_COLORS.battery, axis: 'kw' },
-            { key: 'grid_kw',     label: 'Grid',          color: TREND_COLORS.grid,    axis: 'kw' },
-            { key: 'battery_level', label: 'Battery Level', color: TREND_COLORS.battery, axis: 'pct' }
-        ];
-
-        // Nearest data point to the cursor (null when not hovering)
-        let energyTrendHoverPoint = null;
-
+        // Legend, drawing, hover, tooltip and resize live in /static/js/charts.js
+        // (PWCharts.energyTrend), shared with the History page so fixes land once.
+        const energyTrendChart = PWCharts.energyTrend(document.getElementById('energy-trend-host'));
+        energyTrendChart.note.id = 'energy-trend-note';
         function drawEnergyTrendChart() {
-            const canvas = document.getElementById('energy-trend-chart');
-            if (!canvas) return;
-            const rect = canvas.getBoundingClientRect();
-            canvas.width = rect.width;
-            canvas.height = rect.height;
-            const ctx = canvas.getContext('2d');
-            const W = canvas.width, H = canvas.height;
-            ctx.clearRect(0, 0, W, H);
-            const points = energyTrendPoints;
-            if (!points || points.length < 2 || W < 100) {
-                // No drawable data — clear hover state so no stale tooltip lingers
-                energyTrendHoverPoint = null;
-                const staleTip = document.getElementById('energy-trend-tooltip');
-                if (staleTip) staleTip.style.display = 'none';
-                return;
-            }
-
-            const padL = 48, padR = 44, padT = 12, padB = 24;
-            const plotW = W - padL - padR, plotH = H - padT - padB;
-            const dom = energyTrendDomain || { t0: points[0].ts, t1: points[points.length - 1].ts };
-            const x0 = dom.t0, x1 = dom.t1;
-            const xSpan = (x1 - x0) || 1;
-            const X = ts => padL + ((ts - x0) / xSpan) * plotW;
-
-            // kW scale (left axis) across visible series only, zero included
-            let minKw = 0, maxKw = 0;
-            for (const p of points) {
-                for (const s of TREND_SERIES) {
-                    if (s.axis !== 'kw' || energyTrendHidden.has(s.key)) continue;
-                    minKw = Math.min(minKw, p[s.key]);
-                    maxKw = Math.max(maxKw, p[s.key]);
-                }
-            }
-            if (maxKw === minKw) maxKw = minKw + 1;
-            const Y = kw => padT + (1 - (kw - minKw) / (maxKw - minKw)) * plotH;
-            // Battery level scale (right axis, fixed 0-100%)
-            const Ypct = pct => padT + (1 - Math.max(0, Math.min(100, pct)) / 100) * plotH;
-
-            // Horizontal gridlines + left kW labels / right % labels
-            ctx.font = '11px system-ui, sans-serif';
-            ctx.textAlign = 'right';
-            ctx.textBaseline = 'middle';
-            for (let i = 0; i <= 4; i++) {
-                const kw = minKw + ((maxKw - minKw) * i) / 4;
-                const y = Y(kw);
-                ctx.strokeStyle = 'rgba(139, 148, 158, 0.15)';
-                ctx.lineWidth = 1;
-                ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
-                ctx.fillStyle = 'rgba(139, 148, 158, 0.8)';
-                ctx.fillText(kw.toFixed(1), padL - 6, y);
-                ctx.textAlign = 'left';
-                ctx.fillText(`${Math.round(i * 25)}%`, W - padR + 6, y);
-                ctx.textAlign = 'right';
-            }
-
-            // Zero line (battery/grid swing negative)
-            if (minKw < 0) {
-                const zy = Y(0);
-                ctx.strokeStyle = 'rgba(139, 148, 158, 0.4)';
-                ctx.setLineDash([4, 4]);
-                ctx.beginPath(); ctx.moveTo(padL, zy); ctx.lineTo(W - padR, zy); ctx.stroke();
-                ctx.setLineDash([]);
-                ctx.fillStyle = 'rgba(139, 148, 158, 0.9)';
-                ctx.textAlign = 'right';
-                ctx.textBaseline = 'middle';
-                ctx.fillText('0', padL - 6, zy);
-            }
-
-            // Time axis labels (~6 ticks), e.g. "4p"
-            ctx.fillStyle = 'rgba(139, 148, 158, 0.8)';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'top';
-            const ticks = Math.min(6, points.length - 1);
-            for (let i = 0; i <= ticks; i++) {
-                const ts = x0 + (xSpan * i) / ticks;
-                const d = new Date(ts * 1000);
-                const h = d.getHours();
-                const label = `${h % 12 || 12}${h >= 12 ? 'p' : 'a'}`;
-                ctx.fillText(label, X(ts), H - padB + 6);
-            }
-
-            const drawSeries = (key, color, dashed, yScale, fill) => {
-                // Collect contiguous segments (gaps where v == null)
-                const segments = [];
-                let seg = [];
-                for (const p of points) {
-                    const v = p[key];
-                    if (v == null) {
-                        if (seg.length > 1) segments.push(seg);
-                        seg = [];
-                    } else {
-                        seg.push([X(p.ts), yScale(v)]);
-                    }
-                }
-                if (seg.length > 1) segments.push(seg);
-                for (const s of segments) {
-                    if (fill) {
-                        // Translucent fill between line and zero axis
-                        const zy = Y(0);
-                        ctx.fillStyle = color;
-                        ctx.globalAlpha = 0.12;
-                        ctx.beginPath();
-                        ctx.moveTo(s[0][0], zy);
-                        for (const [sx, sy] of s) ctx.lineTo(sx, sy);
-                        ctx.lineTo(s[s.length - 1][0], zy);
-                        ctx.closePath();
-                        ctx.fill();
-                        ctx.globalAlpha = 1;
-                    }
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = 1.8;
-                    if (dashed) ctx.setLineDash([5, 4]);
-                    ctx.beginPath();
-                    ctx.moveTo(s[0][0], s[0][1]);
-                    for (let i = 1; i < s.length; i++) ctx.lineTo(s[i][0], s[i][1]);
-                    ctx.stroke();
-                    ctx.setLineDash([]);
-                }
-            };
-
-            for (const s of TREND_SERIES) {
-                if (energyTrendHidden.has(s.key)) continue;
-                drawSeries(s.key, s.color, s.key === 'battery_level', s.axis === 'pct' ? Ypct : Y, s.axis === 'kw');
-            }
-
-            // Hover crosshair + value dots
-            if (energyTrendHoverPoint) {
-                const hx = X(energyTrendHoverPoint.ts);
-                ctx.strokeStyle = 'rgba(139, 148, 158, 0.5)';
-                ctx.lineWidth = 1;
-                ctx.setLineDash([3, 3]);
-                ctx.beginPath(); ctx.moveTo(hx, padT); ctx.lineTo(hx, H - padB); ctx.stroke();
-                ctx.setLineDash([]);
-                for (const s of TREND_SERIES) {
-                    if (energyTrendHidden.has(s.key)) continue;
-                    const v = energyTrendHoverPoint[s.key];
-                    if (v == null) continue;
-                    const hy = s.axis === 'pct' ? Ypct(v) : Y(v);
-                    ctx.fillStyle = s.color;
-                    ctx.beginPath(); ctx.arc(hx, hy, 3.5, 0, Math.PI * 2); ctx.fill();
-                    ctx.strokeStyle = 'rgba(13, 17, 23, 0.9)';
-                    ctx.lineWidth = 1.5; ctx.stroke();
-                }
-            }
+            energyTrendChart.setData(energyTrendPoints, energyTrendDomain);
         }
 
         document.getElementById('energy-card').addEventListener('click', toggleEnergyTrend);
-        window.addEventListener('resize', () => {
-            if (energyTrendActive) drawEnergyTrendChart();
-        });
-
-        // Legend toggle: click a key to show/hide that series
-        document.querySelectorAll('.energy-trend-legend .key[data-series]').forEach(keyEl => {
-            keyEl.addEventListener('click', e => {
-                e.stopPropagation();  // don't flip the card back to summary mode
-                const k = keyEl.dataset.series;
-                if (energyTrendHidden.has(k)) {
-                    energyTrendHidden.delete(k);
-                    keyEl.classList.remove('off');
-                } else {
-                    energyTrendHidden.add(k);
-                    keyEl.classList.add('off');
-                }
-                drawEnergyTrendChart();
-                updateEnergyTrendTooltip();
-            });
-        });
-
-        // Hover: crosshair + tooltip with time and each series' value
-        const trendCanvas = document.getElementById('energy-trend-chart');
-        const trendTooltip = document.getElementById('energy-trend-tooltip');
-
-        function fmtHoverTime(ts) {
-            const d = new Date(ts * 1000);
-            const h = d.getHours() % 12 || 12;
-            const m = String(d.getMinutes()).padStart(2, '0');
-            const ap = d.getHours() >= 12 ? 'pm' : 'am';
-            return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${h}:${m}${ap}`;
-        }
-
-        function updateEnergyTrendTooltip() {
-            if (!energyTrendHoverPoint) {
-                trendTooltip.style.display = 'none';
-                return;
-            }
-            const p = energyTrendHoverPoint;
-            let html = `<div class="tt-time">${fmtHoverTime(p.ts)}</div>`;
-            for (const s of TREND_SERIES) {
-                if (energyTrendHidden.has(s.key)) continue;
-                const v = p[s.key];
-                if (v == null) continue;
-                html += `<div><span class="tt-dot" style="background:${s.color}"></span>${s.label}: <b>${v.toFixed(s.axis === 'pct' ? 0 : 2)} ${s.axis === 'pct' ? '%' : 'kW'}</b></div>`;
-            }
-            trendTooltip.innerHTML = html;
-            trendTooltip.style.display = 'block';
-        }
-
-        trendCanvas.addEventListener('mousemove', e => {
-            const points = energyTrendPoints;
-            if (!points || points.length < 2) return;
-            const rect = trendCanvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const W = rect.width, H = rect.height;
-            const padL = 48, padR = 44, padT = 12, padB = 24;
-            const plotW = W - padL - padR;
-            if (plotW <= 0 || x < padL || x > W - padR) {
-                energyTrendHoverPoint = null;
-                trendTooltip.style.display = 'none';
-                drawEnergyTrendChart();
-                return;
-            }
-            const dom = energyTrendDomain || { t0: points[0].ts, t1: points[points.length - 1].ts };
-            const xSpan = (dom.t1 - dom.t0) || 1;
-            const ts = dom.t0 + ((x - padL) / plotW) * xSpan;
-            // nearest data point by timestamp
-            let best = null, bestD = Infinity;
-            for (const p of points) {
-                const d = Math.abs(p.ts - ts);
-                if (d < bestD) { bestD = d; best = p; }
-            }
-            if (best === energyTrendHoverPoint) return;
-            energyTrendHoverPoint = best;
-            drawEnergyTrendChart();
-            updateEnergyTrendTooltip();
-            // position tooltip near the cursor, clamped inside the panel
-            const panel = document.getElementById('energy-trend').getBoundingClientRect();
-            const tipW = trendTooltip.offsetWidth, tipH = trendTooltip.offsetHeight;
-            let left = e.clientX - panel.left + 14;
-            if (left + tipW > panel.width - 4) left = e.clientX - panel.left - tipW - 14;
-            let top = e.clientY - panel.top - tipH - 10;
-            if (top < 2) top = e.clientY - panel.top + 14;
-            trendTooltip.style.left = `${left}px`;
-            trendTooltip.style.top = `${top}px`;
-        });
-
-        trendCanvas.addEventListener('mouseleave', () => {
-            energyTrendHoverPoint = null;
-            trendTooltip.style.display = 'none';
-            drawEnergyTrendChart();
-        });
 
         async function loadStats() {
             try {
@@ -5126,7 +4622,7 @@
         console.log('PyPowerwall Server console loaded');
     </script>
     <script>
-        // ---- Card visibility + kiosk mode ---------------------------------
+        // ---- Card visibility + kiosk mode (shared: /static/js/page.js) ----
         // Choices persist in this browser's localStorage. For a kiosk browser
         // you can set them in the URL instead (not saved):
         //   /console?kiosk=1&hide=alerts,gateways,mqtt
@@ -5134,30 +4630,11 @@
         // energy, alerts, strings, health, control, powerwall, gateways, mqtt,
         // daily-energy.
         (function () {
-            const HIDDEN_KEY = 'pw_console_hidden_cards';
-            const KIOSK_KEY = 'pw_console_kiosk';
             // Cards that share a row on desktop; remaining ones split its width
             const ROWS = [['power-flow', 'energy'], ['alerts', 'strings', 'health']];
 
             const grid = document.querySelector('.dashboard-grid');
             if (!grid) return;
-            const menu = document.getElementById('card-menu');
-            const list = document.getElementById('card-menu-list');
-            const kioskBox = document.getElementById('kiosk-checkbox');
-            const controls = document.getElementById('kiosk-controls');
-
-            const params = new URLSearchParams(location.search);
-            const urlHide = params.has('hide')
-                ? params.get('hide').split(',').map(s => s.trim()).filter(Boolean)
-                : null;
-            const urlKiosk = params.has('kiosk') ? params.get('kiosk') !== '0' : null;
-
-            function storageGet(key) {
-                try { return localStorage.getItem(key); } catch (e) { return null; }
-            }
-            function storageSet(key, value) {
-                try { localStorage.setItem(key, value); } catch (e) { /* ignore */ }
-            }
 
             function cardId(card) {
                 for (const c of card.classList) {
@@ -5172,31 +4649,13 @@
                 if (id) { card.dataset.cardId = id; byId[id] = card; }
             });
 
-            let hidden;
-            if (urlHide) {
-                hidden = new Set(urlHide);
-            } else {
-                let saved = [];
-                try { saved = JSON.parse(storageGet(HIDDEN_KEY) || '[]'); } catch (e) { /* ignore */ }
-                hidden = new Set(Array.isArray(saved)
-                    ? saved.filter(id => typeof id === 'string') : []);
-            }
-            let kiosk = urlKiosk !== null ? urlKiosk : storageGet(KIOSK_KEY) === '1';
-
-            function saveHidden() {
-                if (!urlHide) storageSet(HIDDEN_KEY, JSON.stringify([...hidden]));
-            }
-
             // Cards shown or hidden by feature checks (strings, MQTT, control...)
             function isShown(card) {
                 return !!card && !card.classList.contains('user-hidden')
                     && getComputedStyle(card).display !== 'none';
             }
 
-            function applyCardLayout() {
-                cards.forEach(card => {
-                    card.classList.toggle('user-hidden', hidden.has(card.dataset.cardId));
-                });
+            function balanceRows(hidden) {
                 grid.classList.toggle('cards-customized', hidden.size > 0);
                 ROWS.forEach(row => {
                     const members = row.map(id => byId[id]).filter(Boolean);
@@ -5216,139 +4675,23 @@
                 });
             }
 
-            function cardLabel(card) {
-                const title = card.querySelector('.card-title');
-                const text = title ? title.textContent.replace(/\s+/g, ' ').trim() : '';
-                return text || card.dataset.cardId;
-            }
-
-            function buildMenu() {
-                list.innerHTML = '';
-                cards.forEach(card => {
-                    const id = card.dataset.cardId;
-                    if (!id) return;
-                    const label = document.createElement('label');
-                    const box = document.createElement('input');
-                    box.type = 'checkbox';
-                    box.checked = !hidden.has(id);
-                    box.addEventListener('change', () => {
-                        if (box.checked) hidden.delete(id); else hidden.add(id);
-                        saveHidden();
-                        applyCardLayout();
-                    });
-                    label.appendChild(box);
-                    label.appendChild(document.createTextNode(cardLabel(card)));
-                    // Feature-gated cards that aren't active on this server
-                    if (!hidden.has(id) && !isShown(card)) {
-                        const note = document.createElement('span');
-                        note.className = 'card-menu-note';
-                        note.textContent = 'not active';
-                        label.appendChild(note);
-                    }
-                    list.appendChild(label);
-                });
-                kioskBox.checked = kiosk;
-            }
-
-            function setKiosk(on) {
-                kiosk = on;
-                document.body.classList.toggle('kiosk', on);
-                kioskBox.checked = on;
-                if (urlKiosk === null) storageSet(KIOSK_KEY, on ? '1' : '0');
-                // Cards may change size; let charts/iframes re-measure
-                window.dispatchEvent(new Event('resize'));
-            }
-
-            const openers = [
-                document.getElementById('card-menu-toggle'),
-                document.getElementById('kiosk-cards-btn'),
-            ];
-            let lastOpener = null;
-
-            // restoreFocus: return focus to the opener on close. Skipped for
-            // outside clicks, where focus should go wherever the user clicked.
-            function toggleMenu(show, opener, restoreFocus = true) {
-                const open = show !== undefined ? show : menu.hidden;
-                if (open === !menu.hidden) return;
-                if (open) {
-                    lastOpener = opener || null;
-                    buildMenu();
-                }
-                menu.hidden = !open;
-                openers.forEach(el => el.setAttribute('aria-expanded', String(open)));
-                if (open) {
-                    const first = menu.querySelector('input');
-                    if (first) first.focus();
-                } else if (restoreFocus && lastOpener
-                           && lastOpener.offsetParent !== null) {
-                    lastOpener.focus();
-                }
-            }
-
-            // role="button" links: Space activates them like a real button
-            function activateOnSpace(el) {
-                el.addEventListener('keydown', e => {
-                    if (e.key === ' ') { e.preventDefault(); el.click(); }
-                });
-            }
-            const menuToggle = document.getElementById('card-menu-toggle');
-            const kioskToggle = document.getElementById('kiosk-toggle');
-            const kioskCardsBtn = document.getElementById('kiosk-cards-btn');
-            activateOnSpace(menuToggle);
-            activateOnSpace(kioskToggle);
-
-            menuToggle.addEventListener('click', e => {
-                e.preventDefault(); toggleMenu(undefined, menuToggle);
+            const cardsUi = window.PWPage.cardsAndKiosk({
+                hiddenKey: 'pw_console_hidden_cards',
+                kioskKey: 'pw_console_kiosk',
+                urlHideParam: 'hide',
+                onLayout: balanceRows,
             });
-            kioskToggle.addEventListener('click', e => {
-                e.preventDefault(); toggleMenu(false, null, false); setKiosk(true);
-            });
-            kioskCardsBtn.addEventListener('click', () => toggleMenu(undefined, kioskCardsBtn));
-            document.getElementById('kiosk-exit-btn').addEventListener('click', () => {
-                toggleMenu(false, null, false); setKiosk(false);
-            });
-            kioskBox.addEventListener('change', () => setKiosk(kioskBox.checked));
-            document.getElementById('card-menu-reset').addEventListener('click', () => {
-                hidden.clear(); saveHidden(); applyCardLayout(); buildMenu();
-            });
-
-            // Close the menu on outside click; Esc closes it, then leaves kiosk
-            document.addEventListener('click', e => {
-                if (!menu.hidden && !menu.contains(e.target)
-                    && !e.target.closest('#card-menu-toggle, #kiosk-cards-btn')) {
-                    toggleMenu(false, null, false);
-                }
-            });
-            document.addEventListener('keydown', e => {
-                // Leave Esc to open dialogs (e.g. the islanding confirmation)
-                if (e.defaultPrevented || document.querySelector('dialog[open]')) return;
-                if (e.key !== 'Escape') return;
-                if (!menu.hidden) toggleMenu(false);
-                else if (kiosk) setKiosk(false);
-            });
-
-            // Touch screens have no hover: a tap reveals the kiosk buttons briefly
-            let fadeTimer;
-            document.addEventListener('touchstart', () => {
-                if (!kiosk) return;
-                controls.classList.add('active');
-                clearTimeout(fadeTimer);
-                fadeTimer = setTimeout(() => controls.classList.remove('active'), 4000);
-            }, { passive: true });
 
             // Re-balance rows when feature checks show or hide cards
             let pending = false;
             const observer = new MutationObserver(() => {
                 if (pending) return;
                 pending = true;
-                requestAnimationFrame(() => { pending = false; applyCardLayout(); });
+                requestAnimationFrame(() => { pending = false; cardsUi.apply(); });
             });
             [grid, ...cards].forEach(el => observer.observe(el, {
                 attributes: true, attributeFilter: ['class', 'style']
             }));
-
-            applyCardLayout();
-            setKiosk(kiosk);
         })();
     </script>
 </body>

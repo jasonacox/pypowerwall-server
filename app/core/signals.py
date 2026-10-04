@@ -190,7 +190,7 @@ def _apply_block(signals: Dict[str, float], block: Dict[str, Any]) -> None:
 _FAN_SPEEDS_PREFIXES = ("PVAC", "TEPINV")
 
 
-def _tepinv_serials(
+def tepinv_serials(
     vitals: Optional[Dict[str, Any]], fan_speeds: Optional[Dict[str, Any]]
 ) -> set:
     """Serials that have a TEPINV (PW3) block in either source.
@@ -274,12 +274,12 @@ def extract_unit_signals(
     only fills signals vitals did not report this poll (its keys carry the
     serial as the last "--" segment).  A serial with a TEPINV block in
     either source never takes fan readings from its PVAC block, whatever
-    the block order (see ``_tepinv_serials``).
+    the block order (see ``tepinv_serials``).
 
     Returns {} for missing/malformed input - never raises.  Units that end
     up with no readings are dropped.
     """
-    pw3_serials = _tepinv_serials(vitals, fan_speeds)
+    pw3_serials = tepinv_serials(vitals, fan_speeds)
     devices: Dict[str, Dict[str, float]] = {}
     if isinstance(vitals, dict):
         devices = _unit_signals(vitals.items(), pw3_serials=pw3_serials)

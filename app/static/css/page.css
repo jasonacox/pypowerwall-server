@@ -1,0 +1,227 @@
+/* Page chrome shared by the Console and History pages (pairs with page.js):
+   the header menu, the Cards menu and kiosk mode. One copy, so the two
+   headers can't drift apart. Colors come from each page's :root tokens. */
+
+/* ---- Scrollbar ------------------------------------------------------ */
+/* One scrollbar style on every page. A styled WebKit scrollbar always takes
+   its width (macOS overlay scrollbars take none), so pages that differ here
+   put the centered header a few pixels apart; the stable gutter also keeps
+   a page that is briefly short while loading from shifting. */
+html {
+    scrollbar-gutter: stable;
+}
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg-secondary);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+/* ---- Header --------------------------------------------------------- */
+header {
+    display: flex;
+    flex-wrap: wrap;  /* wrap on narrow screens instead of overflowing */
+    gap: 12px;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 0;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border-color);
+    line-height: normal;
+}
+
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.logo-icon {
+    font-size: 2em;
+}
+
+.logo h1 {
+    font-size: 1.5em;
+    font-weight: 600;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent-green));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.version-badge {
+    font-size: 0.75em;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.header-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.header-links a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+    font-size: 0.9em;
+}
+
+.header-links a:hover,
+.header-links a[aria-current="page"] {
+    color: var(--text-primary);
+    background: var(--bg-card);
+}
+
+@media (max-width: 600px) {
+    header {
+        flex-direction: column;
+    }
+    .header-links {
+        justify-content: center;
+    }
+}
+
+/* ---- Card visibility ------------------------------------------------
+   Hidden cards use a class with !important so they stay hidden even
+   when page code later resets card.style.display = ''. */
+.card.user-hidden {
+    display: none !important;
+}
+
+.card-menu {
+    position: fixed;
+    top: 72px;
+    right: 20px;
+    z-index: 1000;
+    min-width: 240px;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+    padding: 14px 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    color: var(--text-primary);
+    font-size: 0.9em;
+    line-height: normal;
+}
+
+.card-menu[hidden] {
+    display: none;
+}
+
+.card-menu h4 {
+    margin: 0 0 8px;
+    font-size: 0.8em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+}
+
+.card-menu label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 0;
+    cursor: pointer;
+}
+
+.card-menu .card-menu-note {
+    color: var(--text-secondary);
+    font-size: 0.8em;
+    margin-left: auto;
+}
+
+.card-menu hr {
+    border: none;
+    border-top: 1px solid var(--border-color);
+    margin: 10px 0;
+}
+
+.card-menu button {
+    width: 100%;
+    padding: 6px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.card-menu button:hover {
+    color: var(--text-primary);
+}
+
+/* ---- Kiosk: no header, tighter margins, no hover glow --------------- */
+body.kiosk header {
+    display: none;
+}
+
+body.kiosk .container {
+    max-width: none;
+    padding: 12px;
+}
+
+body.kiosk .card:hover {
+    border-color: var(--border-color);
+    box-shadow: none;
+}
+
+body.kiosk .card-menu {
+    top: 52px;
+}
+
+/* Floating controls, only in kiosk. Faint until hovered or tapped. */
+.kiosk-controls {
+    display: none;
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 999;
+    gap: 6px;
+    opacity: 0.15;
+    transition: opacity 0.3s ease;
+    line-height: normal;
+}
+
+body.kiosk .kiosk-controls {
+    display: flex;
+}
+
+.kiosk-controls:hover,
+.kiosk-controls:focus-within,
+.kiosk-controls.active {
+    opacity: 1;
+}
+
+.kiosk-controls button {
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 0.85em;
+    cursor: pointer;
+}

@@ -395,7 +395,9 @@ simple, history features follow these rules:
    MQTT topics.
 4. **Recording never adds gateway calls or blocks polling.** Samples come from data
    each poll already fetches. Database writes and queries run off the event
-   loop, and a recording failure never fails a poll.
+   loop, and a recording failure never fails a poll. Queries use their own
+   read-only SQLite connection and worker thread (WAL mode), so a long history
+   query never makes the next poll's writes wait.
 5. **Setting and API names are permanent once released.** Environment variables,
    endpoint paths and response fields follow the no-breaking-changes rule, so
    they are chosen deliberately before merge. New data is added to responses;

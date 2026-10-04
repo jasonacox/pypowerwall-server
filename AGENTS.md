@@ -405,6 +405,12 @@ The `track_requests` middleware in `app/main.py` does double duty: request stati
 | `app/mqtt/publisher.py` | `MqttPublisher` — connection loop, topic publishing, LWT, TLS, reconnect |
 | `app/mqtt/ha_discovery.py` | Home Assistant auto-discovery payload builder (pure function) |
 | `app/static/index.html` | Console UI dashboard — Powerwall status, health panel, battery graphics, MQTT broker panel |
+| `app/static/history.html` | History page (`/history`) — daily energy for any date range, plus one chart card per signal group built from the `/api/timeseries/signals` catalog (no per-metric page code); dependency-free canvas charts |
+| `app/static/js/charts.js` | `window.PWCharts` — the Energy Trend (`energyTrend`, `trendNote`), the generic chart (`makeChart`, `drawChart`, `prune`) and shared helpers (`DAY`, `TREND_SERIES`, `esc`, `pad`, `parseDay`, `dayX`, `xDay`, `fmtDayLong`, `fmtTimeLong`), used by the Console and History pages; fix chart bugs here once |
+| `app/static/css/charts.css` | Chart styles shared by the Console and History pages (pairs with `charts.js`) |
+| `app/static/js/page.js` | `window.PWPage.cardsAndKiosk({ hiddenKey, kioskKey, urlHideParam, onLayout })` — the header's Cards menu and kiosk mode for the Console and History pages (cards are every `.card[data-card-id]`); both pages carry identical header markup |
+| `app/static/css/page.css` | Header, Cards menu and kiosk styles shared by the Console and History pages (pairs with `page.js`), so the two headers can't drift |
+| `app/core/timeseries.py` | SQLite time-series store — power samples, daily kWh, Powerwall temperature/fan signal series. The `SIGNAL_METRICS` registry (one entry per metric — signals, label, unit, group, order; `SIGNAL_GROUPS` chart groups) lives in `app/core/signals.py`, shared with MQTT. Metric ids are stored and are HA unique IDs, so they are permanent once released |
 | `app/static/powerflow/app.js` | ⚠️ **PATCHED** vendored Tesla Gateway web UI — `isAuthenticated` always returns `true` (issue #7). **Do NOT replace with a clean copy.** |
 | `mqtt-tools/README.md` | Broker setup guide, CLI monitoring, GUI usage, HA integration steps |
 | `mqtt-tools/monitor.py` | Live tkinter GUI — connects to broker, shows real-time Powerwall telemetry |
