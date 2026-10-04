@@ -618,6 +618,53 @@ async def test_startup_names_enabled_controls_and_warns_on_islanding(env, monkey
 
 
 @pytest.mark.asyncio
+async def test_subscribe_error_reconnects_and_retries(env, monkeypatch, caplog):
+    """A failed control subscribe must not leave the connection up without
+    controls: reconnect (after the backoff) and subscribe again."""
+    pub = MqttPublisher()
+    clients = []
+
+    def enter():
+        client = MagicMock(messages=MagicMock())
+        if not clients:
+            client.subscribe = AsyncMock(side_effect=RuntimeError("timeout"))
+        else:
+            client.subscribe = AsyncMock(return_value=(1,))
+            pub._shutdown = True
+        clients.append(client)
+        return client
+
+    _fake_aiomqtt(monkeypatch, enter)
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await asyncio.wait_for(pub._connection_loop(), timeout=10)
+    assert len(clients) == 2
+    assert "control subscribe failed: timeout" in caplog.text
+    assert "MQTT controls subscribed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_refused_subscribe_is_an_error_not_a_reconnect_loop(env, monkeypatch, caplog):
+    """A broker that refuses the subscription (0x80, e.g. its ACL) doesn't
+    raise: say so, run no control task, keep the connection for monitoring."""
+    pub = MqttPublisher()
+    clients = []
+
+    def enter():
+        pub._shutdown = True
+        client = MagicMock(messages=MagicMock(), subscribe=AsyncMock(return_value=(0x80,)))
+        clients.append(client)
+        return client
+
+    _fake_aiomqtt(monkeypatch, enter)
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await asyncio.wait_for(pub._connection_loop(), timeout=5)
+    assert len(clients) == 1
+    assert "refused the subscription to pypowerwall/+/control/+/set" in caplog.text
+    assert "MQTT controls subscribed" not in caplog.text
+    assert not [t for t in asyncio.all_tasks() if t.get_name() == "mqtt-control-handler"]
+
+
+@pytest.mark.asyncio
 async def test_dead_control_task_triggers_reconnect(env, monkeypatch, caplog):
     pub = MqttPublisher()
     connects = []

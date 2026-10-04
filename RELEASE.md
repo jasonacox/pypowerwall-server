@@ -2,7 +2,7 @@
 
 ## Version History
 
-### [0.9.0] - Upcoming
+### [0.8.1] - Upcoming
 
 **Added:**
 - **MQTT: Home Assistant controls (opt-in)** — set `MQTT_CONTROLS` to let Home Assistant (or any authorized MQTT client) change backup reserve (`1`), operating mode (`2`), grid charging (`4`) and grid export (`8`), and take the system off grid or reconnect it (`16`, v1r only, needs its own bit: `15` enables everything else). Commands go to `{prefix}/{gw}/control/{control}/set` and the matching entities are auto-discovered, but only those the gateway can run (cloud, FleetAPI, the hybrid cloud connection or v1r). Each command runs on exactly one connection, islanding counts only when the gateway acknowledges it, bursts collapse to the latest value, retained commands are never replayed, and every applied command is logged with gateway, value and connection. The default `0` keeps MQTT monitoring-only (a value outside `0`-`31` is logged as an error and treated as `0`), and controls also need `PW_CONTROL_SECRET` plus `MQTT_USERNAME`/`MQTT_PASSWORD`. `PW_CONTROL_SECRET` is never sent over MQTT, so the broker must reject anonymous clients and restrict the control topics; MQTT.md has a Mosquitto example. Thanks @erikgieseler (#115)

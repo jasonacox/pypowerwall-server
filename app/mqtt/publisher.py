@@ -825,16 +825,27 @@ class MqttPublisher:
                     # Topic pattern: {prefix}/{gateway_id}/control/{control}/set  e.g. pypowerwall/home/control/reserve/set
                     control_task = None
                     if settings.mqtt_controls_available:
+                        control_topic = f"{settings.mqtt_topic_prefix}/+/control/+/set"
                         try:
-                            await client.subscribe(
-                                f"{settings.mqtt_topic_prefix}/+/control/+/set", qos=1
+                            granted = await client.subscribe(control_topic, qos=1)
+                        except Exception as e:
+                            # Transient: reconnect after the backoff, which
+                            # subscribes again, instead of running without controls
+                            raise RuntimeError(f"control subscribe failed: {e}") from e
+                        if any(getattr(c, "value", c) >= 0x80 for c in granted or ()):
+                            # Refused by the broker (e.g. its ACL): a retry
+                            # can't help, so say so and keep monitoring
+                            logger.error(
+                                "MQTT broker refused the subscription to %s, so "
+                                "controls are off: allow this user to read it in "
+                                "the broker ACL",
+                                control_topic,
                             )
-                            enabled = settings.mqtt_control_names()
+                        else:
                             logger.info(
-                                "MQTT controls subscribed to %s/+/control/+/set "
-                                "(enabled: %s)",
-                                settings.mqtt_topic_prefix,
-                                ", ".join(enabled),
+                                "MQTT controls subscribed to %s (enabled: %s)",
+                                control_topic,
+                                ", ".join(settings.mqtt_control_names()),
                             )
                             if settings.mqtt_control_allowed("islanding"):
                                 logger.warning(
@@ -847,8 +858,6 @@ class MqttPublisher:
                                 self._control_message_loop(client),
                                 name="mqtt-control-handler",
                             )
-                        except Exception as e:
-                            logger.warning(f"MQTT control subscribe failed: {e}")
                     elif settings.mqtt_controls and not self._controls_warn_done:
                         # Controls requested but a prerequisite is missing:
                         # they stay off (fail closed). Say which, once.
