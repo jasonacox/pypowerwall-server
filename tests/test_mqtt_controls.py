@@ -329,7 +329,7 @@ async def test_unbound_shared_cloud_is_never_used(env, gm, monkeypatch, caplog):
 @pytest.mark.parametrize("control, value, ok", [
     ("reserve", 0, True), ("reserve", 100, True), ("reserve", 101, False),
     ("reserve", -1, False), ("reserve", True, False), ("reserve", "30", False),
-    ("reserve", 30.5, False), ("reserve", None, False),
+    ("reserve", 30.5, False), ("reserve", 40.0, False), ("reserve", None, False),
     ("mode", "autonomous", True), ("mode", "eco", False), ("mode", ["backup"], False),
     ("grid_charging", False, True), ("grid_charging", "true", False), ("grid_charging", 1, False),
     ("grid_export", "pv_only", True), ("grid_export", "always", False), ("grid_export", True, False),
@@ -340,7 +340,10 @@ async def test_value_checks(env, gm, caplog, control, value, ok):
         await run_commands(cmd("cloud", control, {"value": value}))
     assert (gm.local_control.await_count == 1) == ok
     if not ok:
-        assert "invalid value" in caplog.text
+        # The rejection says what is accepted (e.g. 30.5 for reserve)
+        hint = {"reserve": "an integer from 0 to 100", "mode": "self_consumption",
+                "grid_charging": "true or false", "grid_export": "battery_ok"}[control]
+        assert "invalid value" in caplog.text and hint in caplog.text
 
 
 @pytest.mark.asyncio

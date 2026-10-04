@@ -1071,7 +1071,10 @@ class MqttPublisher:
             else:
                 value = payload.get("value")
                 if not _CONTROL_VALUE_OK[control](value):
-                    logger.warning(f"{label} rejected: invalid value {_short(value)}")
+                    logger.warning(
+                        f"{label} rejected: invalid value {_short(value)} "
+                        f"(must be {_CONTROL_VALUE_HINT[control]})"
+                    )
                     return
                 path = _write_path(gateway_manager, gateway_id)
                 if path is None:
@@ -1114,6 +1117,12 @@ _CONTROL_VALUE_OK = {
     "mode": lambda v: v in ("self_consumption", "backup", "autonomous"),
     "grid_charging": lambda v: isinstance(v, bool),
     "grid_export": lambda v: v in ("battery_ok", "pv_only", "never"),
+}
+_CONTROL_VALUE_HINT = {
+    "reserve": "an integer from 0 to 100",
+    "mode": "self_consumption, backup or autonomous",
+    "grid_charging": "true or false",
+    "grid_export": "battery_ok, pv_only or never",
 }
 _CONTROL_METHODS = {
     "reserve": "set_reserve",
