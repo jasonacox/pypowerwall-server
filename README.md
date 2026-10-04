@@ -19,7 +19,7 @@ The **Control** panel allows you to manage the Powerwall's operation mode, reser
 
 <img alt="PyPowerwall Server Console - Control" src="https://github.com/user-attachments/assets/2f33dc25-8f9c-412c-893f-087d6ba9c57d" />
 
-The **MQTT** panel shows the live MQTT settings if the `PW_MQTT_BROKER` environment variable is set.
+The **MQTT** panel shows the live MQTT settings if the `MQTT_HOST` environment variable is set.
 
 <img alt="PyPowerwall Server Console - MQTT" src="https://github.com/user-attachments/assets/f57aff54-5e6e-4a85-a3dc-ec7892a2369d" />
 
@@ -32,7 +32,7 @@ The **MQTT** panel shows the live MQTT settings if the `PW_MQTT_BROKER` environm
 - **Console Web UI** - Tesla Power Flow animation, management console, and auto-generated API documentation at /docs
 - **History** - Daily energy totals for any date range plus Powerwall temperature and fan history at `/history`, stored locally in SQLite
 - **Optional Control Mode** - Token-protected `/control/*` API to set backup reserve and operating mode, plus a Powerwall Control card in the web Console (enabled by `PW_CONTROL_SECRET`; read-only by default)
-- **MQTT Integration** - Publish live Powerwall metrics to any MQTT broker; built-in Home Assistant auto-discovery; see [mqtt-tools/README.md](mqtt-tools/README.md)
+- **MQTT Integration** - Publish live Powerwall metrics to any MQTT broker; built-in Home Assistant auto-discovery; optional Home Assistant controls (opt-in with `MQTT_CONTROLS`); see [mqtt-tools/README.md](mqtt-tools/README.md)
 
 ## Quick Start
 
@@ -614,8 +614,25 @@ export MQTT_HA_DISCOVERY=true        # auto-configure Home Assistant sensors (de
 | `MQTT_HA_PREFIX` | `homeassistant` | HA discovery prefix |
 | `MQTT_CLIENT_ID` | `pypowerwall-server` | MQTT client identifier |
 | `MQTT_KEEPALIVE` | `60` | Connection keepalive in seconds |
+| `MQTT_CONTROLS` | `0` | Opt-in Home Assistant controls (see below). `0` = monitoring only |
 
 Topics are published under `{MQTT_TOPIC_PREFIX}/{gateway_id}/` — e.g. `pypowerwall/default/battery`, `pypowerwall/default/solar`, etc. Per-unit Powerwall temperatures and fan speeds are published under `devices/{serial}/…` (e.g. `pypowerwall/default/devices/TG2312H0001/fan/a/rpm`) and show up as Home Assistant sensors when discovery is enabled. See [mqtt-tools/README.md](mqtt-tools/README.md) for the full topic list, broker setup guide, Home Assistant integration steps, and the live monitor GUI.
+
+### Home Assistant Controls (opt-in)
+
+By default MQTT only publishes. Set `MQTT_CONTROLS` to let Home Assistant (or any MQTT client allowed by your broker) change Powerwall settings. Add the numbers of the controls you want:
+
+| Value | Control | Home Assistant entity |
+|-------|---------|-----------------------|
+| `1` | Backup reserve (0-100 %) | number |
+| `2` | Operating mode (`self_consumption`, `backup`, `autonomous`) | select |
+| `4` | Grid charging | switch |
+| `8` | Grid export (`battery_ok`, `pv_only`, `never`) | select |
+| `16` | Go off grid / reconnect (TEDAPI v1r only) | two buttons |
+
+For example `MQTT_CONTROLS=15` enables everything except going off grid, which needs its own `16` (`31` = all). Controls also need `PW_CONTROL_SECRET`, `MQTT_USERNAME` and `MQTT_PASSWORD`; the log says which one is missing. Home Assistant only gets the controls your connection can run: reserve, mode and the grid settings need cloud, FleetAPI, hybrid cloud or TEDAPI v1r, and going off grid needs v1r.
+
+> **Secure your broker first.** The control secret is never sent over MQTT: anyone who can publish to `pypowerwall/+/control/#` on your broker can change these settings. Turn off anonymous access and limit who can publish to the control topics — see [Securing the broker](MQTT.md#securing-the-broker-required-for-controls) for a Mosquitto example. Topics, payloads and rules are in [MQTT.md](MQTT.md#control-command-topics-opt-in-mqtt_controls).
 
 ## API Endpoints
 

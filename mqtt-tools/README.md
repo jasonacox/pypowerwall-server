@@ -31,7 +31,8 @@ docker run -d \
 ```
 
 > **Note:** The default Docker image starts with no persistent config, which is
-> fine for testing. For production see Option B.
+> fine for testing. For production see Option B. Never use an open broker like
+> this one with Home Assistant controls (`MQTT_CONTROLS`) turned on.
 
 ### Option B - Docker with authentication and persistence
 
@@ -165,6 +166,7 @@ services:
 | `MQTT_HA_PREFIX` | `homeassistant` | Home Assistant discovery prefix |
 | `MQTT_CLIENT_ID` | `pypowerwall-server` | MQTT client identifier |
 | `MQTT_KEEPALIVE` | `60` | Connection keepalive in seconds |
+| `MQTT_CONTROLS` | `0` | Opt-in Home Assistant controls: `1` reserve, `2` mode, `4` grid charging, `8` grid export, `16` go off grid / reconnect (v1r only). Add them up, e.g. `15`. `0` = monitoring only. See [Controls](#controls-optional) |
 
 ---
 
@@ -456,6 +458,30 @@ action:
       message: "Powerwall battery is below 15%."
 ```
 
+#### Controls (optional)
+
+pypowerwall-server can also take commands from Home Assistant: backup reserve, operating mode, grid charging, grid export, and going off grid / reconnecting. They are off by default. To turn them on:
+
+1. Secure the broker: no anonymous clients, and only Home Assistant may publish to `pypowerwall/+/control/+/set`. [MQTT.md](../MQTT.md#securing-the-broker-required-for-controls) has a Mosquitto example.
+2. Give pypowerwall-server its own broker login (`MQTT_USERNAME` / `MQTT_PASSWORD`) and set `PW_CONTROL_SECRET`.
+3. Set `MQTT_CONTROLS`, e.g. `15` for everything except going off grid, and restart.
+
+The controls appear on the Powerwall device: **Backup Reserve Control**, **Operation Mode Control**, **Grid Charging Control**, **Grid Export Control**, and with `16` on a TEDAPI v1r connection the **Go Off Grid** / **Reconnect Grid** buttons. Only controls your connection can run are shown. Every command is logged by pypowerwall-server with the gateway, value and connection used. Example automation:
+
+```yaml
+alias: "Powerwall: Raise reserve before a storm"
+trigger:
+  - platform: state
+    entity_id: binary_sensor.storm_warning
+    to: "on"
+action:
+  - service: number.set_value
+    target:
+      entity_id: number.home_powerwall_backup_reserve_control
+    data:
+      value: 80
+```
+
 #### Troubleshooting
 
 | Problem | Solution |
@@ -465,6 +491,8 @@ action:
 | Wrong entity names | The gateway `name` field in `gateways.yaml` is used as the device name |
 | Duplicate devices | Delete old MQTT devices in HA and restart pypowerwall-server to re-publish discovery |
 | Energy dashboard missing kWh | Create Riemann Sum helpers as described in Step 4 above |
+| Control entities missing | Check the pypowerwall-server log: it names any missing setting (`MQTT_USERNAME`, `MQTT_PASSWORD`, `PW_CONTROL_SECRET`), and only controls your connection can run are shown |
+| A control does nothing | Check the log for `MQTT control ... rejected` or `failed`; the message says why (e.g. the broker refused the subscription, or a value is out of range) |
 
 ---
 
@@ -472,6 +500,9 @@ action:
 
 - **Do not expose port 1883 to the internet.** Use a VPN or SSH tunnel for remote access.
 - For LAN deployments with authentication, use `MQTT_USERNAME` / `MQTT_PASSWORD`.
+- **With controls on (`MQTT_CONTROLS`), the broker is the lock.** Anyone who can publish to
+  `pypowerwall/+/control/#` can change your Powerwall settings, so disable anonymous access and
+  restrict those topics with an ACL ([example](../MQTT.md#securing-the-broker-required-for-controls)).
 - For TLS, set `MQTT_TLS=true` and provide a CA cert via `MQTT_TLS_CA_CERT`.
   Many home users run Mosquitto with a self-signed certificate; set
   `MQTT_TLS_INSECURE=true` only for testing on a trusted LAN.
