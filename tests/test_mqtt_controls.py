@@ -341,9 +341,23 @@ async def test_value_checks(env, gm, caplog, control, value, ok):
     assert (gm.local_control.await_count == 1) == ok
     if not ok:
         # The rejection says what is accepted (e.g. 30.5 for reserve)
-        hint = {"reserve": "an integer from 0 to 100", "mode": "self_consumption",
+        hint = {"reserve": "a whole number from 0 to 100", "mode": "self_consumption",
                 "grid_charging": "true or false", "grid_export": "battery_ok"}[control]
-        assert "invalid value" in caplog.text and hint in caplog.text
+        assert hint in caplog.text
+
+
+@pytest.mark.parametrize("value, message", [
+    (40.0, "rejected: 40.0 has a decimal point, send 40 (a whole number from 0 to 100)"),
+    (150.0, "rejected: invalid value 150.0 (must be a whole number from 0 to 100)"),
+    (40.5, "rejected: invalid value 40.5 (must be a whole number from 0 to 100)"),
+])
+@pytest.mark.asyncio
+async def test_reserve_decimal_nudge(env, gm, caplog, value, message):
+    """A whole-number float reads as valid, so name the decimal point."""
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        await run_commands(cmd("cloud", "reserve", {"value": value}))
+    assert gm.local_control.await_count == 0
+    assert message in caplog.text
 
 
 @pytest.mark.asyncio

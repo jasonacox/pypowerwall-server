@@ -1071,10 +1071,20 @@ class MqttPublisher:
             else:
                 value = payload.get("value")
                 if not _CONTROL_VALUE_OK[control](value):
-                    logger.warning(
-                        f"{label} rejected: invalid value {_short(value)} "
-                        f"(must be {_CONTROL_VALUE_HINT[control]})"
-                    )
+                    hint = _CONTROL_VALUE_HINT[control]
+                    if (
+                        control == "reserve"
+                        and isinstance(value, float)
+                        and value.is_integer()
+                        and 0 <= value <= 100
+                    ):
+                        # 40.0 reads as 40: name the decimal point as the problem
+                        reason = (
+                            f"{value!r} has a decimal point, send {int(value)} ({hint})"
+                        )
+                    else:
+                        reason = f"invalid value {_short(value)} (must be {hint})"
+                    logger.warning(f"{label} rejected: {reason}")
                     return
                 path = _write_path(gateway_manager, gateway_id)
                 if path is None:
@@ -1119,7 +1129,7 @@ _CONTROL_VALUE_OK = {
     "grid_export": lambda v: v in ("battery_ok", "pv_only", "never"),
 }
 _CONTROL_VALUE_HINT = {
-    "reserve": "an integer from 0 to 100",
+    "reserve": "a whole number from 0 to 100",
     "mode": "self_consumption, backup or autonomous",
     "grid_charging": "true or false",
     "grid_export": "battery_ok, pv_only or never",
