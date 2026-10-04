@@ -7,6 +7,9 @@
 **Added:**
 - **MQTT: per-unit Powerwall temperature and fan sensors** — each Powerwall unit's temperature and fan readings are published over MQTT keyed by unit serial, with matching Home Assistant auto-discovery sensors: `devices/{serial}/temperature/{pack_max,pack_min,shunt,ambient,controller}` (°C) and `devices/{serial}/fan/{a,b}/{rpm,duty}` (PW3) or `devices/{serial}/fan/{rpm,target_rpm}` (PW2/2+), plus a full per-unit JSON topic. Only signals each unit actually reports are discovered (no unavailable entities for missing hardware). Sources are the existing `vitals` poll plus the `get_fan_speeds()` cache — no new gateway calls. Signal names, ids and extraction live in a new shared registry, `app/core/signals.py`, so MQTT and the history store (upcoming) use one vocabulary. Available in TEDAPI modes (Basic LAN skips vitals); absent in cloud-only mode. (#133, #134)
 
+**Fixed:**
+- **Console no longer zooms out on phones** — since the Temp and Fans columns (0.7.0, #119), the Powerwall Status table was about 800px wide, so phone browsers widened the whole page to fit it and showed the Console zoomed out. At 900px and below the table now scrolls sideways inside its card, with slightly tighter cells and each value on one line; the page itself fits the screen at 320–430px. The Temp/Fans detail cards still open on tap or hover below their cell and stay on screen, including for a cell partly scrolled out of view. Applies to both the single-gateway and multi-gateway views. Wider screens are unchanged and the same data is shown.
+
 ### [0.7.1] - 2026-09-27
 
 **Fixed:**

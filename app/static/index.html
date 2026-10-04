@@ -1307,6 +1307,43 @@
             white-space: nowrap;
         }
 
+        /* At 900px and below (every card full width) the table can be wider than
+           its card. It scrolls sideways inside its wrapper instead of widening the
+           page, which would make phone browsers zoom the whole console out. */
+        @media (max-width: 900px) {
+            .powerwall-table-wrap {
+                overflow-x: auto;
+            }
+            .powerwall-table {
+                font-size: 0.8em;
+            }
+            /* One line per value: the table scrolls rather than wrapping
+               "13.70 kWh (101.5%)" over three lines */
+            .powerwall-table th,
+            .powerwall-table td {
+                padding: 8px 6px;
+                white-space: nowrap;
+            }
+            .powerwall-expansion-row td:first-child {
+                padding-left: 22px;
+            }
+            .powerwall-expansion-row td:first-child::before {
+                left: 6px;
+            }
+            /* The wrapper would clip a Temp / Fans card, so the card is placed
+               against the Powerwall card instead, below its cell
+               (placePowerwallDetailCard sets the offsets). The fallback keeps an
+               unplaced card inside the screen: one past its right edge would
+               widen the page, and phones would zoom out mid-tap. */
+            .pw-detail {
+                position: static;
+            }
+            .pw-detail-card {
+                top: var(--pw-card-top, 0);
+                right: var(--pw-card-right, 0);
+            }
+        }
+
         .spec-good {
             color: var(--accent-green);
         }
@@ -3599,6 +3636,50 @@
                 headlineFanRpm(fansBySerial[deviceSerial(item.PackageSerialNumber)]) !== null);
         }
 
+        // At 900px and below the table scrolls inside .powerwall-table-wrap, which
+        // would clip a detail card, so CSS positions the card against the
+        // Powerwall card instead. Put it below its cell, right-aligned as on
+        // desktop, and keep it on screen.
+        const narrowPowerwallTable = window.matchMedia('(max-width: 900px)');
+
+        function placePowerwallDetailCard(detail) {
+            const card = detail.querySelector('.pw-detail-card');
+            const frame = detail.closest('.powerwall-card');
+            if (!card || !frame || !narrowPowerwallTable.matches) return;
+            const margin = 8;
+            const cell = detail.getBoundingClientRect();
+            const box = frame.getBoundingClientRect();
+            const paddingRight = box.left + frame.clientLeft + frame.clientWidth;
+            const screenRight = document.documentElement.clientWidth - margin;
+            // A cell scrolled partly off screen still gets an on-screen card
+            const right = paddingRight - Math.min(cell.right, screenRight);
+            card.style.setProperty('--pw-card-top', `${cell.bottom - box.top - frame.clientTop + 6}px`);
+            card.style.setProperty('--pw-card-right', `${right}px`);
+            // Once the card is open its width is known: keep its left edge on screen
+            const shown = card.getBoundingClientRect();
+            if (shown.width && shown.left < margin) {
+                card.style.setProperty('--pw-card-right', `${right - (margin - shown.left)}px`);
+            }
+        }
+
+        {
+            const content = document.getElementById('powerwall-content');
+            const place = e => {
+                const detail = e.target.closest && e.target.closest('.pw-detail');
+                if (detail) placePowerwallDetailCard(detail);
+            };
+            // pointerover comes before a touch press applies :hover, so the card
+            // is placed before it first shows
+            content.addEventListener('pointerover', place);
+            content.addEventListener('focusin', place);
+            // Scroll events don't bubble: capture the wrappers' sideways scroll
+            // and keep an open card with its cell
+            content.addEventListener('scroll', () => {
+                content.querySelectorAll('.pw-detail:hover, .pw-detail:focus')
+                    .forEach(placePowerwallDetailCard);
+            }, true);
+        }
+
         function powerwallRowHtml(pw, displayName, isExpansion, isPw3System, tempsBySerial = null, fansBySerial = null) {
             const capacity = pw.POD_nom_full_pack_energy || pw.nominal_full_pack_energy;
             const capacityKwh = capacity ? (capacity / 1000).toFixed(2) : '--';
@@ -3677,7 +3758,7 @@
                 const showFans = anyPowerwallFans(pwRows, fansBySerial);
 
                 // Build table
-                let html = '<table class="powerwall-table"><thead><tr>';
+                let html = '<div class="powerwall-table-wrap"><table class="powerwall-table"><thead><tr>';
                 html += '<th>Powerwall</th>';
                 html += '<th>Model</th>';
                 html += '<th>Capacity</th>';
@@ -3701,7 +3782,7 @@
                     );
                 });
                 
-                html += '</tbody></table>';
+                html += '</tbody></table></div>';
                 
                 // Add summary section
                 const totalCapacity = pod.nominal_full_pack_energy ? (pod.nominal_full_pack_energy / 1000).toFixed(2) : '--';
@@ -3899,7 +3980,7 @@
                     const showTemps = anyPowerwallTemps(rows, tempsBySerial);
                     const fansBySerial = powerwallFansBySerial(status.data.vitals);
                     const showFans = anyPowerwallFans(rows, fansBySerial);
-                    html += '<table class="powerwall-table"><thead><tr><th>Powerwall</th><th>Model</th><th>Capacity</th><th>Voltage</th><th>Power</th><th>Frequency</th>' +
+                    html += '<div class="powerwall-table-wrap"><table class="powerwall-table"><thead><tr><th>Powerwall</th><th>Model</th><th>Capacity</th><th>Voltage</th><th>Power</th><th>Frequency</th>' +
                         (showTemps ? '<th>Temp</th>' : '') + (showFans ? '<th>Fans</th>' : '') + '</tr></thead><tbody>';
                     rows.forEach(({ item: block, isExpansion }) => {
                         html += powerwallRowHtml(
@@ -3911,7 +3992,7 @@
                             showFans ? fansBySerial : null
                         );
                     });
-                    html += '</tbody></table>';
+                    html += '</tbody></table></div>';
                     // Compact summary row
                     const soe = status.data.soe;
                     const reserve = status.data.reserve;
