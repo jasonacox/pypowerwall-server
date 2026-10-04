@@ -165,7 +165,7 @@ last retained value persists until the gateway's `availability` goes `offline`.
 
 > **⚠️ WARNING: USE AT YOUR OWN RISK**
 >
-> MQTT controls let anything that can publish to your MQTT broker change how your Powerwall runs: the backup reserve, the operating mode, grid charging and grid export, and (with `16`) disconnecting your home from the grid. A misconfigured or compromised broker, a hacked smart-home device, a buggy automation or a simple mistake could:
+> MQTT controls let anything allowed to publish to the control topics on your MQTT broker (`{MQTT_TOPIC_PREFIX}/+/control/+/set`; on a broker without an ACL, that's every client) change how your Powerwall runs: the backup reserve, the operating mode, grid charging and grid export, and (with `16`) disconnecting your home from the grid. A misconfigured or compromised broker, a hacked smart-home device, a buggy automation or a simple mistake could:
 >
 > - cause a **power outage** in your home,
 > - leave you **without backup power** when the grid goes down (for example, a reserve set to 0),
@@ -203,8 +203,9 @@ acl_file /mosquitto/config/acl
 ```
 
 ```conf
-# acl: pypowerwall-server publishes everything and reads commands;
-# Home Assistant reads state and sends commands; nobody else touches control topics
+# acl: pypowerwall-server publishes everything, reads commands and clears them;
+# Home Assistant reads state and sends commands; nobody else touches control topics.
+# Replace pypowerwall with your MQTT_TOPIC_PREFIX if you changed it.
 user pypowerwall
 topic readwrite pypowerwall/#
 topic write homeassistant/#

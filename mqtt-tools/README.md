@@ -462,7 +462,7 @@ action:
 
 > **⚠️ WARNING: USE AT YOUR OWN RISK**
 >
-> MQTT controls let anything that can publish to your MQTT broker change how your Powerwall runs: the backup reserve, the operating mode, grid charging and grid export, and (with `16`) disconnecting your home from the grid. A misconfigured or compromised broker, a hacked smart-home device, a buggy automation or a simple mistake could:
+> MQTT controls let anything allowed to publish to the control topics on your MQTT broker (`{MQTT_TOPIC_PREFIX}/+/control/+/set`; on a broker without an ACL, that's every client) change how your Powerwall runs: the backup reserve, the operating mode, grid charging and grid export, and (with `16`) disconnecting your home from the grid. A misconfigured or compromised broker, a hacked smart-home device, a buggy automation or a simple mistake could:
 >
 > - cause a **power outage** in your home,
 > - leave you **without backup power** when the grid goes down (for example, a reserve set to 0),
@@ -473,7 +473,7 @@ action:
 
 pypowerwall-server can also take commands from Home Assistant: backup reserve, operating mode, grid charging, grid export, and going off grid / reconnecting. They are off by default. To turn them on:
 
-1. Secure the broker: no anonymous clients, and only Home Assistant may publish to `pypowerwall/+/control/+/set`. [MQTT.md](../MQTT.md#securing-the-broker-required-for-controls) has a Mosquitto example.
+1. Secure the broker: no anonymous clients, and only Home Assistant and pypowerwall-server itself may publish to `{MQTT_TOPIC_PREFIX}/+/control/+/set` (default prefix `pypowerwall`). pypowerwall-server needs that write access to clear retained commands. [MQTT.md](../MQTT.md#securing-the-broker-required-for-controls) has a Mosquitto example.
 2. Give pypowerwall-server its own broker login (`MQTT_USERNAME` / `MQTT_PASSWORD`) and set `PW_CONTROL_SECRET`.
 3. Set `MQTT_CONTROLS`, e.g. `15` for everything except going off grid, and restart.
 
@@ -503,7 +503,7 @@ action:
 | Duplicate devices | Delete old MQTT devices in HA and restart pypowerwall-server to re-publish discovery |
 | Energy dashboard missing kWh | Create Riemann Sum helpers as described in Step 4 above |
 | Control entities missing | Check the pypowerwall-server log: it names any missing setting (`MQTT_USERNAME`, `MQTT_PASSWORD`, `PW_CONTROL_SECRET`), and only controls your connection can run are shown |
-| A control does nothing | Check the log for `MQTT control ... rejected` or `failed`; the message says why (e.g. the broker refused the subscription, or a value is out of range) |
+| A control does nothing | Check the pypowerwall-server log: `MQTT broker refused the subscription ...` means the broker ACL doesn't let pypowerwall-server read the control topics; `MQTT control ... rejected` or `failed` says why a single command didn't run (e.g. a value out of range) |
 
 ---
 
@@ -514,7 +514,7 @@ action:
 - **MQTT controls are at your own risk.** Misuse or abuse can cause power outages or damage;
   see the warning in [Controls](#controls-optional).
 - **With controls on (`MQTT_CONTROLS`), the broker is the lock.** Anyone who can publish to
-  `pypowerwall/+/control/#` can change your Powerwall settings, so disable anonymous access and
+  `{MQTT_TOPIC_PREFIX}/+/control/#` (default `pypowerwall/+/control/#`) can change your Powerwall settings, so disable anonymous access and
   restrict those topics with an ACL ([example](../MQTT.md#securing-the-broker-required-for-controls)).
 - For TLS, set `MQTT_TLS=true` and provide a CA cert via `MQTT_TLS_CA_CERT`.
   Many home users run Mosquitto with a self-signed certificate; set

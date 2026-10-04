@@ -622,7 +622,7 @@ Topics are published under `{MQTT_TOPIC_PREFIX}/{gateway_id}/` — e.g. `pypower
 
 > **⚠️ WARNING: USE AT YOUR OWN RISK**
 >
-> MQTT controls let anything that can publish to your MQTT broker change how your Powerwall runs: the backup reserve, the operating mode, grid charging and grid export, and (with `16`) disconnecting your home from the grid. A misconfigured or compromised broker, a hacked smart-home device, a buggy automation or a simple mistake could:
+> MQTT controls let anything allowed to publish to the control topics on your MQTT broker (`{MQTT_TOPIC_PREFIX}/+/control/+/set`; on a broker without an ACL, that's every client) change how your Powerwall runs: the backup reserve, the operating mode, grid charging and grid export, and (with `16`) disconnecting your home from the grid. A misconfigured or compromised broker, a hacked smart-home device, a buggy automation or a simple mistake could:
 >
 > - cause a **power outage** in your home,
 > - leave you **without backup power** when the grid goes down (for example, a reserve set to 0),
@@ -643,7 +643,7 @@ By default MQTT only publishes. Set `MQTT_CONTROLS` to let Home Assistant (or an
 
 For example `MQTT_CONTROLS=15` enables everything except going off grid, which needs its own `16` (`31` = all). Controls also need `PW_CONTROL_SECRET`, `MQTT_USERNAME` and `MQTT_PASSWORD`; the log says which one is missing. Home Assistant only gets the controls your connection can run: reserve, mode and the grid settings need cloud, FleetAPI, hybrid cloud or TEDAPI v1r, and going off grid needs v1r.
 
-> **Secure your broker first.** The control secret is never sent over MQTT: anyone who can publish to `pypowerwall/+/control/#` on your broker can change these settings. Turn off anonymous access and limit who can publish to the control topics — see [Securing the broker](MQTT.md#securing-the-broker-required-for-controls) for a Mosquitto example. Topics, payloads and rules are in [MQTT.md](MQTT.md#control-command-topics-opt-in-mqtt_controls).
+> **Secure your broker first.** The control secret is never sent over MQTT: anyone who can publish to `{MQTT_TOPIC_PREFIX}/+/control/#` (default prefix `pypowerwall`) on your broker can change these settings. Turn off anonymous access and limit who can publish to the control topics — see [Securing the broker](MQTT.md#securing-the-broker-required-for-controls) for a Mosquitto example. Topics, payloads and rules are in [MQTT.md](MQTT.md#control-command-topics-opt-in-mqtt_controls).
 
 ## API Endpoints
 
