@@ -166,7 +166,7 @@ services:
 | `MQTT_HA_PREFIX` | `homeassistant` | Home Assistant discovery prefix |
 | `MQTT_CLIENT_ID` | `pypowerwall-server` | MQTT client identifier |
 | `MQTT_KEEPALIVE` | `60` | Connection keepalive in seconds |
-| `MQTT_CONTROLS` | `0` | Opt-in Home Assistant controls: `1` reserve, `2` mode, `4` grid charging, `8` grid export, `16` go off grid / reconnect (v1r only). Add them up, e.g. `15`. `0` = monitoring only. See [Controls](#controls-optional) |
+| `MQTT_CONTROLS` | `0` | Opt-in Home Assistant controls: `1` reserve, `2` mode, `4` grid charging, `8` grid export, `16` go off grid / reconnect (v1r only). Add them up, e.g. `15`. `0` = monitoring only. **Use at your own risk:** read the warning in [Controls](#controls-optional) first |
 
 ---
 
@@ -460,6 +460,17 @@ action:
 
 #### Controls (optional)
 
+> **⚠️ WARNING: USE AT YOUR OWN RISK**
+>
+> MQTT controls let anything that can publish to your MQTT broker change how your Powerwall runs: the backup reserve, the operating mode, grid charging and grid export, and (with `16`) disconnecting your home from the grid. A misconfigured or compromised broker, a hacked smart-home device, a buggy automation or a simple mistake could:
+>
+> - cause a **power outage** in your home,
+> - leave you **without backup power** when the grid goes down (for example, a reserve set to 0),
+> - **damage** equipment or appliances, or
+> - raise your energy costs or conflict with your utility agreement.
+>
+> This software is provided "as is", without warranty of any kind (see the [MIT license](../LICENSE)), and is not made or supported by Tesla. **By setting `MQTT_CONTROLS` to anything other than `0`, you acknowledge these risks and accept full responsibility for the results.** Think twice before turning this on: enable only the controls you need, leave going off grid (`16`) off unless you truly need it, and secure your broker first.
+
 pypowerwall-server can also take commands from Home Assistant: backup reserve, operating mode, grid charging, grid export, and going off grid / reconnecting. They are off by default. To turn them on:
 
 1. Secure the broker: no anonymous clients, and only Home Assistant may publish to `pypowerwall/+/control/+/set`. [MQTT.md](../MQTT.md#securing-the-broker-required-for-controls) has a Mosquitto example.
@@ -500,6 +511,8 @@ action:
 
 - **Do not expose port 1883 to the internet.** Use a VPN or SSH tunnel for remote access.
 - For LAN deployments with authentication, use `MQTT_USERNAME` / `MQTT_PASSWORD`.
+- **MQTT controls are at your own risk.** Misuse or abuse can cause power outages or damage;
+  see the warning in [Controls](#controls-optional).
 - **With controls on (`MQTT_CONTROLS`), the broker is the lock.** Anyone who can publish to
   `pypowerwall/+/control/#` can change your Powerwall settings, so disable anonymous access and
   restrict those topics with an ACL ([example](../MQTT.md#securing-the-broker-required-for-controls)).

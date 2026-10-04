@@ -95,7 +95,7 @@ All use `MQTT_` prefix (no `PW_` prefix — MQTT is not a Powerwall concept).
 | `MQTT_HA_PREFIX` | `homeassistant` | HA discovery topic prefix |
 | `MQTT_CLIENT_ID` | `pypowerwall-server` | MQTT client identifier |
 | `MQTT_KEEPALIVE` | `60` | Broker keepalive interval (seconds) |
-| `MQTT_CONTROLS` | `0` | Opt-in bitmask for Home Assistant controls (needs `PW_CONTROL_SECRET` and `MQTT_USERNAME`/`MQTT_PASSWORD`): `1` reserve, `2` mode, `4` grid_charging, `8` grid_export, `16` islanding. `15` = all but islanding, `31` = all, `0` = monitoring only. Any other value is logged as an error and treated as `0` |
+| `MQTT_CONTROLS` | `0` | Opt-in bitmask for Home Assistant controls (needs `PW_CONTROL_SECRET` and `MQTT_USERNAME`/`MQTT_PASSWORD`): `1` reserve, `2` mode, `4` grid_charging, `8` grid_export, `16` islanding. `15` = all but islanding, `31` = all, `0` = monitoring only. Any other value is logged as an error and treated as `0`. **Use at your own risk** (see the warning under *Control command topics*) |
 
 Add to `app/config.py` Settings class:
 
@@ -162,6 +162,17 @@ Optional topics are published only when the source value is available; the
 last retained value persists until the gateway's `availability` goes `offline`.
 
 ### Control command topics (opt-in `MQTT_CONTROLS`)
+
+> **⚠️ WARNING: USE AT YOUR OWN RISK**
+>
+> MQTT controls let anything that can publish to your MQTT broker change how your Powerwall runs: the backup reserve, the operating mode, grid charging and grid export, and (with `16`) disconnecting your home from the grid. A misconfigured or compromised broker, a hacked smart-home device, a buggy automation or a simple mistake could:
+>
+> - cause a **power outage** in your home,
+> - leave you **without backup power** when the grid goes down (for example, a reserve set to 0),
+> - **damage** equipment or appliances, or
+> - raise your energy costs or conflict with your utility agreement.
+>
+> This software is provided "as is", without warranty of any kind (see the [MIT license](LICENSE)), and is not made or supported by Tesla. **By setting `MQTT_CONTROLS` to anything other than `0`, you acknowledge these risks and accept full responsibility for the results.** Think twice before turning this on: enable only the controls you need, leave going off grid (`16`) off unless you truly need it, and secure your broker first.
 
 | Topic | Bit | Payload | Accepted values |
 |-------|-----|---------|-----------------|
@@ -384,7 +395,7 @@ Binary sensors:
 | Grid Connected | `connectivity` |
 | Grid Charging | — |
 
-Controls (opt-in `MQTT_CONTROLS`; only enabled bits the gateway can run are announced):
+Controls (opt-in `MQTT_CONTROLS`, use at your own risk; only enabled bits the gateway can run are announced):
 | Entity | Bit | HA type | Options / Range | Icon |
 |--------|-----|---------|-----------------|------|
 | Backup Reserve Control | `1` | `number` | `0-100 %` `step 1` | `mdi:battery-lock` |
@@ -562,7 +573,7 @@ Powerwall (default)
 - `MQTT_PASSWORD` is never logged or exposed in API responses
 - TLS support (`MQTT_TLS=yes`) for production broker connections
 - `MQTT_TLS_INSECURE` defaults to `no` — must be explicitly enabled for dev
-- With `MQTT_CONTROLS=0` (the default) the server subscribes to nothing and MQTT is publish-only. With controls on, the broker is the trust boundary: it must reject anonymous clients and restrict `{prefix}/+/control/#` (see *Securing the broker*). HTTP `POST /control/*` keeps its `Bearer <PW_CONTROL_SECRET>` check.
+- With `MQTT_CONTROLS=0` (the default) the server subscribes to nothing and MQTT is publish-only. Turning controls on is at your own risk: misuse or abuse can cause power outages or damage (see the warning under *Control command topics*). With controls on, the broker is the trust boundary: it must reject anonymous clients and restrict `{prefix}/+/control/#` (see *Securing the broker*). HTTP `POST /control/*` keeps its `Bearer <PW_CONTROL_SECRET>` check.
 
 
 ## Test Instructions - Quick Start

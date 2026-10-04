@@ -32,7 +32,7 @@ The **MQTT** panel shows the live MQTT settings if the `MQTT_HOST` environment v
 - **Console Web UI** - Tesla Power Flow animation, management console, and auto-generated API documentation at /docs
 - **History** - Daily energy totals for any date range plus Powerwall temperature and fan history at `/history`, stored locally in SQLite
 - **Optional Control Mode** - Token-protected `/control/*` API to set backup reserve and operating mode, plus a Powerwall Control card in the web Console (enabled by `PW_CONTROL_SECRET`; read-only by default)
-- **MQTT Integration** - Publish live Powerwall metrics to any MQTT broker; built-in Home Assistant auto-discovery; optional Home Assistant controls (opt-in with `MQTT_CONTROLS`); see [mqtt-tools/README.md](mqtt-tools/README.md)
+- **MQTT Integration** - Publish live Powerwall metrics to any MQTT broker; built-in Home Assistant auto-discovery; optional Home Assistant controls (opt-in with `MQTT_CONTROLS`, use at your own risk); see [mqtt-tools/README.md](mqtt-tools/README.md)
 
 ## Quick Start
 
@@ -614,11 +614,22 @@ export MQTT_HA_DISCOVERY=true        # auto-configure Home Assistant sensors (de
 | `MQTT_HA_PREFIX` | `homeassistant` | HA discovery prefix |
 | `MQTT_CLIENT_ID` | `pypowerwall-server` | MQTT client identifier |
 | `MQTT_KEEPALIVE` | `60` | Connection keepalive in seconds |
-| `MQTT_CONTROLS` | `0` | Opt-in Home Assistant controls (see below). `0` = monitoring only |
+| `MQTT_CONTROLS` | `0` | Opt-in Home Assistant controls. **Use at your own risk: read the warning below first.** `0` = monitoring only |
 
 Topics are published under `{MQTT_TOPIC_PREFIX}/{gateway_id}/` — e.g. `pypowerwall/default/battery`, `pypowerwall/default/solar`, etc. Per-unit Powerwall temperatures and fan speeds are published under `devices/{serial}/…` (e.g. `pypowerwall/default/devices/TG2312H0001/fan/a/rpm`) and show up as Home Assistant sensors when discovery is enabled. See [mqtt-tools/README.md](mqtt-tools/README.md) for the full topic list, broker setup guide, Home Assistant integration steps, and the live monitor GUI.
 
 ### Home Assistant Controls (opt-in)
+
+> **⚠️ WARNING: USE AT YOUR OWN RISK**
+>
+> MQTT controls let anything that can publish to your MQTT broker change how your Powerwall runs: the backup reserve, the operating mode, grid charging and grid export, and (with `16`) disconnecting your home from the grid. A misconfigured or compromised broker, a hacked smart-home device, a buggy automation or a simple mistake could:
+>
+> - cause a **power outage** in your home,
+> - leave you **without backup power** when the grid goes down (for example, a reserve set to 0),
+> - **damage** equipment or appliances, or
+> - raise your energy costs or conflict with your utility agreement.
+>
+> This software is provided "as is", without warranty of any kind (see the [MIT license](LICENSE)), and is not made or supported by Tesla. **By setting `MQTT_CONTROLS` to anything other than `0`, you acknowledge these risks and accept full responsibility for the results.** Think twice before turning this on: enable only the controls you need, leave going off grid (`16`) off unless you truly need it, and secure your broker first.
 
 By default MQTT only publishes. Set `MQTT_CONTROLS` to let Home Assistant (or any MQTT client allowed by your broker) change Powerwall settings. Add the numbers of the controls you want:
 
