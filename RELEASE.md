@@ -2,6 +2,11 @@
 
 ## Version History
 
+### [0.9.1] - Upcoming
+
+**Fixed:**
+- **Console status no longer flashes red when returning from API docs** — navigating back restored the Back-Forward Cache snapshot with the killed-socket red banner until reconnect; the socket now closes quietly on hide and reconnects immediately on show with optimistic green (a real failure still reports red).
+
 ### [0.9.0] - 2026-10-04
 
 **Added:**
