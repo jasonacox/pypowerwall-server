@@ -5,7 +5,7 @@
 ### [0.9.1] - Upcoming
 
 **Fixed:**
-- **Console status no longer flashes red when returning from API docs** — navigating back restored the Back-Forward Cache snapshot with the killed-socket red banner until reconnect; the socket now closes quietly on hide and reconnects immediately on show with optimistic green (a real failure still reports red).
+- **Console status no longer flashes red when you come back from the API docs** — going Back restored the page as you left it, including the live connection the browser had closed, so the status banner showed disconnected until it reconnected. The Console now closes that connection quietly when you leave and reconnects as soon as you return; a real disconnect still shows red. Thanks @erikgieseler (#142)
 
 ### [0.9.0] - 2026-10-04
 

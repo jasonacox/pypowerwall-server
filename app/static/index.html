@@ -2164,9 +2164,6 @@
         const maxReconnectAttempts = 10;
         const reconnectDelay = 3000;
         let lastUpdateTime = null;
-        // Bfcache navigation (console <-> docs) closes the socket without a
-        // failure: skip red + timer then, pageshow reconnects instead.
-        let wsExpectedClose = false;
         let reconnectTimer = null;
         
         // Trend chart data (in-memory only, cleared on refresh)
@@ -2252,15 +2249,7 @@
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}/ws/aggregate`;
             
-            // Drop a surviving socket first (some browsers keep it across
-            // bfcache) — detached handlers so its close stays silent.
-            try {
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.onclose = null;
-                    ws.onerror = null;
-                    ws.close();
-                }
-            } catch (e) {}
+            dropWebSocket();
             ws = new WebSocket(wsUrl);
             
             ws.onopen = () => {
@@ -2274,13 +2263,11 @@
             };
             
             ws.onerror = (error) => {
-                if (wsExpectedClose) return;
                 console.error('WebSocket error:', error);
                 updateBannerStatus(false);
             };
             
             ws.onclose = () => {
-                if (wsExpectedClose) return;
                 console.log('WebSocket disconnected, reconnecting...');
                 updateBannerStatus(false);
                 clearTimeout(reconnectTimer);
@@ -2299,17 +2286,23 @@
             }
         }
 
-        // Back-Forward Cache: the browser kills the socket on hide (red flash
-        // on return) — close quietly instead, reconnect immediately on show.
-        window.addEventListener('pagehide', () => {
-            wsExpectedClose = true;
+        // Close the current socket for good. Its handlers go first: a socket
+        // closed on pagehide can deliver its close event after a Back-Forward
+        // Cache restore, and must not turn the banner red or reconnect then.
+        function dropWebSocket() {
             clearTimeout(reconnectTimer);
-            try { ws && ws.close(); } catch (e) {}
-        });
+            if (!ws) return;
+            ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+            try { ws.close(); } catch (e) {}
+            ws = null;
+        }
+
+        // Back-Forward Cache: the browser kills the socket on hide, which
+        // would show red on return. Close it quietly instead and reconnect
+        // right away when the page is restored (green, like a fresh load).
+        window.addEventListener('pagehide', dropWebSocket);
         window.addEventListener('pageshow', (event) => {
             if (!event.persisted) return;
-            wsExpectedClose = false;
-            clearTimeout(reconnectTimer);
             updateBannerStatus(true);
             connectWebSocket();
         });
