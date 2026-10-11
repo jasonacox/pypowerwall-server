@@ -75,6 +75,7 @@ Environment Variables (Proxy Compatible):
         PW_CACHE_FILE        - Cache file path (default: auto - uses PW_AUTH_PATH/.powerwall or /tmp/.powerwall)
         PW_SITEID            - Tesla site ID for multi-site accounts (default: none)
         PW_CONTROL_SECRET    - Enable control commands (default: none/disabled)
+        PW_LOCAL_FIRST       - Prefer local v1r writes "yes"/"no" (default: "no")
         PW_NEG_SOLAR         - Allow negative solar values "yes"/"no" (default: "no")
         PW_RSA_KEY_PATH      - Path to RSA-4096 private key PEM for TEDAPI v1r LAN access (default: none)
         PW_WIFI_HOST         - WiFi host IP for TEDAPI v1r WiFi fallback (default: none)
@@ -344,6 +345,9 @@ class Settings(BaseSettings):
     cache_file: Optional[str] = Field(default=None, alias="PW_CACHE_FILE")
     siteid: Optional[str] = Field(default=None, alias="PW_SITEID")
     control_secret: Optional[str] = Field(default=None, alias="PW_CONTROL_SECRET")
+    local_first: bool = Field(
+        default=False, alias="PW_LOCAL_FIRST"
+    )  # Try local v1r writes before cloud (default: no = cloud first)
     islanding_cooldown: int = Field(
         default=30, alias="PW_ISLANDING_COOLDOWN"
     )  # Server-enforced seconds between islanding commands per gateway (0 disables)

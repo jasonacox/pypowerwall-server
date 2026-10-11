@@ -21,6 +21,14 @@ def test_settings_from_env(monkeypatch):
     assert settings.server_port == 9000
 
 
+def test_local_first_yes_no(monkeypatch):
+    """PW_LOCAL_FIRST follows the PW_* yes/no convention (issue #149)."""
+    monkeypatch.setenv("PW_LOCAL_FIRST", "yes")
+    assert Settings().local_first is True
+    monkeypatch.setenv("PW_LOCAL_FIRST", "no")
+    assert Settings().local_first is False
+
+
 def test_gateway_config_validation():
     """Test gateway config validation."""
     config = GatewayConfig(

@@ -13,6 +13,7 @@
   and history. Their display names change to follow the new device, e.g.
   "Default Gateway Battery 1 Capacity" becomes "Powerwall TG… Capacity".
   (#153)
+- **`PW_LOCAL_FIRST` (opt-in, default `no`)** — with `PW_LOCAL_FIRST=yes`, reserve/mode/grid control writes (HTTP and MQTT) try a confirmed local v1r transport first while its LAN is up and a local connection exists — so the LAN-up / internet-down case keeps working, where local writes are the only path observed to confirm synchronously. Otherwise the write runs unchanged through the normal dispatch (cloud first when configured). Any dispatched local attempt — success, timeout or library error — is final and never followed by a second write, since a timed-out write may still have been applied. Default `no` keeps the historical behavior. Islanding is untouched (always local v1r). (issue #149)
 
 **Fixed:**
 - **Docs: v1r follower Powerwalls need `PW_WIFI_HOST`** — the README said `PW_WIFI_HOST` defaults to `192.168.91.1`; it isn't set by default, and without it v1r shows only the leader Powerwall. The README now says to set it to the gateway's WiFi access point for multi-Powerwall sites, and its v1r examples use the wired LAN IP (`10.42.1.x`) for `PW_HOST` instead of the WiFi address. The startup warning names `192.168.91.1` instead of `<gateway-ip>` (#157).
