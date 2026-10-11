@@ -7,6 +7,14 @@
 **Fixed:**
 - **Console status no longer flashes red when you come back from the API docs** — going Back restored the page as you left it, including the live connection the browser had closed, so the status banner showed disconnected until it reconnected. The Console now closes that connection quietly when you leave and reconnects as soon as you return; a real disconnect still shows red. Thanks @erikgieseler (#142)
 
+**Changed:**
+- **pypowerwall upgraded to 0.19.0** (from 0.18.2; `requirements.txt` pin and `pyproject.toml` minimum). Docker images now ship pypowerwall 0.19.0. The server uses only the library's public API and keeps its default `failover=True`, so behavior changes only where the library fixed something. Library changes that reach server users:
+  - Wi-Fi Tesla Remote Meter (`trm_wifi`) sites are recognized, and `/api/meters/aggregates` holds the last solar reading through short `SolarMeterComms` dropouts instead of dropping solar to 0 (jasonacox/pypowerwall#400).
+  - A poll no longer fails when the gateway reports a voltage but no power for a location, or returns config with `meters`/`vin` null right after a restart. A failed poll looked like a dead link and triggered reconnects (jasonacox/pypowerwall#400, #412).
+  - v1r with a WiFi fallback host: after the LAN recovers, the gateway's native API (lifetime energy counters) goes back to the LAN instead of staying on WiFi (jasonacox/pypowerwall#401).
+  - Solar-only gateways: `get_reserve()` returns no value instead of raising, so the poll still collects time remaining (jasonacox/pypowerwall#406).
+  - The library's protobufs are namespaced, so it can be imported in the same Python process as other Tesla protobuf libraries such as Home Assistant's Teslemetry integration (jasonacox/pypowerwall#410).
+
 ### [0.9.0] - 2026-10-04
 
 **Added:**
