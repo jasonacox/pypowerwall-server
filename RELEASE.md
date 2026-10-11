@@ -2,6 +2,11 @@
 
 ## Version History
 
+### [0.10.0] - Upcoming
+
+**Added:**
+- **Reserve hold (`reserve_hold`) — set backup reserve to the current SoC without a prior read:** `POST /control/reserve_hold` with `{}` (authenticated like the other control routes, default gateway like `reserve`) reads the SoC from a live poll and calls `set_reserve()` with the value rounded down; unknown or stale SoC fails closed with 503 (never 0). MQTT: `pypowerwall/{gw}/control/reserve_hold/set` with `{}` plus a Home Assistant `Hold Battery` button — shares Bit `1` with reserve, so anyone with that bit gets the new button on upgrade and `31` still means all. To release a hold, set the reserve back with `POST /control/reserve` or the Backup Reserve number.
+
 ### [0.9.1] - 2026-10-10
 
 **Fixed:**

@@ -95,7 +95,7 @@ All use `MQTT_` prefix (no `PW_` prefix — MQTT is not a Powerwall concept).
 | `MQTT_HA_PREFIX` | `homeassistant` | HA discovery topic prefix |
 | `MQTT_CLIENT_ID` | `pypowerwall-server` | MQTT client identifier |
 | `MQTT_KEEPALIVE` | `60` | Broker keepalive interval (seconds) |
-| `MQTT_CONTROLS` | `0` | Opt-in bitmask for Home Assistant controls (needs `PW_CONTROL_SECRET` and `MQTT_USERNAME`/`MQTT_PASSWORD`): `1` reserve, `2` mode, `4` grid_charging, `8` grid_export, `16` islanding. `15` = all but islanding, `31` = all, `0` = monitoring only. Any other value is logged as an error and treated as `0`. **Use at your own risk** (see the warning under *Control command topics*) |
+| `MQTT_CONTROLS` | `0` | Opt-in bitmask for Home Assistant controls (needs `PW_CONTROL_SECRET` and `MQTT_USERNAME`/`MQTT_PASSWORD`): `1` reserve (incl. `reserve_hold`), `2` mode, `4` grid_charging, `8` grid_export, `16` islanding. `15` = all but islanding, `31` = all, `0` = monitoring only. Any other value is logged as an error and treated as `0`. **Use at your own risk** (see the warning under *Control command topics*) |
 
 Add to `app/config.py` Settings class:
 
@@ -177,6 +177,7 @@ last retained value persists until the gateway's `availability` goes `offline`.
 | Topic | Bit | Payload | Accepted values |
 |-------|-----|---------|-----------------|
 | `{prefix}/{gw}/control/reserve/set` | `1` | `{"value": 20}` | integer `0`-`100` |
+| `{prefix}/{gw}/control/reserve_hold/set` | `1` | `{}` | Hold battery: sets reserve to live SoC (rounded down) |
 | `{prefix}/{gw}/control/mode/set` | `2` | `{"value": "self_consumption"}` | `self_consumption`, `backup`, `autonomous` |
 | `{prefix}/{gw}/control/grid_charging/set` | `4` | `{"value": true}` | `true`, `false` (JSON booleans) |
 | `{prefix}/{gw}/control/grid_export/set` | `8` | `{"value": "battery_ok"}` | `battery_ok`, `pv_only`, `never` |
@@ -189,6 +190,7 @@ How commands run:
 - **Not retained.** Publish with `retain=false` (Home Assistant does). A retained command is never replayed: after each command the server deletes any retained copy of it, and a retained command found on connect is ignored with a warning.
 - **Logged.** Every applied command is logged at INFO with gateway, control, value and connection; rejected or failed commands at WARNING.
 - **Bits off.** Turning a bit off (or controls off) removes the entity from Home Assistant on the next start.
+- **Releasing a hold.** `reserve_hold` sets the reserve once from a live poll. To release it, set the reserve back with `{prefix}/{gw}/control/reserve/set` or the Backup Reserve number. Anyone with MQTT bit `1` gets the new **Hold Battery** button on upgrade.
 - **Hybrid site.** If the Tesla account has more than one site, set `PW_SITEID` (or pick the site with `pypowerwall setup`); otherwise the hybrid cloud connection could point at another site, so MQTT controls don't use it.
 
 ### Securing the broker (required for controls)
@@ -400,6 +402,7 @@ Controls (opt-in `MQTT_CONTROLS`, use at your own risk; only enabled bits the ga
 | Entity | Bit | HA type | Options / Range | Icon |
 |--------|-----|---------|-----------------|------|
 | Backup Reserve Control | `1` | `number` | `0-100 %` `step 1` | `mdi:battery-lock` |
+| Hold Battery | `1` | `button` | `{}` presses `.../control/reserve_hold/set` | `mdi:battery-lock` |
 | Operation Mode Control | `2` | `select` | `self_consumption`, `backup`, `autonomous` | `mdi:cog` |
 | Grid Charging Control | `4` | `switch` | `ON` `{"value":true}` / `OFF` `{"value":false}` | `mdi:battery-charging-outline` |
 | Grid Export Control | `8` | `select` | `battery_ok`, `pv_only`, `never` | `mdi:transmission-tower-export` |

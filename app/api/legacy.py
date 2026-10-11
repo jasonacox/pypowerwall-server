@@ -71,6 +71,7 @@ from app.core.gateway_manager import (
     IslandingCooldownError,
     gateway_manager,
 )
+from app.core.scaling import resolve_hold_level
 from app.config import settings, SERVER_VERSION
 from app.utils.stats_tracker import stats_tracker
 
@@ -289,6 +290,10 @@ async def control_api(
     Optional companion parameters (ported from pypowerwall PR #308):
     - POST /control/reserve with mode=<mode> calls set_operation(level, mode)
     - POST /control/mode with level=<int> calls set_operation(level, mode)
+
+    Reserve hold:
+    - POST /control/reserve_hold sets backup reserve to the cached SoC
+      (takes an empty JSON object).
     """
     verify_control_token(authorization)
 
@@ -405,6 +410,31 @@ async def control_api(
                 detail="Control operation failed or gateway not available",
             )
         return result
+
+    # reserve_hold: set backup reserve to the current SoC (battery hold).
+    # Takes an empty JSON object so the strict int-only reserve
+    # validation above stays untouched. The hold level comes from
+    # resolve_hold_level (cached SoC rounded down, live poll only).
+    if path == "reserve_hold":
+        if data:
+            raise HTTPException(
+                status_code=400,
+                detail="reserve_hold requires an empty JSON object",
+            )
+        gateway_id = get_default_gateway()
+        level = resolve_hold_level(gateway_manager.get_gateway(gateway_id))
+        if level is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Battery state of charge unavailable",
+            )
+        # Reuse the plain reserve write below so a hold can never drift
+        # from how /control/reserve behaves. Log the hold explicitly so the
+        # write path logs stay attributable to reserve_hold.
+        logger.info(
+            "Control reserve_hold for %s: reserve %d", gateway_id, level
+        )
+        path, data = "reserve", {"value": level}
 
     # Map control paths to pypowerwall control methods. Used for both cloud
     # control (TEDAPI gateways with cloud credentials, hybrid mode) and local

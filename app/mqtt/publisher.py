@@ -1011,6 +1011,7 @@ class MqttPublisher:
             from app.config import MQTT_CONTROL_BITS
             from app.config import settings as _settings
             from app.core.gateway_manager import gateway_manager
+            from app.core.scaling import resolve_hold_level
 
             # {prefix}/{gateway}/control/{name}/set; the prefix may have levels
             prefix = f"{_settings.mqtt_topic_prefix}/"
@@ -1069,23 +1070,46 @@ class MqttPublisher:
                 audit = f"action={action} via local v1r"
                 ok = _island_ack_ok(result)
             else:
-                value = payload.get("value")
-                if not _CONTROL_VALUE_OK[control](value):
-                    hint = _CONTROL_VALUE_HINT[control]
-                    if (
-                        control == "reserve"
-                        and isinstance(value, float)
-                        and value.is_integer()
-                        and 0 <= value <= 100
-                    ):
-                        # 40.0 reads as 40: name the decimal point as the problem
-                        reason = (
-                            f"{value!r} has a decimal point, send {int(value)} ({hint})"
+                if control == "reserve_hold":
+                    # Battery hold: reserve = cached live SoC (see
+                    # resolve_hold_level). Takes an empty JSON object.
+                    if payload:
+                        logger.warning(
+                            f"{label} rejected: reserve_hold requires "
+                            "an empty JSON object"
                         )
-                    else:
-                        reason = f"invalid value {_short(value)} (must be {hint})"
-                    logger.warning(f"{label} rejected: {reason}")
-                    return
+                        return
+                    value = resolve_hold_level(
+                        gateway_manager.get_gateway(gateway_id)
+                    )
+                    if value is None:
+                        logger.warning(
+                            f"{label} rejected: battery state of charge "
+                            "unavailable or stale (needs a live poll)"
+                        )
+                        return
+                    method = "set_reserve"
+                else:
+                    value = payload.get("value")
+                    if not _CONTROL_VALUE_OK[control](value):
+                        hint = _CONTROL_VALUE_HINT[control]
+                        if (
+                            control == "reserve"
+                            and isinstance(value, float)
+                            and value.is_integer()
+                            and 0 <= value <= 100
+                        ):
+                            # 40.0 reads as 40: name the decimal point as the problem
+                            reason = (
+                                f"{value!r} has a decimal point, "
+                                f"send {int(value)} ({hint})"
+                            )
+                        else:
+                            reason = f"invalid value {_short(value)} (must be {hint})"
+                        logger.warning(f"{label} rejected: {reason}")
+                        return
+                    method = _CONTROL_METHODS[control]
+
                 path = _write_path(gateway_manager, gateway_id)
                 if path is None:
                     logger.warning(
@@ -1093,7 +1117,6 @@ class MqttPublisher:
                         "cloud, FleetAPI, hybrid cloud or v1r)"
                     )
                     return
-                method = _CONTROL_METHODS[control]
                 if path == "hybrid cloud":
                     result = await gateway_manager.cloud_control(
                         method, value, timeout=10.0

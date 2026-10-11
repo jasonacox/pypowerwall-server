@@ -835,6 +835,11 @@ curl -X POST http://localhost:8675/control/mode \
 curl -X POST http://localhost:8675/control/mode \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"value": "self_consumption", "level": 20}'
+
+# Hold battery: set reserve to the current SoC (no prior GET needed)
+curl -X POST http://localhost:8675/control/reserve_hold \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{}'
 ```
 
 > **Note on reserve 0:** changing the operating mode together with a reserve
