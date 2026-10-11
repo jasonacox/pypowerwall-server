@@ -1068,6 +1068,56 @@ class MqttPublisher:
                     return
                 audit = f"action={action} via local v1r"
                 ok = _island_ack_ok(result)
+            elif control == "reserve_hold":
+                # Battery hold: reserve = cached SoC. Takes an empty JSON
+                # object; anything else is rejected below.
+                if payload:
+                    logger.warning(
+                        f"{label} rejected: reserve_hold requires "
+                        "an empty JSON object"
+                    )
+                    return
+                hold_status = gateway_manager.get_gateway(gateway_id)
+                hold_soe = (
+                    hold_status.data.soe
+                    if hold_status
+                    and hold_status.data
+                    and hold_status.data.soe is not None
+                    else None
+                )
+                if hold_soe is None:
+                    logger.warning(
+                        f"{label} rejected: battery state of charge "
+                        "unavailable"
+                    )
+                    return
+                try:
+                    hold_level = max(0, min(100, int(round(float(hold_soe)))))
+                except (TypeError, ValueError, OverflowError):
+                    logger.warning(
+                        f"{label} rejected: bad SoC {_short(hold_soe)}"
+                    )
+                    return
+                path = _write_path(gateway_manager, gateway_id)
+                if path is None:
+                    logger.warning(
+                        f"{label} rejected: this gateway can't write it (needs "
+                        "cloud, FleetAPI, hybrid cloud or v1r)"
+                    )
+                    return
+                if path == "hybrid cloud":
+                    result = await gateway_manager.cloud_control(
+                        "set_reserve", hold_level, timeout=10.0
+                    )
+                else:
+                    result = await gateway_manager.local_control(
+                        gateway_id, "set_reserve", hold_level, timeout=10.0
+                    )
+                audit = (
+                    f"reserve={hold_level} (SoC {float(hold_soe):.1f}) "
+                    f"via {path}"
+                )
+                ok = result is not None and not _is_error_result(result)
             else:
                 value = payload.get("value")
                 if not _CONTROL_VALUE_OK[control](value):

@@ -81,6 +81,7 @@ Controls (MQTT_CONTROLS bitmask + PW_CONTROL_SECRET set, broker-trust;
 only bits in the mask are announced — 1 reserve, 2 mode, 4 grid_charging,
 8 grid_export, 16 islanding):
     reserve       — number 0-100 % (state reserve)
+    reserve_hold  — button "Hold Battery" (reserve = cached SoC; bit 1, like reserve)
     mode          — select [self_consumption, backup, autonomous] (state mode)
     grid_charging — switch (state grid_charging)
     grid_export   — select [battery_ok, pv_only, never] (state grid_export)
@@ -229,6 +230,7 @@ def is_v1r_gateway(gateway: Any, data: Any) -> bool:
 # the ones it doesn't announce, so turning a bit off removes the entity.
 CONTROL_ENTITIES = (
     ("number", "reserve_control"),
+    ("button", "reserve_hold"),
     ("select", "mode_control"),
     ("switch", "grid_charging_control"),
     ("select", "grid_export_control"),
@@ -729,6 +731,14 @@ def build_discovery_payloads(
                     unit="%",
                     icon="mdi:battery-lock",
                     min_val=0, max_val=100, step=1,
+                )
+            )
+            results.append(
+                button(
+                    "reserve_hold", "Hold Battery",
+                    f"{data_prefix}/control/reserve_hold/set",
+                    "{}",
+                    icon="mdi:battery-lock",
                 )
             )
         if (controls & MQTT_CONTROL_MODE) and writable:

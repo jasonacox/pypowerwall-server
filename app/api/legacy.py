@@ -289,6 +289,10 @@ async def control_api(
     Optional companion parameters (ported from pypowerwall PR #308):
     - POST /control/reserve with mode=<mode> calls set_operation(level, mode)
     - POST /control/mode with level=<int> calls set_operation(level, mode)
+
+    Reserve hold:
+    - POST /control/reserve_hold sets backup reserve to the cached SoC
+      (takes an empty JSON object).
     """
     verify_control_token(authorization)
 
@@ -398,6 +402,57 @@ async def control_api(
         gateway_id = get_default_gateway()
         result = await gateway_manager.local_control(
             gateway_id, "set_operation", level_val, mode, timeout=10.0
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Control operation failed or gateway not available",
+            )
+        return result
+
+    # reserve_hold: set backup reserve to the current SoC (battery hold).
+    # Takes an empty JSON object so the strict int-only reserve
+    # validation above stays untouched. The SoC comes from the poll cache;
+    # a missing SoC fails closed with 503 (never 0). Routing mirrors plain
+    # /control/reserve: shared cloud connection when configured, else the
+    # default gateway's local connection (no cross-fallback).
+    if path == "reserve_hold":
+        if data:
+            raise HTTPException(
+                status_code=400,
+                detail="reserve_hold requires an empty JSON object",
+            )
+        gateway_id = get_default_gateway()
+        status = gateway_manager.get_gateway(gateway_id)
+        soe = (
+            status.data.soe
+            if status and status.data and status.data.soe is not None
+            else None
+        )
+        if soe is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Battery state of charge unavailable",
+            )
+        try:
+            level = max(0, min(100, int(round(float(soe)))))
+        except (TypeError, ValueError, OverflowError):
+            raise HTTPException(
+                status_code=503,
+                detail="Battery state of charge unavailable",
+            )
+        if gateway_manager._cloud_control:
+            result = await gateway_manager.cloud_control(
+                "set_reserve", level, timeout=10.0
+            )
+            if result is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Control operation failed via cloud",
+                )
+            return result
+        result = await gateway_manager.local_control(
+            gateway_id, "set_reserve", level, timeout=10.0
         )
         if result is None:
             raise HTTPException(

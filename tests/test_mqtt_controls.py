@@ -35,7 +35,13 @@ GATEWAYS = {
     "v1r": ({"host": "10.0.0.3", "rsa_key_configured": True}, "v1r"),
     "full": ({"host": "10.0.0.4"}, "full"),
 }
-VALUE_CONTROLS = ["grid_charging_control", "grid_export_control", "mode_control", "reserve_control"]
+VALUE_CONTROLS = [
+    "grid_charging_control",
+    "grid_export_control",
+    "mode_control",
+    "reserve_control",
+    "reserve_hold",
+]
 ISLANDING = ["go_off_grid", "reconnect_grid"]
 
 
@@ -185,7 +191,7 @@ def test_discovery_follows_bits_and_capability():
     assert _announced(controls=15, writable=True, is_v1r=True) == VALUE_CONTROLS
     # Value controls need a gateway that can write them
     assert _announced(controls=31, writable=False, is_v1r=False) == []
-    assert _announced(controls=1, writable=True) == ["reserve_control"]
+    assert _announced(controls=1, writable=True) == ["reserve_control", "reserve_hold"]
     assert _announced(controls=2, writable=True) == ["mode_control"]
     assert _announced(controls=4, writable=True) == ["grid_charging_control"]
     assert _announced(controls=8, writable=True) == ["grid_export_control"]

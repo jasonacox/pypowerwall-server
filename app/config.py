@@ -218,12 +218,16 @@ MQTT_CONTROL_ISLANDING = 16
 MQTT_CONTROLS_ALL = 31
 MQTT_CONTROL_BITS = {
     "reserve": MQTT_CONTROL_RESERVE,
+    "reserve_hold": MQTT_CONTROL_RESERVE,
     "mode": MQTT_CONTROL_MODE,
     "grid_charging": MQTT_CONTROL_GRID_CHARGING,
     "grid_export": MQTT_CONTROL_GRID_EXPORT,
     "islanding": MQTT_CONTROL_ISLANDING,
 }
-_MQTT_CONTROL_NAMES = {bit: name for name, bit in MQTT_CONTROL_BITS.items()}
+# reserve_hold shares Bit 1; Bit 1 logs as "reserve".
+_MQTT_CONTROL_NAMES = {
+    bit: name for name, bit in MQTT_CONTROL_BITS.items() if name != "reserve_hold"
+}
 
 
 class GatewayConfig(BaseModel):
