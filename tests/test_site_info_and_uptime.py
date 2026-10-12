@@ -82,7 +82,7 @@ async def test_poller_keeps_last_good_site_info(mock_gateway_manager, mock_pypow
 
 def test_console_shows_three_dates_only_when_known(client):
     # Installed, Commissioned, Restarted: date only, hidden until /api/status
-    # reports them; uptime is the Restarted tile's hover text
+    # reports them; Restarted's hover shows the exact start time
     page = client.get("/console").text
     order = [page.index(f'id="{item}" style="display:none"')
              for item in ("installed-item", "commissioned-item", "restarted-item")]
@@ -90,8 +90,15 @@ def test_console_shows_three_dates_only_when_known(client):
     for label in ("Installed", "Commissioned", "Restarted"):
         assert f'<div class="health-label">{label}</div>' in page
     assert "['start_time', 'restarted']]" in page
-    assert "(up ${formatTimedelta(upSecs)})" in page
-    assert "Gateway Uptime" not in page
+
+
+def test_console_gateway_uptime_tile_hidden_until_known(client):
+    page = client.get("/console").text
+    assert re.search(r'<div class="health-item" id="gateway-uptime-item" style="display:none">', page)
+    assert '<div class="health-label">Gateway Uptime</div>' in page
+    # beside Server Uptime
+    assert page.index('id="server-uptime"') < page.index('id="gateway-uptime-item"')
+    assert "const upSecs = parseGoDuration(sData.up_time_seconds);" in page
 
 
 def test_api_status_passes_through_the_date_key(client, connected_gateway):

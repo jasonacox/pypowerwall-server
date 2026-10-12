@@ -1864,6 +1864,10 @@
                         <div class="health-label">Server Uptime</div>
                         <div class="health-value" id="server-uptime">--</div>
                     </div>
+                    <div class="health-item" id="gateway-uptime-item" style="display:none">
+                        <div class="health-label">Gateway Uptime</div>
+                        <div class="health-value" id="gateway-uptime">--</div>
+                    </div>
                     <div class="health-item" id="installed-item" style="display:none">
                         <div class="health-label">Installed</div>
                         <div class="health-value" id="installed-date">--</div>
@@ -2965,9 +2969,9 @@
                     console.log('Firmware version not available:', e.message);
                 }
 
-                // Installed (cloud/FleetAPI), Commissioned (TEDAPI) and Restarted
-                // (when the gateway last started; TEDAPI with a Backup Gateway) from
-                // /api/status, date only, each shown only when reported
+                // Gateway uptime, and the Installed (cloud/FleetAPI), Commissioned
+                // (TEDAPI) and Restarted (TEDAPI with a Backup Gateway) dates, date
+                // only, from /api/status; each shown only when reported
                 try {
                     const sResponse = await fetch('/api/status');
                     if (sResponse.ok) {
@@ -2979,9 +2983,11 @@
                             document.getElementById(`${id}-date`).textContent = date || '--';
                             document.getElementById(`${id}-item`).style.display = date ? '' : 'none';
                         }
+                        document.getElementById('restarted-item').title = sData.start_time || '';
+                        // Gateway uptime, shown only when reported
                         const upSecs = parseGoDuration(sData.up_time_seconds);
-                        document.getElementById('restarted-item').title = upSecs !== null
-                            ? `${sData.start_time} (up ${formatTimedelta(upSecs)})` : '';
+                        document.getElementById('gateway-uptime').textContent = upSecs !== null ? formatTimedelta(upSecs) : '--';
+                        document.getElementById('gateway-uptime-item').style.display = upSecs !== null ? '' : 'none';
                     }
                 } catch (e) {
                     console.log('Gateway dates not available:', e.message);

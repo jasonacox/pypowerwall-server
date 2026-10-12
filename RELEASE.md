@@ -5,7 +5,7 @@
 ### [0.9.2] - Upcoming
 
 **Added:**
-- **Installed, Commissioned and Restarted dates on the Console** — the System Health card shows when the system was installed (cloud/FleetAPI), when the batteries were commissioned (TEDAPI) and when the gateway last restarted (TEDAPI with a Backup Gateway), as plain dates; hover over Restarted for the exact time and the uptime. Each appears only when the gateway reports it. `/api/status` passes through the library's `battery_commission_date` / `installation_date`.
+- **Gateway uptime and Installed, Commissioned and Restarted dates on the Console** — the System Health card shows the gateway's uptime next to the server's, and when the system was installed (cloud/FleetAPI), the batteries commissioned (TEDAPI) and the gateway last restarted (TEDAPI with a Backup Gateway), as plain dates (hover over Restarted for the exact time). Each appears only when the gateway reports it. `/api/status` passes through the library's `battery_commission_date` / `installation_date`.
 
 **Fixed:**
 - **`/api/site_info` returns real values** — it was built from `/api/system_status` keys that don't exist there, so energy/power ratings, meter limits, panel current and the grid code were always `null`, and the timezone came from the server's settings. It now returns pypowerwall's `/api/site_info` (the gateway's own response, or built from its config), refreshed every 5 minutes, falling back to the old response when that isn't available.
