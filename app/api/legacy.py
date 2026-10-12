@@ -1462,7 +1462,7 @@ async def get_api_status():
         if status.data.status and isinstance(status.data.status, dict):
             up_time_seconds = status.data.status.get("up_time_seconds")
         
-        return {
+        response = {
             "din": din or status.data.din,
             "start_time": start_time,
             "up_time_seconds": up_time_seconds,
@@ -1476,6 +1476,13 @@ async def get_api_status():
             "cellular_disabled": status.data.status.get("cellular_disabled", False) if status.data.status and isinstance(status.data.status, dict) else False,
             "can_reboot": status.data.status.get("can_reboot", True) if status.data.status and isinstance(status.data.status, dict) else True,
         }
+        # pypowerwall >= 0.20.0: the date it has, under its own name
+        # (battery_commission_date in TEDAPI mode, installation_date in cloud/FleetAPI)
+        if isinstance(status.data.status, dict):
+            for key in ("battery_commission_date", "installation_date"):
+                if key in status.data.status:
+                    response[key] = status.data.status[key]
+        return response
 
     return {
         "din": None,
@@ -1499,6 +1506,11 @@ async def get_api_site_info():
     """Get site info - API format (legacy proxy endpoint)."""
     gateway_id = get_default_gateway()
     status = gateway_manager.get_gateway(gateway_id)
+
+    # pypowerwall's /api/site_info (polled every few minutes) is the gateway's own
+    # response, or built from its config in TEDAPI/cloud/FleetAPI mode
+    if status and status.data and isinstance(status.data.site_info, dict):
+        return status.data.site_info
 
     site_name = None
     timezone = None

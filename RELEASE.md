@@ -2,6 +2,21 @@
 
 ## Version History
 
+### [0.9.2] - Upcoming
+
+**Added:**
+- **Installed, Commissioned and Restarted dates on the Console** — the System Health card shows when the system was installed (cloud/FleetAPI), when the batteries were commissioned (TEDAPI) and when the gateway last restarted (TEDAPI with a Backup Gateway), as plain dates; hover over Restarted for the exact time and the uptime. Each appears only when the gateway reports it. `/api/status` passes through the library's `battery_commission_date` / `installation_date`.
+
+**Fixed:**
+- **`/api/site_info` returns real values** — it was built from `/api/system_status` keys that don't exist there, so energy/power ratings, meter limits, panel current and the grid code were always `null`, and the timezone came from the server's settings. It now returns pypowerwall's `/api/site_info` (the gateway's own response, or built from its config), refreshed every 5 minutes, falling back to the old response when that isn't available.
+
+**Changed:**
+- **pypowerwall upgraded to 0.20.0** (from 0.19.0; `requirements.txt` pin and `pyproject.toml` minimum). Library changes that reach server users:
+  - Powerwall 3 battery health in vitals: lifetime kWh discharged, capacity average, cycle counters, and rapid-shutdown and battery-aggregate detail (jasonacox/pypowerwall#421).
+  - `/api/status` `start_time` and `up_time_seconds` now say when the gateway last started (TEDAPI sites with a Backup Gateway), or `null` where that isn't known; `git_hash` is filled (jasonacox/pypowerwall#419).
+  - TEDAPI `/api/site_info` is filled (jasonacox/pypowerwall#420), and `/vitals` PVAC blocks no longer pick up `PVS_String*_Connected` after a `/strings` call (jasonacox/pypowerwall#414).
+  - Interactive Tesla login and Fleet API setup no longer print tokens to the console (jasonacox/pypowerwall#417).
+
 ### [0.9.1] - 2026-10-10
 
 **Fixed:**

@@ -154,6 +154,7 @@ class PowerwallData(BaseModel):
     status: Optional[Union[str, Dict[str, Any]]] = None  # Status string or full status dict
     device_type: Optional[str] = None
     site_name: Optional[str] = None  # Site name from Powerwall
+    site_info: Optional[Dict[str, Any]] = None  # /api/site_info from pypowerwall
     mode: Optional[str] = None  # Operation mode: "self_consumption", "backup", "autonomous" (time-based)
     # Grid charging enabled (None = unavailable, e.g. TEDAPI-only
     # without cloud).
