@@ -152,6 +152,9 @@ Base path: `{MQTT_TOPIC_PREFIX}/{gateway_id}/`
 | `pypowerwall/{gw}/reserve` | `20.0` | `%` |
 | `pypowerwall/{gw}/total_capacity` | `13500` | `Wh` (total battery capacity) |
 | `pypowerwall/{gw}/current_charge` | `11547` | `Wh` (current battery charge) |
+| `pypowerwall/{gw}/batteries/{n}/capacity` | `13500` | `Wh` (battery *n* capacity, gateway block order) |
+| `pypowerwall/{gw}/batteries/{n}/charge` | `11547` | `Wh` (battery *n* current charge) |
+| `pypowerwall/{gw}/batteries` | `[{"capacity":...,"charge":...}]` | per-battery capacity/charge JSON |
 | `pypowerwall/{gw}/grid_connected` | `true` or `false` | — (true when `grid_status`==`UP`) |
 | `pypowerwall/{gw}/grid_charging` | `true` or `false` | — (grid charging allowed) |
 | `pypowerwall/{gw}/grid_export` | `battery_ok`/`pv_only`/`never` | — (grid export policy) |

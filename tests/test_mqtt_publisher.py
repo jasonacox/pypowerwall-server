@@ -22,6 +22,7 @@ import pytest
 from app.models.gateway import Gateway, GatewayStatus, PowerwallData
 from app.mqtt.publisher import (
     MqttPublisher,
+    _extract_battery_blocks,
     _extract_battery_energy,
     _extract_energy,
     _extract_power,
@@ -84,6 +85,20 @@ def _status_with_battery_energy() -> GatewayStatus:
     return status
 
 
+def _status_with_battery_blocks() -> GatewayStatus:
+    """Build a status with per-battery blocks and no top-level totals."""
+    status = make_status()
+    status.data.system_status = {
+        "nominal_full_pack_energy": 27_000,
+        "nominal_energy_remaining": 23_094,
+        "battery_blocks": [
+            {"nominal_full_pack_energy": 13_500, "nominal_energy_remaining": 11_547},
+            {"nominal_full_pack_energy": 13_500, "nominal_energy_remaining": 11_547},
+        ],
+    }
+    return status
+
+
 # ---------------------------------------------------------------------------
 # _extract_power unit tests (pure function — no async needed)
 # ---------------------------------------------------------------------------
@@ -132,6 +147,49 @@ class TestExtractBatteryEnergy:
     def test_missing_or_invalid_values(self):
         assert _extract_battery_energy({}, "nominal_full_pack_energy") is None
         assert _extract_battery_energy(None, "nominal_full_pack_energy") is None
+
+
+class TestExtractBatteryBlocks:
+    def test_per_block_values(self):
+        status = {
+            "battery_blocks": [
+                {"nominal_full_pack_energy": 13_500, "nominal_energy_remaining": 11_547},
+                {"nominal_full_pack_energy": 13_500, "nominal_energy_remaining": 11_000},
+            ]
+        }
+        blocks = _extract_battery_blocks(status)
+        assert len(blocks) == 2
+        assert blocks[0] == {"index": 1, "capacity": 13_500.0, "charge": 11_547.0}
+        assert blocks[1] == {"index": 2, "capacity": 13_500.0, "charge": 11_000.0}
+
+    def test_partial_block_included(self):
+        status = {"battery_blocks": [{"nominal_energy_remaining": 9_000}]}
+        assert _extract_battery_blocks(status) == [
+            {"index": 1, "capacity": None, "charge": 9_000.0}
+        ]
+
+    def test_blocks_with_no_values_skipped(self):
+        status = {"battery_blocks": [{"pin": 5}, {"nominal_full_pack_energy": 100}]}
+        assert _extract_battery_blocks(status) == [
+            {"index": 2, "capacity": 100.0, "charge": None}
+        ]
+
+    def test_block_numbering_preserved_when_a_block_goes_silent(self):
+        """A block that reports neither value must not renumber the rest."""
+        status = {
+            "battery_blocks": [
+                {"nominal_full_pack_energy": 13_500, "nominal_energy_remaining": 11_547},
+                {"pin": 5},  # block 2 temporarily silent
+                {"nominal_full_pack_energy": 13_500, "nominal_energy_remaining": 11_000},
+            ]
+        }
+        blocks = _extract_battery_blocks(status)
+        assert [b["index"] for b in blocks] == [1, 3]
+
+    def test_missing_or_invalid(self):
+        assert _extract_battery_blocks({}) == []
+        assert _extract_battery_blocks(None) == []
+        assert _extract_battery_blocks({"battery_blocks": "nope"}) == []
         assert _extract_battery_energy(
             {"nominal_full_pack_energy": "bad"},
             "nominal_full_pack_energy",
@@ -308,6 +366,52 @@ class TestMqttPublisherEnabled:
         summary = json.loads(published["pypowerwall/test-gw/status"])
         assert summary["total_capacity"] == 13_500.0
         assert summary["current_charge"] == 11_547.0
+
+    @pytest.mark.asyncio
+    async def test_per_battery_topics_published(self, monkeypatch):
+        """Each battery block gets its own capacity and charge topic."""
+        pub = self._make_publisher(monkeypatch)
+        mock_client = AsyncMock()
+        pub._client = mock_client
+        pub._connected = True
+
+        await pub.publish_gateway("test-gw", _status_with_battery_blocks())
+
+        published = {c.args[0]: c.args[1] for c in mock_client.publish.call_args_list}
+        assert published["pypowerwall/test-gw/batteries/1/capacity"] == "13500"
+        assert published["pypowerwall/test-gw/batteries/1/charge"] == "11547"
+        assert published["pypowerwall/test-gw/batteries/2/capacity"] == "13500"
+        assert published["pypowerwall/test-gw/batteries/2/charge"] == "11547"
+
+    @pytest.mark.asyncio
+    async def test_per_battery_json_and_summary(self, monkeypatch):
+        """The batteries JSON topic and status summary carry per-block data."""
+        pub = self._make_publisher(monkeypatch)
+        mock_client = AsyncMock()
+        pub._client = mock_client
+        pub._connected = True
+
+        await pub.publish_gateway("test-gw", _status_with_battery_blocks())
+
+        published = {c.args[0]: c.args[1] for c in mock_client.publish.call_args_list}
+        blocks = json.loads(published["pypowerwall/test-gw/batteries"])
+        assert len(blocks) == 2
+        assert blocks[0]["capacity"] == 13_500.0
+        summary = json.loads(published["pypowerwall/test-gw/status"])
+        assert summary["batteries"][1]["charge"] == 11_547.0
+
+    @pytest.mark.asyncio
+    async def test_no_battery_blocks_publishes_nothing_extra(self, monkeypatch):
+        """Gateways without per-block data publish no battery topics."""
+        pub = self._make_publisher(monkeypatch)
+        mock_client = AsyncMock()
+        pub._client = mock_client
+        pub._connected = True
+
+        await pub.publish_gateway("test-gw", make_status())
+
+        topics = {c.args[0] for c in mock_client.publish.call_args_list}
+        assert not any("/batteries" in t for t in topics)
 
     @pytest.mark.asyncio
     async def test_status_summary_json_topic_published(self, monkeypatch):

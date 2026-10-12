@@ -251,6 +251,7 @@ def discovery_signature(
     strings: Optional[Dict[str, Any]],
     vitals: Optional[Dict[str, Any]],
     device_signals: Optional[Dict[str, Dict[str, float]]] = None,
+    batteries: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> frozenset:
     """The optional (data-dependent) entities a snapshot would announce.
 
@@ -260,6 +261,9 @@ def discovery_signature(
     a later poll (e.g. after the first poll's vitals timed out) still gets
     discovered. device_signals is extract_unit_signals(vitals, fan_speeds),
     computed once per poll and shared with discovery and publishing.
+    batteries is _extract_battery_blocks(system_status): per-battery
+    capacity/charge metrics join the signature so late-arriving battery
+    blocks are announced without waiting for a broker reconnect.
     """
     signature = set()
     if isinstance(strings, dict):
@@ -268,6 +272,10 @@ def discovery_signature(
         signature.update(("remote_meter", din, ct) for ct in cts)
     for serial, signals in (device_signals or {}).items():
         signature.update(("device", serial, metric) for metric in signals)
+    for batt in batteries or []:
+        for metric in ("capacity", "charge"):
+            if batt.get(metric) is not None:
+                signature.add(("battery", batt["index"], metric))
     return frozenset(signature)
 
 
@@ -291,6 +299,7 @@ def build_discovery_payloads(
     string_ids: Optional[Sequence[str]] = None,
     remote_meters: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None,
     device_signals: Optional[Dict[str, Dict[str, Any]]] = None,
+    batteries: Optional[Sequence[Dict[str, Any]]] = None,
     controls: int = 0,
     writable: bool = False,
     is_v1r: bool = False,
@@ -317,6 +326,13 @@ def build_discovery_payloads(
                        get_fan_speeds()) - {serial: {metric_id: value}}.  When
                        provided, per-unit temperature and fan sensors are
                        added so HA auto-discovers them.
+        batteries:      Per-battery blocks from the cached system status
+                       (publisher._extract_battery_blocks()): [{"index": n,
+                       "capacity": Wh|None, "charge": Wh|None}].  For each
+                       metric a block reports, a Home Assistant sensor (Wh)
+                       is added so individual battery degradation can be
+                       tracked; metrics the gateway doesn't report get no
+                       entity, matching the topics actually published.
         controls:  MQTT_CONTROLS bitmask: only entities whose bit is set are
                    added (0 = monitoring only).
         writable:  The gateway can write reserve, mode and grid settings (cloud,
@@ -898,6 +914,31 @@ def build_discovery_payloads(
                             entity_category="diagnostic",
                         )
                     )
+
+    # --- Per-battery capacity sensors (degradation tracking) ---
+    for batt in batteries or []:
+        i = batt["index"]
+        b_prefix = f"{data_prefix}/batteries/{i}"
+        if batt.get("capacity") is not None:
+            results.append(sensor(
+                f"battery_{i}_capacity",
+                f"Battery {i} Capacity",
+                f"{b_prefix}/capacity",
+                unit="Wh",
+                device_class="energy_storage",
+                state_class="measurement",
+                icon="mdi:battery-high",
+            ))
+        if batt.get("charge") is not None:
+            results.append(sensor(
+                f"battery_{i}_charge",
+                f"Battery {i} Charge",
+                f"{b_prefix}/charge",
+                unit="Wh",
+                device_class="energy_storage",
+                state_class="measurement",
+                icon="mdi:battery-medium",
+            ))
 
     # --- Per-unit device sensors (Powerwall temperatures and fans) ---
     if device_signals:

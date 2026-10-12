@@ -1864,6 +1864,22 @@
                         <div class="health-label">Server Uptime</div>
                         <div class="health-value" id="server-uptime">--</div>
                     </div>
+                    <div class="health-item" id="gateway-uptime-item" style="display:none">
+                        <div class="health-label">Gateway Uptime</div>
+                        <div class="health-value" id="gateway-uptime">--</div>
+                    </div>
+                    <div class="health-item" id="installed-item" style="display:none">
+                        <div class="health-label">Installed</div>
+                        <div class="health-value" id="installed-date" style="white-space:nowrap">--</div>
+                    </div>
+                    <div class="health-item" id="commissioned-item" style="display:none">
+                        <div class="health-label">Commissioned</div>
+                        <div class="health-value" id="commissioned-date" style="white-space:nowrap">--</div>
+                    </div>
+                    <div class="health-item" id="restarted-item" style="display:none">
+                        <div class="health-label">Restarted</div>
+                        <div class="health-value" id="restarted-date" style="white-space:nowrap">--</div>
+                    </div>
                     <div class="health-item">
                         <div class="health-label">Requests</div>
                         <div class="health-value" id="server-calls">--</div>
@@ -2307,6 +2323,31 @@
             connectWebSocket();
         });
         
+        // Go duration ("398h29m44.192s", as /api/status reports up_time_seconds)
+        // to seconds, or null for anything else (including null)
+        function parseGoDuration(text) {
+            if (typeof text !== 'string' || !text) return null;
+            const m = text.match(/^(?:(\d+)h)?(?:(\d+)m(?!s))?(?:(\d+(?:\.\d+)?)s)?$/);
+            if (!m || (m[1] === undefined && m[2] === undefined && m[3] === undefined)) return null;
+            return Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0);
+        }
+
+        // "2025-12-15T15:48:57-08:00" or "2026-09-24 21:28:16 -0700" -> the date part
+        // (the site's local date), or null
+        function isoDate(text) {
+            const m = typeof text === 'string' ? text.match(/^(\d{4}-\d{2}-\d{2})/) : null;
+            return m ? m[1] : null;
+        }
+
+        // Seconds in the "16 days, 18:42:33" style Server Uptime uses
+        function formatTimedelta(totalSeconds) {
+            const secs = Math.floor(totalSeconds);
+            const days = Math.floor(secs / 86400);
+            const rest = secs % 86400;
+            const hms = `${Math.floor(rest / 3600)}:${String(Math.floor(rest % 3600 / 60)).padStart(2, '0')}:${String(rest % 60).padStart(2, '0')}`;
+            return days ? `${days} day${days === 1 ? '' : 's'}, ${hms}` : hms;
+        }
+
         function formatPower(watts) {
             const kw = watts / 1000;
             return kw.toFixed(2);
@@ -2926,6 +2967,30 @@
                     }
                 } catch (e) {
                     console.log('Firmware version not available:', e.message);
+                }
+
+                // Gateway uptime, and the Installed (cloud/FleetAPI), Commissioned
+                // (TEDAPI) and Restarted (TEDAPI with a Backup Gateway) dates, date
+                // only, from /api/status; each shown only when reported
+                try {
+                    const sResponse = await fetch('/api/status');
+                    if (sResponse.ok) {
+                        const sData = await sResponse.json();
+                        for (const [key, id] of [['installation_date', 'installed'],
+                                                 ['battery_commission_date', 'commissioned'],
+                                                 ['start_time', 'restarted']]) {
+                            const date = isoDate(sData[key]);
+                            document.getElementById(`${id}-date`).textContent = date || '--';
+                            document.getElementById(`${id}-item`).style.display = date ? '' : 'none';
+                        }
+                        document.getElementById('restarted-item').title = sData.start_time || '';
+                        // Gateway uptime, shown only when reported
+                        const upSecs = parseGoDuration(sData.up_time_seconds);
+                        document.getElementById('gateway-uptime').textContent = upSecs !== null ? formatTimedelta(upSecs) : '--';
+                        document.getElementById('gateway-uptime-item').style.display = upSecs !== null ? '' : 'none';
+                    }
+                } catch (e) {
+                    console.log('Gateway dates not available:', e.message);
                 }
             } catch (e) {
                 controlIslandingAvailable = false;

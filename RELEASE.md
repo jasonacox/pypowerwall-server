@@ -6,6 +6,18 @@
 
 **Added:**
 - **Reserve hold (`reserve_hold`) — set backup reserve to the current SoC without a prior read:** `POST /control/reserve_hold` with `{}` (authenticated like the other control routes, default gateway like `reserve`) reads the SoC from a live poll and calls `set_reserve()` with the value rounded down; unknown or stale SoC fails closed with 503 (never 0). MQTT: `pypowerwall/{gw}/control/reserve_hold/set` with `{}` plus a Home Assistant `Hold Battery` button — shares Bit `1` with reserve, so anyone with that bit gets the new button on upgrade and `31` still means all. To release a hold, set the reserve back with `POST /control/reserve` or the Backup Reserve number.
+- **MQTT: per-battery capacity and charge** — each battery block now publishes `{prefix}/{gw}/batteries/{n}/capacity` and `{prefix}/{gw}/batteries/{n}/charge` (Wh) plus a `{prefix}/{gw}/batteries` JSON summary, with matching Home Assistant sensors, so individual battery degradation can be tracked instead of just the site aggregate. Battery numbering follows the gateway's block order and survives a block temporarily going silent, and only measurements the gateway actually reports are announced. (#150)
+- **Gateway uptime and Installed, Commissioned and Restarted dates on the Console** — the System Health card shows the gateway's uptime next to the server's, and when the system was installed (cloud/FleetAPI), the batteries commissioned (TEDAPI) and the gateway last restarted (TEDAPI with a Backup Gateway), as plain dates (hover over Restarted for the exact time). Each appears only when the gateway reports it. `/api/status` passes through the library's `battery_commission_date` / `installation_date`.
+
+**Fixed:**
+- **`/api/site_info` returns real values** — it was built from `/api/system_status` keys that don't exist there, so energy/power ratings, meter limits, panel current and the grid code were always `null`, and the timezone came from the server's settings. It now returns pypowerwall's `/api/site_info` (the gateway's own response, or built from its config), refreshed every 5 minutes, falling back to the old response when that isn't available.
+
+**Changed:**
+- **pypowerwall upgraded to 0.20.0** (from 0.19.0; `requirements.txt` pin and `pyproject.toml` minimum). Library changes that reach server users:
+  - Powerwall 3 battery health in vitals: lifetime kWh discharged, capacity average, cycle counters, and rapid-shutdown and battery-aggregate detail (jasonacox/pypowerwall#421).
+  - `/api/status` `start_time` and `up_time_seconds` now say when the gateway last started (TEDAPI sites with a Backup Gateway), or `null` where that isn't known; `git_hash` is filled (jasonacox/pypowerwall#419).
+  - TEDAPI `/api/site_info` is filled (jasonacox/pypowerwall#420), and `/vitals` PVAC blocks no longer pick up `PVS_String*_Connected` after a `/strings` call (jasonacox/pypowerwall#414).
+  - Interactive Tesla login and Fleet API setup no longer print tokens to the console (jasonacox/pypowerwall#417).
 
 ### [0.9.1] - 2026-10-10
 
