@@ -44,9 +44,9 @@ def _route_poll(mock_pypowerwall, site_info):
 
 
 def _age_site_info(gateway_id, seconds):
-    """Pretend the cached /api/site_info was fetched ``seconds`` ago."""
-    _, payload = gateway_manager._site_info[gateway_id]
-    gateway_manager._site_info[gateway_id] = (time.monotonic() - seconds, payload)
+    """Pretend the last /api/site_info fetch happened ``seconds`` ago."""
+    _, ok = gateway_manager._site_info_attempt[gateway_id]
+    gateway_manager._site_info_attempt[gateway_id] = (time.monotonic() - seconds, ok)
 
 
 @pytest.mark.asyncio
@@ -78,6 +78,22 @@ async def test_poller_keeps_last_good_site_info(mock_gateway_manager, mock_pypow
     data = await gateway_manager._fetch_gateway_data("gw", mock_pypowerwall)
     assert data.site_info == SITE_INFO
     assert answers == []  # the refresh was attempted
+
+
+@pytest.mark.asyncio
+async def test_failed_fetch_is_throttled_too(mock_gateway_manager, mock_pypowerwall):
+    # An outage must not turn into a /api/site_info request on every poll
+    gateway_manager.gateways["gw"] = Gateway(id="gw", name="GW", host="192.168.91.1", gw_pwd="secret")
+    gateway_manager.connections["gw"] = mock_pypowerwall
+    calls = _route_poll(mock_pypowerwall, lambda: None)
+
+    data = await gateway_manager._fetch_gateway_data("gw", mock_pypowerwall)
+    assert data.site_info is None
+    await gateway_manager._fetch_gateway_data("gw", mock_pypowerwall)
+    assert calls.count("/api/site_info") == 1
+    _age_site_info("gw", gateway_manager._SITE_INFO_RETRY + 1)
+    await gateway_manager._fetch_gateway_data("gw", mock_pypowerwall)
+    assert calls.count("/api/site_info") == 2
 
 
 def test_console_shows_three_dates_only_when_known(client):

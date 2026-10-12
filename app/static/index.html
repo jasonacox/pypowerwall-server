@@ -1870,15 +1870,15 @@
                     </div>
                     <div class="health-item" id="installed-item" style="display:none">
                         <div class="health-label">Installed</div>
-                        <div class="health-value" id="installed-date">--</div>
+                        <div class="health-value" id="installed-date" style="white-space:nowrap">--</div>
                     </div>
                     <div class="health-item" id="commissioned-item" style="display:none">
                         <div class="health-label">Commissioned</div>
-                        <div class="health-value" id="commissioned-date">--</div>
+                        <div class="health-value" id="commissioned-date" style="white-space:nowrap">--</div>
                     </div>
                     <div class="health-item" id="restarted-item" style="display:none">
                         <div class="health-label">Restarted</div>
-                        <div class="health-value" id="restarted-date">--</div>
+                        <div class="health-value" id="restarted-date" style="white-space:nowrap">--</div>
                     </div>
                     <div class="health-item">
                         <div class="health-label">Requests</div>
@@ -2327,7 +2327,7 @@
         // to seconds, or null for anything else (including null)
         function parseGoDuration(text) {
             if (typeof text !== 'string' || !text) return null;
-            const m = text.match(/^(?:(\d+)h)?(?:(\d+)m(?!s))?(?:([\d.]+)s)?$/);
+            const m = text.match(/^(?:(\d+)h)?(?:(\d+)m(?!s))?(?:(\d+(?:\.\d+)?)s)?$/);
             if (!m || (m[1] === undefined && m[2] === undefined && m[3] === undefined)) return null;
             return Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0);
         }

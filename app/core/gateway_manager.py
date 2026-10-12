@@ -194,8 +194,10 @@ class GatewayManager:
     # Recovery retry intervals (seconds) — exponential backoff.
     _TEDAPI_RECOVERY_INITIAL_INTERVAL = 60
     _TEDAPI_RECOVERY_MAX_INTERVAL = 300
-    # /api/site_info changes rarely; local gateways rate-limit, so refresh it at most this often
+    # /api/site_info changes rarely and local gateways rate-limit: refresh it at most
+    # this often, and retry a failed fetch no sooner than _SITE_INFO_RETRY
     _SITE_INFO_REFRESH = 300
+    _SITE_INFO_RETRY = 60
 
     def __init__(self):
         self.gateways: Dict[str, Gateway] = {}
@@ -265,8 +267,9 @@ class GatewayManager:
         # enforcement.
         self._islanding_last_dispatch: Dict[str, float] = {}
 
-        # Last good /api/site_info per gateway: (monotonic fetch time, payload)
-        self._site_info: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        # Last good /api/site_info per gateway, and (monotonic time, succeeded) of the last fetch
+        self._site_info: Dict[str, Dict[str, Any]] = {}
+        self._site_info_attempt: Dict[str, Tuple[float, bool]] = {}
 
         # Cloud connection for control operations (set_reserve, set_mode).
         # TEDAPI doesn't support POST/write APIs, so a separate cloud-mode
@@ -955,20 +958,23 @@ class GatewayManager:
                 logger.debug(f"Site name not available for {gateway_id}: {e}")
 
             # /api/site_info from the library (the gateway's own shape in every
-            # mode), refreshed every _SITE_INFO_REFRESH s; the last good copy is kept
-            cached_site_info = self._site_info.get(gateway_id)
-            if cached_site_info is None or time.monotonic() - cached_site_info[0] >= self._SITE_INFO_REFRESH:
+            # mode). Throttled whether or not the last fetch worked; the last good
+            # copy is kept.
+            attempt = self._site_info_attempt.get(gateway_id)
+            if attempt is None or time.monotonic() - attempt[0] >= (
+                    self._SITE_INFO_REFRESH if attempt[1] else self._SITE_INFO_RETRY):
+                ok = False
                 try:
                     site_info = await asyncio.wait_for(
                         loop.run_in_executor(self._executor, pw.poll, "/api/site_info"), timeout=step_timeout
                     )
                     if isinstance(site_info, dict):
-                        cached_site_info = (time.monotonic(), site_info)
-                        self._site_info[gateway_id] = cached_site_info
+                        self._site_info[gateway_id] = site_info
+                        ok = True
                 except (asyncio.TimeoutError, Exception) as e:
                     logger.debug(f"Site info not available for {gateway_id}: {e}")
-            if cached_site_info is not None:
-                data.site_info = cached_site_info[1]
+                self._site_info_attempt[gateway_id] = (time.monotonic(), ok)
+            data.site_info = self._site_info.get(gateway_id)
 
         # Cache tedapi_mode and the transport pw3 flag; pw3 itself is
         # resolved from the hardware after tedapi_config is fetched below.
