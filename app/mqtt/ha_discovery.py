@@ -90,7 +90,12 @@ Commands go to {prefix}/{gw}/control/{control}/set.
 Reserve, mode and the grid controls are announced only where the gateway can
 write them (cloud, FleetAPI, bound hybrid cloud or v1r); islanding only on v1r.
 
-All sensors share a single "Powerwall" device block so HA groups them together.
+Site-wide sensors share the single "Powerwall" gateway device block so HA
+groups them together.  Per-unit entities (per-battery capacity/charge from
+#150, per-unit temperature/fan signals) are grouped under one device per
+physical Powerwall, keyed by unit serial and linked to the gateway device
+via via_device (#153) - unique_ids are unchanged, so HA re-parents entities
+and keeps their history.
 The device model is set from PowerwallData.version when available, otherwise
 "Powerwall".
 
@@ -276,6 +281,10 @@ def discovery_signature(
         for metric in ("capacity", "charge"):
             if batt.get(metric) is not None:
                 signature.add(("battery", batt["index"], metric))
+        if batt.get("serial"):
+            # The serial moves the entity to its own unit device (#153) -
+            # a serial appearing on a later poll must re-trigger discovery.
+            signature.add(("battery_serial", batt["index"], batt["serial"]))
     return frozenset(signature)
 
 
@@ -287,6 +296,33 @@ def _device_block(gateway_id: str, gateway_name: str, version: Optional[str]) ->
         "manufacturer": "Tesla",
         "model": "Powerwall",
         "sw_version": version or "unknown",
+    }
+
+
+def _unit_device_block(
+    gateway_id: str,
+    gateway_name: str,
+    serial: str,
+    version: Optional[str],
+) -> dict:
+    """Build a per-Powerwall HA device block (one physical unit, #153).
+
+    Each unit device is keyed by its serial (never its position, which
+    shifts when blocks are added/removed), links to the gateway device via
+    via_device, and reuses _serial_slug() so the identifier matches the
+    slugs already used in per-unit entity unique_ids.  When a battery
+    block's PackageSerialNumber differs from the vitals serial for the
+    same physical unit, each serial keys its own device rather than
+    silently merging - flagged for live verification on 2x PW3 (#153).
+    """
+    slug = _serial_slug(serial)
+    return {
+        "identifiers": [f"pypowerwall_{gateway_id}_{slug}"],
+        "name": f"{gateway_name} {serial}",
+        "manufacturer": "Tesla",
+        "model": "Powerwall",
+        "sw_version": version or "unknown",
+        "via_device": f"pypowerwall_{gateway_id}",
     }
 
 
@@ -368,6 +404,7 @@ def build_discovery_payloads(
         state_class: str = "measurement",
         icon: Optional[str] = None,
         entity_category: Optional[str] = None,
+        device_override: Optional[dict] = None,
     ) -> tuple[str, str]:
         """Build a single numeric/text sensor discovery entry."""
         unique_id = f"pypowerwall_{gateway_id}_{uid_suffix}"
@@ -376,7 +413,7 @@ def build_discovery_payloads(
             "name": name,
             "unique_id": unique_id,
             "state_topic": state_topic,
-            "device": device,
+            "device": device_override or device,
             "availability": avail(),
             "availability_mode": "all",
         }
@@ -916,9 +953,17 @@ def build_discovery_payloads(
                     )
 
     # --- Per-battery capacity sensors (degradation tracking) ---
+    # unique_ids and state topics are unchanged from #150; only the device
+    # block moves (to the battery's own unit device when its serial is
+    # known), so Home Assistant re-parents the entity and keeps its history.
     for batt in batteries or []:
         i = batt["index"]
         b_prefix = f"{data_prefix}/batteries/{i}"
+        unit_device = (
+            _unit_device_block(gateway_id, gateway_name, batt["serial"], version)
+            if batt.get("serial")
+            else None
+        )
         if batt.get("capacity") is not None:
             results.append(sensor(
                 f"battery_{i}_capacity",
@@ -928,6 +973,7 @@ def build_discovery_payloads(
                 device_class="energy_storage",
                 state_class="measurement",
                 icon="mdi:battery-high",
+                device_override=unit_device,
             ))
         if batt.get("charge") is not None:
             results.append(sensor(
@@ -938,6 +984,7 @@ def build_discovery_payloads(
                 device_class="energy_storage",
                 state_class="measurement",
                 icon="mdi:battery-medium",
+                device_override=unit_device,
             ))
 
     # --- Per-unit device sensors (Powerwall temperatures and fans) ---
@@ -945,6 +992,9 @@ def build_discovery_payloads(
         devices_prefix = f"{data_prefix}/devices"
         for serial, signals in device_signals.items():
             serial_slug = _serial_slug(serial)
+            unit_device = _unit_device_block(
+                gateway_id, gateway_name, serial, version
+            )
             for metric_id, value in signals.items():
                 entry = DEVICE_METRIC_TOPICS.get(metric_id)
                 if entry is None or metric_id not in SIGNAL_METRICS:
@@ -961,6 +1011,7 @@ def build_discovery_payloads(
                         state_class="measurement",
                         icon=icon,
                         entity_category="diagnostic",
+                        device_override=unit_device,
                     )
                 )
 

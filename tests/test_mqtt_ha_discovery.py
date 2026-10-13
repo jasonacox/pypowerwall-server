@@ -362,6 +362,51 @@ class TestBuildDiscoveryPayloads:
         assert topic in payloads
         assert payloads[topic]["state_topic"] == "pypowerwall/home/batteries/2/charge"
 
+    def test_battery_sensors_grouped_under_unit_device(self):
+        """#153: a battery with a known serial gets its own device block."""
+        results = build_discovery_payloads(
+            gateway_id="home",
+            gateway_name="Home",
+            topic_prefix="pypowerwall",
+            ha_prefix="homeassistant",
+            batteries=[
+                {"index": 1, "capacity": 13_500.0, "charge": 11_547.0,
+                 "serial": "TG1234567890AB"},
+                {"index": 2, "capacity": 13_500.0, "charge": 11_000.0,
+                 "serial": None},
+            ],
+        )
+        payloads = {t: json.loads(p) for t, p in results}
+
+        b1 = payloads["homeassistant/sensor/pypowerwall_home_battery_1_capacity/config"]
+        dev = b1["device"]
+        # serial-keyed identifier, linked to the gateway device
+        assert dev["identifiers"] == ["pypowerwall_home_tg1234567890ab"]
+        assert dev["via_device"] == "pypowerwall_home"
+        assert dev["name"] == "Home TG1234567890AB"
+        # unique_id and state topic unchanged from #150 (history preserved)
+        assert b1["unique_id"] == "pypowerwall_home_battery_1_capacity"
+        assert b1["state_topic"] == "pypowerwall/home/batteries/1/capacity"
+
+        # both entities of the same battery share one device block
+        b1c = payloads["homeassistant/sensor/pypowerwall_home_battery_1_charge/config"]
+        assert b1c["device"] == dev
+
+        # unknown serial falls back to the shared gateway device
+        b2 = payloads["homeassistant/sensor/pypowerwall_home_battery_2_capacity/config"]
+        assert b2["device"]["identifiers"] == ["pypowerwall_home"]
+
+    def test_battery_serial_joins_discovery_signature(self):
+        """A serial appearing on a later poll must re-trigger discovery."""
+        base = {"index": 1, "capacity": 13_500.0, "charge": None}
+        sig_plain = discovery_signature(None, None, None, batteries=[base])
+        sig_serial = discovery_signature(
+            None, None, None, batteries=[{**base, "serial": "TG1"}]
+        )
+        assert ("battery", 1, "capacity") in sig_plain
+        assert ("battery_serial", 1, "TG1") in sig_serial
+        assert sig_serial - sig_plain == {("battery_serial", 1, "TG1")}
+
     def test_no_battery_sensors_when_none(self):
         """batteries=None (default) -> no per-battery entities."""
         results = build_discovery_payloads(
@@ -1264,6 +1309,27 @@ class TestDeviceMetricTopicsCoverage:
 class TestDiscoverySignatureDevices:
     """discovery_signature() includes per-unit device signals so late-seen
     units are discovered exactly once."""
+
+    def test_unit_signals_grouped_under_unit_device(self):
+        """#153: per-unit temperature/fan entities get a per-serial device."""
+        signals = extract_unit_signals(_DEVICE_VITALS, None)
+        results = build_discovery_payloads(
+            gateway_id="home",
+            gateway_name="Home",
+            topic_prefix="pypowerwall",
+            ha_prefix="homeassistant",
+            device_signals=signals,
+        )
+        payloads = {t: json.loads(p) for t, p in results}
+        topic = (
+            "homeassistant/sensor/"
+            "pypowerwall_home_device_tg2312h0001_pack_temp_max/config"
+        )
+        p = payloads[topic]
+        assert p["device"]["identifiers"] == ["pypowerwall_home_tg2312h0001"]
+        assert p["device"]["via_device"] == "pypowerwall_home"
+        # unique_id unchanged (per-unit entity contract from the vitals work)
+        assert p["unique_id"] == "pypowerwall_home_device_tg2312h0001_pack_temp_max"
 
     def test_device_signals_in_signature(self):
         sig = discovery_signature(

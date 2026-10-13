@@ -2,6 +2,16 @@
 
 ## Version History
 
+## Upcoming
+
+**Added:**
+- **Home Assistant: one device per Powerwall** — each battery's
+  entities (capacity, charge, per-unit temperature and fan sensors) are
+  now grouped under their own HA device keyed by serial, linked to the
+  gateway device via `via_device`. Entity `unique_id`s and state topics
+  are unchanged, so existing entities and their history re-parent in
+  place on upgrade. (#153)
+
 ### [0.10.0] - 2026-10-11
 
 **Added:**
