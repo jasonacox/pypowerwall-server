@@ -37,6 +37,7 @@ def _reset_singleton_state():
     gateway_manager._cloud_grid_export = None
     gateway_manager._cloud_grid_export_time = None
     gateway_manager._executor = None
+    gateway_manager._probe_executor = None
     gateway_manager._write_lock = asyncio.Lock()
     gateway_manager._islanding_futures.clear()
     gateway_manager._islanding_last_dispatch.clear()
@@ -57,6 +58,18 @@ def _reset_singleton_state():
     gateway_manager._fallback_state.clear()
     gateway_manager._tedapi_probe_failures.clear()
     gateway_manager._probe_tasks.clear()
+    # Task watchdog state (heartbeats plus the watchdog task itself)
+    if gateway_manager._watchdog_task is not None:
+        try:
+            gateway_manager._watchdog_task.cancel()
+        except Exception:
+            pass
+        gateway_manager._watchdog_task = None
+    gateway_manager._task_beats.clear()
+    gateway_manager._task_stale_counts.clear()
+    gateway_manager._task_last_forced.clear()
+    gateway_manager._hybrid_configs = []
+    gateway_manager._cloud_control_retry_at = float("-inf")
 
 
 @pytest.fixture(autouse=True)
