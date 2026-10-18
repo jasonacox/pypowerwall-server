@@ -477,6 +477,25 @@ account with several sites, set `PW_SITEID`.
 Physically opens or closes the grid contactor of the default gateway. It needs
 a local TEDAPI v1r connection and never uses the cloud, even in hybrid mode.
 
+> ⚠️ **WARNING — Grid island control physically operates your home's grid
+> contactor. Use with extreme care.** Going off-grid can interrupt power and
+> temporarily interrupt solar production. While islanded, Powerwall may raise
+> the home's electrical frequency to limit or stop solar production,
+> particularly when the battery is near full or available charging capacity is
+> limited. This can cause lights to flicker and affect frequency-sensitive
+> equipment.
+>
+> Your home depends on available battery and solar power while disconnected
+> from the grid; if those cannot support the load, your home can lose power. Do
+> not assume that a nearly full battery guarantees a seamless transition.
+>
+> Do not automate these commands without understanding the failure modes; test
+> only when someone is present. An acknowledgement is not confirmation that the
+> home changed grid state: check `GET /api/system_status/grid_status` after the
+> transition, allowing for the configured polling interval. After an error or
+> timeout, the outcome may be unknown and the command may still complete; do
+> not automatically retry or send the opposite command.
+
 | Body | Action |
 |------|--------|
 | `{"value": "off_grid", "confirm": true}` | Go off grid (`confirm` must be JSON `true`). |
@@ -486,9 +505,7 @@ Success is `200` with the library's response when the gateway acknowledges
 (`result: 1`). Other results: `502` not acknowledged (library response in
 `detail.response`), `503` no response or v1r unavailable, `409` a command is
 still in progress, `429` with `Retry-After` inside the `PW_ISLANDING_COOLDOWN`
-window. The cooldown counts failed and timed-out commands too. An
-acknowledgement is not proof of grid state: check
-`/api/system_status/grid_status` afterwards and don't retry automatically.
+window. The cooldown counts failed and timed-out commands too.
 
 ### Security notes
 
