@@ -67,7 +67,7 @@ import math
 import os
 import time
 from copy import deepcopy
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
@@ -194,24 +194,14 @@ class GatewayManager:
     # Recovery retry intervals (seconds) — exponential backoff.
     _TEDAPI_RECOVERY_INITIAL_INTERVAL = 60
     _TEDAPI_RECOVERY_MAX_INTERVAL = 300
-    # Task watchdog: cyclic background tasks (poll, TEDAPI probe) record a
-    # monotonic heartbeat every iteration; the watchdog checks them every
-    # _WATCHDOG_INTERVAL_S. A finished task is recreated; a live task whose
-    # heartbeat is older than its staleness limit is force-recreated
-    # (cancel + recreate) only after _WATCHDOG_FORCE_AFTER consecutive stale
-    # observations and at most once per _WATCHDOG_FORCE_COOLDOWN_S per task:
-    # a merely slow task must not be duplicated into two loops doing the
-    # same work. (A silently wedged probe task once held a gateway on cloud
-    # reads for hours after a firmware-update reboot with zero log output.)
-    _WATCHDOG_INTERVAL_S = 60
-    _WATCHDOG_POLL_STALE_S = 600
-    _WATCHDOG_PROBE_STALE_S = 900
-    _WATCHDOG_FORCE_AFTER = 3
-    _WATCHDOG_FORCE_COOLDOWN_S = 600
-    # Cloud-control re-init backoff (seconds) when the one-shot startup
-    # init failed: a dead Tesla cloud at boot must not mean permanently
-    # unavailable control.
-    _CLOUD_CONTROL_RETRY_S = 300
+    # Timeout for constructing a fresh local connection (lazy init and
+    # TEDAPI recovery share it).
+    _CONNECTION_BUILD_TIMEOUT = 15.0
+    # Cloud-control init retry backoff (seconds) when the connection could
+    # not be established at startup: a Tesla cloud that is unreachable at
+    # boot must not leave control permanently unavailable.
+    _CLOUD_CONTROL_RETRY_INITIAL = 60
+    _CLOUD_CONTROL_RETRY_MAX = 300
     # /api/site_info changes rarely and local gateways rate-limit: refresh it at most
     # this often, and retry a failed fetch no sooner than _SITE_INFO_RETRY
     _SITE_INFO_REFRESH = 300
@@ -234,13 +224,6 @@ class GatewayManager:
 
         # Background cloud-control connection task (created in initialize()).
         self._cloud_control_task: Optional[asyncio.Task] = None
-        # Hybrid configs needing that connection: retry source when the
-        # one-shot init failed (e.g. Tesla cloud down at boot).
-        self._hybrid_configs: List[GatewayConfig] = []
-        # -inf (not 0.0): on a freshly booted machine time.monotonic() is
-        # near zero, and a 0.0 default would suppress the first healing
-        # for the whole cooldown — exactly when recovery matters most.
-        self._cloud_control_retry_at: float = float("-inf")
 
         # Exponential backoff tracking per gateway
         self._consecutive_failures: Dict[str, int] = {}  # Track failure count
@@ -259,6 +242,10 @@ class GatewayManager:
         self._pending_configs: Dict[
             str, GatewayConfig
         ] = {}  # Gateways waiting for lazy initialization
+        # Original per-gateway configuration, kept for TEDAPI recovery: a
+        # replacement connection must be built exactly like startup builds
+        # the first one. (Lives on after _pending_configs is drained.)
+        self._gateway_configs: Dict[str, GatewayConfig] = {}
         self._preserve_stale_count: Dict[str, int] = {}  # Multi-PW snapshot preservation staleness tracker
         # Gateways whose current vitals were copied from the previous poll by
         # the multi-PW guard: not fresh readings, so not recorded as history.
@@ -272,22 +259,9 @@ class GatewayManager:
         self._tedapi_probe_failures: Dict[str, int] = {}
         self._probe_tasks: Dict[str, asyncio.Task] = {}  # Per-gateway TEDAPI probe tasks
 
-        # Task-liveness watchdog: last monotonic heartbeat per cyclic task
-        # ("poll-<id>", "tedapi-probe-<id>") plus the watchdog task itself.
-        # _task_stale_counts/_task_last_forced gate forced recreation of
-        # wedged tasks (see _watch_task).
-        self._task_beats: Dict[str, float] = {}
-        self._task_stale_counts: Dict[str, int] = {}
-        self._task_last_forced: Dict[str, float] = {}
-        self._watchdog_task: Optional[asyncio.Task] = None
-
         # Dedicated thread pool for blocking pypowerwall operations
         # Will be sized during initialize() based on gateway count
         self._executor: Optional[ThreadPoolExecutor] = None
-        # Small dedicated pool for the TEDAPI probe/recovery loop: recovery
-        # must never compete with poll demand for threads — a saturated
-        # shared pool is exactly what can wedge recovery.
-        self._probe_executor: Optional[ThreadPoolExecutor] = None
 
         # Serializes concurrent write operations to prevent set_operation()
         # from reading stale cache when two control calls race.
@@ -497,9 +471,6 @@ class GatewayManager:
         logger.info(
             f"Thread pool initialized with {pool_size} workers for {num_gateways} gateway(s)"
         )
-        self._probe_executor = ThreadPoolExecutor(
-            max_workers=2, thread_name_prefix="pypowerwall-probe"
-        )
 
         for config in gateway_configs:
             try:
@@ -568,6 +539,10 @@ class GatewayManager:
                 # Store gateway - connection will be created lazily on first poll
                 self.gateways[config.id] = gateway
                 self._pending_configs[config.id] = config  # All start as pending
+                # Keep the configuration for TEDAPI recovery (see
+                # _create_local_connection): a replacement connection is
+                # built the same way the lazy init builds the first one.
+                self._gateway_configs[config.id] = config
 
                 self.cache[config.id] = GatewayStatus(
                     gateway=gateway, online=False, error="Initializing..."
@@ -614,7 +589,6 @@ class GatewayManager:
         # Hybrid configured => the cloud link exists as a tracked link even
         # while the connection itself is down (issue #87 per-link health).
         self._cloud_control_configured = bool(hybrid_configs)
-        self._hybrid_configs = list(hybrid_configs)
         if hybrid_configs:
             self._cloud_control_task = asyncio.create_task(
                 self._init_cloud_control(hybrid_configs), name="cloud-control-init"
@@ -628,11 +602,11 @@ class GatewayManager:
             self._poll_tasks[gateway_id] = asyncio.create_task(
                 self._poll_gateway_loop(gateway_id), name=f"poll-{gateway_id}"
             )
-            self._beat(f"poll-{gateway_id}")
 
         # Start TEDAPI probe/recovery tasks for TEDAPI gateways.
-        # Probes pw.version() on an interval; after N consecutive None results,
-        # enters fallback mode and attempts pw.connect() with exponential backoff.
+        # Probes pw.version() on an interval; after N consecutive failed
+        # probes (or a connection that left TEDAPI mode), enters fallback
+        # mode and recovers with a fresh connection on a backoff.
         if settings.tedapi_recovery:
             for gateway_id, gw in self.gateways.items():
                 if gw.host and not gw.cloud_mode and not gw.fleetapi:
@@ -642,7 +616,6 @@ class GatewayManager:
                         self._tedapi_probe_loop(gateway_id),
                         name=f"tedapi-probe-{gateway_id}",
                     )
-                    self._beat(f"tedapi-probe-{gateway_id}")
                     logger.info(
                         "TEDAPI probe/recovery task started for gateway %s "
                         "(interval=%ds, threshold=%d)",
@@ -650,15 +623,6 @@ class GatewayManager:
                         settings.tedapi_probe_interval,
                         self._TEDAPI_FALLBACK_THRESHOLD,
                     )
-
-        # Task watchdog: recreates dead poll/probe tasks and force-recreates
-        # persistently wedged ones (see _task_watchdog_loop). Started last
-        # so every watched task exists; stopped first in shutdown() so it
-        # cannot recreate tasks while shutting down.
-        self._watchdog_task = asyncio.create_task(
-            self._task_watchdog_loop(), name="task-watchdog"
-        )
-        logger.info("Task watchdog started (interval=%ds)", self._WATCHDOG_INTERVAL_S)
 
         if self.gateways:
             logger.info(
@@ -672,43 +636,62 @@ class GatewayManager:
         await get_timeseries_store().start()
 
     async def _init_cloud_control(self, hybrid_configs: List[GatewayConfig]):
-        """Create the hybrid cloud-control connection in the background."""
+        """Create the hybrid cloud-control connection in the background.
+
+        Retries with exponential backoff (_CLOUD_CONTROL_RETRY_INITIAL up
+        to _CLOUD_CONTROL_RETRY_MAX) while no connection exists: a Tesla
+        cloud that is unreachable at boot (or during a first-setup token
+        exchange) must not leave control permanently unavailable. Stops
+        once a connection is established; the task is cancelled at
+        shutdown.
+        """
         from app.config import settings
 
-        for config in hybrid_configs:
-            try:
-                authpath = config.authpath or settings.pw_authpath or ""
-                loop = asyncio.get_running_loop()
-                cloud_kwargs = {
-                    "email": config.email,
-                    "authpath": authpath,
-                    "cachefile": "/tmp/.powerwall.cloud",
-                    "timezone": config.timezone,
-                    "fleetapi": config.fleetapi,
-                    "auto_select": True,
-                }
-                if settings.siteid:
-                    # PW_SITEID picks the site on multi-site accounts. The
-                    # cloud client compares it with integer site ids.
-                    siteid = str(settings.siteid).strip()
-                    cloud_kwargs["siteid"] = int(siteid) if siteid.isdigit() else siteid
-                self._cloud_control = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        self._executor,
-                        lambda kw=cloud_kwargs: pypowerwall.Powerwall(**kw),
-                    ),
-                    timeout=15.0,
-                )
-                if await self._cloud_site_unambiguous(config.fleetapi):
-                    self._cloud_control_gateway_id = config.id
-                logger.info(
-                    "Cloud control connection established for write operations"
-                )
-                return  # Only need one cloud control connection
-            except Exception as e:
-                logger.warning(
-                    f"Cloud control connection failed (control will be unavailable): {e}"
-                )
+        retry_interval = self._CLOUD_CONTROL_RETRY_INITIAL
+        while self._cloud_control is None:
+            for config in hybrid_configs:
+                try:
+                    authpath = config.authpath or settings.pw_authpath or ""
+                    loop = asyncio.get_running_loop()
+                    cloud_kwargs = {
+                        "email": config.email,
+                        "authpath": authpath,
+                        "cachefile": "/tmp/.powerwall.cloud",
+                        "timezone": config.timezone,
+                        "fleetapi": config.fleetapi,
+                        "auto_select": True,
+                    }
+                    if settings.siteid:
+                        # PW_SITEID picks the site on multi-site accounts. The
+                        # cloud client compares it with integer site ids.
+                        siteid = str(settings.siteid).strip()
+                        cloud_kwargs["siteid"] = (
+                            int(siteid) if siteid.isdigit() else siteid
+                        )
+                    self._cloud_control = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            self._executor,
+                            lambda kw=cloud_kwargs: pypowerwall.Powerwall(**kw),
+                        ),
+                        timeout=15.0,
+                    )
+                    if await self._cloud_site_unambiguous(config.fleetapi):
+                        self._cloud_control_gateway_id = config.id
+                    logger.info(
+                        "Cloud control connection established for write operations"
+                    )
+                    return  # Only need one cloud control connection
+                except Exception as e:
+                    logger.warning(
+                        "Cloud control connection failed "
+                        "(will retry in %.0fs): %s",
+                        retry_interval,
+                        e,
+                    )
+            await asyncio.sleep(retry_interval)
+            retry_interval = min(
+                retry_interval * 2, self._CLOUD_CONTROL_RETRY_MAX
+            )
 
     async def _cloud_site_unambiguous(self, fleetapi: bool) -> bool:
         """True when the shared cloud connection's Tesla site is certain.
@@ -789,18 +772,6 @@ class GatewayManager:
 
     async def shutdown(self):
         """Shutdown gateway manager and cleanup resources."""
-        # Stop the watchdog first so it cannot recreate tasks while the
-        # rest is shutting down; every recreated task would leak past
-        # the gather below.
-        if self._watchdog_task:
-            self._watchdog_task.cancel()
-            try:
-                await self._watchdog_task
-            except asyncio.CancelledError:
-                pass
-            except Exception as exc:
-                logger.debug("Task watchdog shutdown error: %s", exc)
-            self._watchdog_task = None
         # Stop polling first so no new MQTT publishes are scheduled,
         # then cancel any in-flight publish tasks.
         named_tasks = [(t, f"poll-{gid}") for gid, t in self._poll_tasks.items()]
@@ -836,9 +807,6 @@ class GatewayManager:
         # Shutdown thread pool executor
         if self._executor:
             self._executor.shutdown(wait=False)
-        if self._probe_executor:
-            self._probe_executor.shutdown(wait=False)
-            self._probe_executor = None
         logger.info("Gateway manager shutdown complete")
 
     async def _poll_gateway_loop(self, gateway_id: str):
@@ -854,7 +822,6 @@ class GatewayManager:
             try:
                 loop = asyncio.get_running_loop()
                 loop_start = loop.time()
-                self._beat(f"poll-{gateway_id}")
                 await self._poll_gateway(gateway_id)
                 elapsed = loop.time() - loop_start
                 await asyncio.sleep(max(0, self._poll_interval - elapsed))
@@ -1416,45 +1383,10 @@ class GatewayManager:
                                 f"pypowerwall failed to connect to gateway {gateway_id} (cloud mode)"
                             )
                     else:
-                        # Build host string with optional non-standard port
-                        # e.g. host="192.168.1.50", port=8443 -> "192.168.1.50:8443"
-                        effective_host = (
-                            f"{config.host}:{config.port}" if config.port else config.host
-                        )
-                        tedapi_kwargs = {
-                            "host": effective_host,
-                            "gw_pwd": config.gw_pwd,
-                            "timezone": config.timezone,
-                            "timeout": settings.timeout,
-                            "poolmaxsize": settings.pool_maxsize,
-                            "pwcacheexpire": pwcacheexpire,
-                        }
-                        # Per-gateway password (PW_GATEWAYS/config file) or the
-                        # legacy PW_PASSWORD env var. Without gw_pwd/rsa_key this
-                        # selects pypowerwall's local client (PW3 Basic LAN /
-                        # PW2 local mode); alongside gw_pwd it selects hybrid.
-                        local_password = config.password or settings.pw_password
-                        if local_password:
-                            tedapi_kwargs["password"] = local_password
-                        if config.email:
-                            tedapi_kwargs["email"] = config.email
-                        if config.authpath:
-                            tedapi_kwargs["authpath"] = config.authpath
-                        if settings.cache_file:
-                            tedapi_kwargs["cachefile"] = settings.cache_file
-                        if settings.siteid:
-                            tedapi_kwargs["siteid"] = settings.siteid
-                        if config.rsa_key_path:
-                            tedapi_kwargs["rsa_key_path"] = config.rsa_key_path
-                        if config.wifi_host:
-                            tedapi_kwargs["wifi_host"] = config.wifi_host
-                        pw = await asyncio.wait_for(
-                            loop.run_in_executor(
-                                self._executor,
-                                lambda kw=tedapi_kwargs: pypowerwall.Powerwall(**kw),
-                            ),
-                            timeout=15.0,
-                        )
+                        # Same construction path as TEDAPI recovery
+                        # (_create_local_connection) so a replacement
+                        # connection is built exactly like this one.
+                        pw = await self._create_local_connection(config)
                         connected = await asyncio.wait_for(
                             loop.run_in_executor(self._executor, pw.is_connected),
                             timeout=10.0,
@@ -1890,19 +1822,97 @@ class GatewayManager:
             self._tedapi_probe_failures[gid] = 0
             logger.info("Reset fallback state for gateway %s", gid)
 
+    def _local_connection_kwargs(self, config: GatewayConfig) -> Dict[str, Any]:
+        """Keyword arguments for a local pypowerwall connection.
+
+        Shared by lazy initialization and TEDAPI recovery so a replacement
+        connection is built exactly like the one startup builds.
+        """
+        from app.config import settings
+
+        # Keep pypowerwall's internal cache alive for the whole poll cycle:
+        # with the library default of 5s, a cycle that takes longer
+        # re-fetches mid-cycle data it already has.
+        pwcacheexpire = max(5, int(self._poll_interval))
+        # Build host string with optional non-standard port
+        # e.g. host="192.168.1.50", port=8443 -> "192.168.1.50:8443"
+        effective_host = (
+            f"{config.host}:{config.port}" if config.port else config.host
+        )
+        tedapi_kwargs = {
+            "host": effective_host,
+            "gw_pwd": config.gw_pwd,
+            "timezone": config.timezone,
+            "timeout": settings.timeout,
+            "poolmaxsize": settings.pool_maxsize,
+            "pwcacheexpire": pwcacheexpire,
+        }
+        # Per-gateway password (PW_GATEWAYS/config file) or the legacy
+        # PW_PASSWORD env var. Without gw_pwd/rsa_key this selects
+        # pypowerwall's local client (PW3 Basic LAN / PW2 local mode);
+        # alongside gw_pwd it selects hybrid.
+        local_password = config.password or settings.pw_password
+        if local_password:
+            tedapi_kwargs["password"] = local_password
+        if config.email:
+            tedapi_kwargs["email"] = config.email
+        if config.authpath:
+            tedapi_kwargs["authpath"] = config.authpath
+        if settings.cache_file:
+            tedapi_kwargs["cachefile"] = settings.cache_file
+        if settings.siteid:
+            tedapi_kwargs["siteid"] = settings.siteid
+        if config.rsa_key_path:
+            tedapi_kwargs["rsa_key_path"] = config.rsa_key_path
+        if config.wifi_host:
+            tedapi_kwargs["wifi_host"] = config.wifi_host
+        return tedapi_kwargs
+
+    async def _create_local_connection(
+        self, config: GatewayConfig
+    ) -> pypowerwall.Powerwall:
+        """Create a fresh local pypowerwall connection.
+
+        The blocking constructor runs in the shared executor under
+        _CONNECTION_BUILD_TIMEOUT, same as the lazy init.  Used by the
+        lazy init and by TEDAPI recovery, so both paths build the
+        connection the same way.
+        """
+        loop = asyncio.get_running_loop()
+        tedapi_kwargs = self._local_connection_kwargs(config)
+        return await asyncio.wait_for(
+            loop.run_in_executor(
+                self._executor,
+                lambda kw=tedapi_kwargs: pypowerwall.Powerwall(**kw),
+            ),
+            timeout=self._CONNECTION_BUILD_TIMEOUT,
+        )
+
     async def _tedapi_probe_loop(self, gateway_id: str):
         """Background task: probe TEDAPI health and recover from SolarOnly fallback.
 
         Probes pw.version() every PW_TEDAPI_PROBE_INTERVAL seconds.  After
-        _TEDAPI_FALLBACK_THRESHOLD consecutive None results, enters fallback
-        mode and attempts pw.connect() with exponential backoff (60s → max 300s).
+        _TEDAPI_FALLBACK_THRESHOLD consecutive failed probes, enters fallback
+        mode and attempts recovery with exponential backoff (60s → max 300s).
         On success, exits fallback mode and resets backoff.  On failure, stays
         in SolarOnly — the gateway keeps serving whatever data is available.
 
-        Hybrid-mode note: the gate is pw.tedapi, which includes hybrid mode
-        (v1r + WiFi fallback).  In that topology pw.version() may be served by
-        the local API, so a WiFi TEDAPI outage might not be detected.  Monitoring
-        is best-effort for hybrid; pure TEDAPI mode gets full coverage.
+        The probe is driven by the gateway's configuration, not by the
+        connection's current mode: a gateway configured for local TEDAPI is
+        always probed, and a connection that is no longer in TEDAPI mode
+        (the library's failover can switch it to cloud inside a timed-out
+        connect(), #155) counts as a failed probe instead of skipping
+        silently.  Recovery builds a fresh connection the same way startup
+        does (_create_local_connection) and swaps it in only if it comes up
+        in TEDAPI mode and reports a version; the existing connection keeps
+        serving until then.  connect() on the drifted object would resume
+        from cloud mode — the library restores the configured mode only
+        when every mode fails (#366 in pypowerwall), so it can't recover.
+
+        Hybrid-mode note: a hybrid connection (v1r + WiFi fallback) has
+        pw.tedapi set, so its probes run against the local API; a WiFi
+        TEDAPI outage might not be detected.  Monitoring is best-effort for
+        hybrid; pure TEDAPI mode gets full coverage.
         """
         from app.config import settings
 
@@ -1912,16 +1922,10 @@ class GatewayManager:
         while True:
             try:
                 await asyncio.sleep(probe_interval)
-                self._beat(f"tedapi-probe-{gateway_id}")
 
                 pw = self.connections.get(gateway_id)
                 if not pw:
                     # Connection not yet established; skip probe
-                    continue
-
-                # Only probe when TEDAPI mode is active
-                if not getattr(pw, 'tedapi', None):
-                    self._tedapi_probe_failures[gateway_id] = 0
                     continue
 
                 state = self._fallback_state.get(gateway_id)
@@ -1929,13 +1933,41 @@ class GatewayManager:
                     continue
 
                 if not state["is_fallback_mode"]:
+                    # PW3 Basic LAN (host + password) has no TEDAPI client
+                    # at all, so there is nothing to probe.
+                    gateway = self.gateways.get(gateway_id)
+                    if gateway is not None and gateway.basic_lan:
+                        self._tedapi_probe_failures[gateway_id] = 0
+                        continue
+
+                    # Probe based on configuration: a connection that is no
+                    # longer in TEDAPI mode counts as a failed probe instead
+                    # of skipping silently — skipping once held a gateway on
+                    # cloud reads for hours after a firmware update (#155).
+                    if not getattr(pw, "tedapi", None):
+                        failures = self._tedapi_probe_failures.get(gateway_id, 0) + 1
+                        self._tedapi_probe_failures[gateway_id] = failures
+                        logger.warning(
+                            "TEDAPI probe for %s: connection is in %s mode, "
+                            "not TEDAPI — counting as failed probe (%d/%d)",
+                            gateway_id,
+                            getattr(pw, "mode", "unknown"),
+                            failures,
+                            self._TEDAPI_FALLBACK_THRESHOLD,
+                        )
+                        if failures >= self._TEDAPI_FALLBACK_THRESHOLD:
+                            self._enter_fallback_mode(
+                                gateway_id,
+                                "connection left TEDAPI mode "
+                                f"(mode={getattr(pw, 'mode', 'unknown')})",
+                            )
+                        continue
+
                     # Healthy path: probe TEDAPI
                     try:
                         loop = asyncio.get_running_loop()
                         version = await asyncio.wait_for(
-                            loop.run_in_executor(
-                                self._probe_executor_or_main(), pw.version
-                            ),
+                            loop.run_in_executor(self._executor, pw.version),
                             timeout=max(5.0, settings.timeout + 2.0),
                         )
                     except Exception as probe_exc:
@@ -1979,26 +2011,52 @@ class GatewayManager:
 
                     recovered = False
                     try:
-                        loop = asyncio.get_running_loop()
-                        connect_result = await asyncio.wait_for(
-                            loop.run_in_executor(
-                                self._probe_executor_or_main(),
-                                lambda: pw.connect(retry=False),
-                            ),
-                            timeout=max(15.0, settings.timeout + 5.0),
-                        )
-                        if connect_result:
+                        config = self._gateway_configs.get(gateway_id)
+                        if config is None:
+                            raise RuntimeError("no stored configuration")
+                        # Fresh connection, built the same way the lazy init
+                        # builds the first one.  connect() on the drifted
+                        # object would resume from cloud mode and cannot
+                        # recover (#155).  Swap it in only if it comes up in
+                        # TEDAPI mode and reports a version, so the current
+                        # connection keeps serving otherwise.
+                        fresh_pw = await self._create_local_connection(config)
+                        verify_version = None
+                        if getattr(fresh_pw, "tedapi", None):
+                            loop = asyncio.get_running_loop()
                             verify_version = await asyncio.wait_for(
                                 loop.run_in_executor(
-                                    self._probe_executor_or_main(), pw.version
+                                    self._executor, fresh_pw.version
                                 ),
                                 timeout=max(5.0, settings.timeout + 2.0),
                             )
-                            if verify_version is not None:
-                                recovered = True
+                        if verify_version is not None:
+                            self.connections[gateway_id] = fresh_pw
+                            recovered = True
+                            logger.info(
+                                "TEDAPI recovery attempt #%d for %s: fresh "
+                                "connection in TEDAPI mode (version=%s), "
+                                "replacing connection",
+                                attempt_num, gateway_id, verify_version,
+                            )
+                        elif getattr(fresh_pw, "tedapi", None):
+                            logger.warning(
+                                "TEDAPI recovery attempt #%d for %s: fresh "
+                                "connection reported no version — discarded",
+                                attempt_num, gateway_id,
+                            )
+                        else:
+                            logger.warning(
+                                "TEDAPI recovery attempt #%d for %s: fresh "
+                                "connection is not in TEDAPI mode (mode=%s) "
+                                "— discarded",
+                                attempt_num,
+                                gateway_id,
+                                getattr(fresh_pw, "mode", "unknown"),
+                            )
                     except Exception as exc:
                         logger.warning(
-                            "TEDAPI recovery attempt #%d for %s exception: %s",
+                            "TEDAPI recovery attempt #%d for %s exception: %r",
                             attempt_num, gateway_id, exc,
                         )
 
@@ -2025,251 +2083,6 @@ class GatewayManager:
                     "TEDAPI probe/recovery task unexpected error for %s: %s",
                     gateway_id, exc,
                 )
-
-    def _beat(self, name: str) -> None:
-        """Record a liveness heartbeat for a cyclic background task."""
-        self._task_beats[name] = time.monotonic()
-
-    def _pool_pending(self, pool: object) -> Optional[int]:
-        """Queued (not yet running) jobs of one executor, None when unknown."""
-        try:
-            queue = getattr(pool, "_work_queue", None)
-            if queue is None:
-                return None
-            return int(queue.qsize())
-        except Exception:
-            return None
-
-    def _probe_executor_or_main(self) -> Optional[ThreadPoolExecutor]:
-        """Executor for probe blocking calls: dedicated pool when present.
-
-        Falls back to the shared pool (or the loop default when neither
-        exists, e.g. in tests) — same behavior as before.
-        """
-        return self._probe_executor or self._executor
-
-    def _pool_saturated(self, pool: object) -> bool:
-        """True when a pool's queued jobs exceed twice its worker count."""
-        try:
-            workers = getattr(pool, "_max_workers", 0) or 0
-            pending = self._pool_pending(pool)
-            if pending is None or not workers:
-                return False
-            return pending > 2 * workers
-        except Exception:
-            return False
-
-    def _log_pool_saturation(self, label: str, pool: object) -> None:
-        """Warn on a saturated pool, debug-log a healthy one (per pool)."""
-        pending = self._pool_pending(pool)
-        workers = getattr(pool, "_max_workers", 0) or 0
-        if pending is None or not workers:
-            return
-        if pending > 2 * workers:
-            logger.warning(
-                "Task watchdog: %s executor saturated "
-                "(%d queued for %d workers)",
-                label,
-                pending,
-                workers,
-            )
-        else:
-            logger.debug(
-                "Task watchdog: %s executor %d queued / %d workers",
-                label,
-                pending,
-                workers,
-            )
-
-    def _watch_task(
-        self,
-        name: str,
-        registry: Dict[str, asyncio.Task],
-        gateway_id: str,
-        factory: Callable[[], Any],
-        stale_after: float,
-        now: float,
-        required: bool = True,
-    ) -> None:
-        """One watchdog pass over a single cyclic task.
-
-        Slots that startup would never have created (``required=False``)
-        are left alone entirely — this keeps cloud/FleetAPI gateways (and
-        setups with recovery disabled) from gaining a probe loop here.
-        A finished task is recreated (it does nothing anymore, so this is
-        safe). A live task with a stale heartbeat is watched first: only
-        after _WATCHDOG_FORCE_AFTER consecutive stale observations — and at
-        most once per _WATCHDOG_FORCE_COOLDOWN_S — is it cancelled and
-        recreated. The skip decision uses only the pool this task actually
-        runs on (poll tasks: shared pool; probe tasks: dedicated pool or
-        shared pool as fallback) — judging by an unrelated saturated pool
-        would skip healing that could work. Both loops tolerate cancellation
-        (CancelledError breaks them) and are idempotent cyclic tasks, so a
-        duplicate during the handover does no harm; leaked executor threads
-        from the old task time out on their own socket timeouts.
-        """
-        if not required:
-            return
-        task = registry.get(gateway_id)
-        if task is None or task.done():
-            err: object = "missing"
-            if task is not None:
-                try:
-                    err = task.exception()
-                except asyncio.CancelledError:
-                    err = "cancelled"
-                except Exception as exc:  # pragma: no cover - defensive
-                    err = repr(exc)
-            logger.warning(
-                "Task watchdog: %s ended (%s), recreating", name, err
-            )
-            self._task_beats[name] = now
-            self._task_stale_counts.pop(name, None)
-            registry[gateway_id] = asyncio.create_task(factory(), name=name)
-            return
-        last_beat = self._task_beats.get(name)
-        if last_beat is not None and now - last_beat <= stale_after:
-            self._task_stale_counts.pop(name, None)
-            return
-        age = 0.0 if last_beat is None else now - last_beat
-        strikes = self._task_stale_counts.get(name, 0) + 1
-        self._task_stale_counts[name] = strikes
-        # Missing entry means never forced: -inf must not collide with a
-        # small monotonic() on freshly booted machines (see __init__).
-        last_forced = self._task_last_forced.get(name, float("-inf"))
-        if (
-            strikes >= self._WATCHDOG_FORCE_AFTER
-            and now - last_forced >= self._WATCHDOG_FORCE_COOLDOWN_S
-        ):
-            if name.startswith("tedapi-probe-") and self._probe_executor is not None:
-                pool_label, pool = "probe", self._probe_executor
-            else:
-                pool_label, pool = "main", self._executor
-            if self._pool_saturated(pool):
-                # Recreating into a saturated pool cannot help: the new
-                # task would stall on the same queue. Report and wait —
-                # the saturation warning carries the diagnosis.
-                logger.warning(
-                    "Task watchdog: %s wedged for %.0fs but %s executor "
-                    "saturated, skipping force, diagnose pool",
-                    name,
-                    age,
-                    pool_label,
-                )
-                return
-            logger.warning(
-                "Task watchdog: %s wedged for %.0fs (%d stale checks), "
-                "cancelling and recreating",
-                name,
-                age,
-                strikes,
-            )
-            try:
-                task.cancel()
-            except Exception:
-                pass
-            self._task_beats[name] = now
-            self._task_last_forced[name] = now
-            self._task_stale_counts.pop(name, None)
-            registry[gateway_id] = asyncio.create_task(factory(), name=name)
-        elif strikes == 1:
-            logger.warning(
-                "Task watchdog: %s has no heartbeat for %.0fs, "
-                "it may be wedged (watching, not cancelling yet)",
-                name,
-                age,
-            )
-        else:
-            logger.debug(
-                "Task watchdog: %s still without heartbeat for %.0fs "
-                "(strike %d)",
-                name,
-                age,
-                strikes,
-            )
-
-    def _watch_cloud_control(self, now: float) -> None:
-        """Re-run a failed cloud-control init, at most once per backoff.
-
-        One-shot task, so heartbeat watching does not apply: retry when
-        cloud control is configured but no connection exists and no init
-        is running. The cooldown avoids hammering Tesla auth during
-        extended outages.
-        """
-        if not self._cloud_control_configured or not self._hybrid_configs:
-            return
-        if self._cloud_control is not None:
-            return
-        running = self._cloud_control_task
-        if running is not None and not running.done():
-            return
-        if now - self._cloud_control_retry_at < self._CLOUD_CONTROL_RETRY_S:
-            return
-        logger.warning(
-            "Task watchdog: no cloud control connection despite "
-            "configuration — retrying init"
-        )
-        self._cloud_control_retry_at = now
-        self._cloud_control_task = asyncio.create_task(
-            self._init_cloud_control(self._hybrid_configs),
-            name="cloud-control-init",
-        )
-
-    def _watchdog_check(self) -> None:
-        """One watchdog pass over poll and probe tasks (sync, testable).
-
-        Must run in the event loop (it creates tasks). Probe slots are
-        only watched where startup would have created them — same
-        condition (local gateway, recovery enabled) — so this never
-        equips a cloud/FleetAPI gateway with a probe loop.
-        """
-        from app.config import settings
-
-        now = time.monotonic()
-        for gateway_id in list(self.gateways):
-            self._watch_task(
-                f"poll-{gateway_id}",
-                self._poll_tasks,
-                gateway_id,
-                lambda gid=gateway_id: self._poll_gateway_loop(gid),
-                self._WATCHDOG_POLL_STALE_S,
-                now,
-                True,
-            )
-            gw = self.gateways.get(gateway_id)
-            watch_probe = bool(
-                settings.tedapi_recovery
-                and gw is not None
-                and gw.host
-                and not gw.cloud_mode
-                and not gw.fleetapi
-            )
-            self._watch_task(
-                f"tedapi-probe-{gateway_id}",
-                self._probe_tasks,
-                gateway_id,
-                lambda gid=gateway_id: self._tedapi_probe_loop(gid),
-                self._WATCHDOG_PROBE_STALE_S,
-                now,
-                watch_probe,
-            )
-        for label, pool in (
-            ("main", self._executor),
-            ("probe", self._probe_executor),
-        ):
-            self._log_pool_saturation(label, pool)
-        self._watch_cloud_control(now)
-
-    async def _task_watchdog_loop(self) -> None:
-        """Watchdog loop: recreate dead tasks, force-recreate wedged ones."""
-        while True:
-            try:
-                await asyncio.sleep(self._WATCHDOG_INTERVAL_S)
-                self._watchdog_check()
-            except asyncio.CancelledError:
-                break
-            except Exception as exc:
-                logger.warning("Task watchdog error: %s", exc)
 
     def get_last_data(self, gateway_id: str) -> Optional[PowerwallData]:
         """Last successfully polled data for a gateway, however old.

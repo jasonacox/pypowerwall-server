@@ -270,10 +270,6 @@ tracks SolarOnly fallback as a distinct state and retries reconnection with
 exponential backoff (60s → 300s max). Fallback state is exposed in `/health`
 and `/stats`. `POST /health/reset` clears fallback state (requires
 `PW_CONTROL_SECRET`). Only active in TEDAPI mode — no overhead for Cloud/FleetAPI.
-A task watchdog (60 s, no configuration) recreates finished poll/probe
-tasks, force-recreates persistently wedged ones (never into their own
-saturated executor), and retries a failed cloud-control init - so a silent task can
-no longer hold the server on fallback indefinitely.
 
 **Logging & Diagnostics:**
 ```bash

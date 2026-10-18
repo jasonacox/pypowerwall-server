@@ -13,9 +13,28 @@
   and history. Their display names change to follow the new device, e.g.
   "Default Gateway Battery 1 Capacity" becomes "Powerwall TG… Capacity".
   (#153)
-- **Task watchdog for poll and TEDAPI probe loops** — every cyclic background task records a heartbeat each iteration; a watchdog (60 s) recreates finished tasks with a warning and force-recreates live tasks whose heartbeat went stale three times running (cancel + recreate, at most once per 10 min per task, so a merely slow task is never duplicated). Executor saturation is logged per pool (main and probe); force is skipped while the task's own pool is saturated. Probe/recovery blocking calls run on a small dedicated pool instead of competing with poll demand. A failed cloud-control init is retried (at most every 5 min) while control is configured but unconnected, so a dead Tesla cloud at boot no longer means permanently unavailable control. Motivated by a gateway firmware-update reboot after which the probe task went silent for hours with zero log output, holding reads on cloud until a container restart.
+- **Cloud-control retry with backoff** — when the hybrid cloud-control
+  connection cannot be established at startup (Tesla cloud unreachable,
+  first-setup token exchange failing), the server now retries with
+  exponential backoff (60 s doubling up to 300 s) instead of leaving
+  control unavailable until a restart. (#156)
 
 **Fixed:**
+- **TEDAPI recovery no longer misses a connection that drifted to cloud
+  reads** — a `connect()` that timed out at boot could leave
+  pypowerwall's failover active: the connection stayed on cloud reads
+  (`pw.tedapi` unset, mode "cloud") while the TEDAPI probe skipped it
+  silently, holding a gateway on cloud data for hours after a
+  firmware-update reboot. The probe now runs for every local TEDAPI
+  gateway (PW3 Basic LAN stays exempt — it has no TEDAPI client), counts
+  a connection that left TEDAPI mode as a failed probe with a warning
+  naming the mode, and enters SolarOnly fallback after the usual
+  threshold. Recovery builds a fresh connection the same way startup
+  does and swaps it in only when it comes up in TEDAPI mode and reports
+  a version — the drifted object cannot recover via `connect()`, since
+  pypowerwall restores the configured mode only when every mode fails
+  (jasonacox/pypowerwall#366) — and the existing connection keeps
+  serving until a replacement is verified. (#156)
 - **Docs: v1r follower Powerwalls need `PW_WIFI_HOST`** — the README said `PW_WIFI_HOST` defaults to `192.168.91.1`; it isn't set by default, and without it v1r shows only the leader Powerwall. The README now says to set it to the gateway's WiFi access point for multi-Powerwall sites, and its v1r examples use the wired LAN IP (`10.42.1.x`) for `PW_HOST` instead of the WiFi address. The startup warning names `192.168.91.1` instead of `<gateway-ip>` (#157).
 
 ### [0.10.0] - 2026-10-11
