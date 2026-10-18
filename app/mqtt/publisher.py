@@ -1176,7 +1176,7 @@ class MqttPublisher:
                 else:
                     path, result = path_label, helper_result
                 audit = f"value={value!r} via {path}"
-                ok = result is not None and not _is_error_result(result)
+                ok = result is not None and not is_error_result(result)
 
             if ok:
                 logger.info(f"{label} applied ({audit})")
@@ -1221,7 +1221,7 @@ def _short(val: object, limit: int = 200) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-def _is_error_result(result: object) -> bool:
+def is_error_result(result: object) -> bool:
     """True when a library response reports an error instead of a value."""
     return isinstance(result, dict) and ("error" in result or "ERROR" in result)
 
@@ -1231,7 +1231,7 @@ def _island_ack_ok(result: object) -> bool:
 
     Only ``{"result": 1}`` counts (an int, not True).
     """
-    if not isinstance(result, dict) or _is_error_result(result):
+    if not isinstance(result, dict) or is_error_result(result):
         return False
     ack = result.get("result")
     return isinstance(ack, int) and not isinstance(ack, bool) and ack == 1

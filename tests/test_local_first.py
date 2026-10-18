@@ -325,3 +325,27 @@ def test_http_companion_local_failure_keeps_old_503_detail(
     assert response.json()["detail"] == (
         "Control operation failed or gateway not available"
     )
+
+
+@pytest.mark.parametrize("error", [{"error": "boom"}, {"ERROR": "boom"}])
+@pytest.mark.parametrize("path, body", [
+    ("/control/reserve", {"value": 20}),
+    ("/control/reserve", {"value": 20, "mode": "self_consumption"}),
+    ("/control/mode", {"value": "self_consumption", "level": 20}),
+])
+def test_http_local_first_error_dict_is_503_without_cloud_write(
+    control_client, gm, monkeypatch, error, path, body
+):
+    """A dispatched local-first write that returns a library error dict is a
+    failed write: 503, and no second write through the cloud."""
+    monkeypatch.setattr(settings, "local_first", True)
+    monkeypatch.setattr(
+        gateway_manager, "gateways", {"v1r": gateway_manager.gateways["v1r"]}
+    )
+    gateway_manager.local_control.return_value = error
+    response = control_client.post(
+        path, json=body, headers={"Authorization": _TOKEN}
+    )
+    assert response.status_code == 503
+    gateway_manager.local_control.assert_awaited_once()
+    gateway_manager.cloud_control.assert_not_awaited()

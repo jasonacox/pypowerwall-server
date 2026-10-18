@@ -66,6 +66,7 @@ import pypowerwall
 from fastapi import APIRouter, HTTPException, Response, Header
 
 from app.api.auth import verify_control_token
+from app.mqtt.publisher import is_error_result
 from app.core.gateway_manager import (
     IslandingCommandInProgressError,
     IslandingCooldownError,
@@ -384,7 +385,7 @@ async def control_api(
             result = await gateway_manager.local_control(
                 gateway_id, "set_operation", level, mode_val, timeout=10.0
             )
-        if result is None:
+        if result is None or (path_label is not None and is_error_result(result)):
             raise HTTPException(
                 status_code=503,
                 detail="Control operation failed or gateway not available",
@@ -422,7 +423,7 @@ async def control_api(
             result = await gateway_manager.local_control(
                 gateway_id, "set_operation", level_val, mode, timeout=10.0
             )
-        if result is None:
+        if result is None or (path_label is not None and is_error_result(result)):
             raise HTTPException(
                 status_code=503,
                 detail="Control operation failed or gateway not available",
@@ -485,7 +486,7 @@ async def control_api(
                 result = await gateway_manager.local_control(
                     gateway_id, method, *args_fn(data), timeout=10.0
                 )
-        if result is None:
+        if result is None or (path_label is not None and is_error_result(result)):
             raise HTTPException(
                 status_code=503, detail=f"Control operation failed for {path}"
             )
