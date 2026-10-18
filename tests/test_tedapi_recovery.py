@@ -39,17 +39,37 @@ pytestmark = pytest.mark.asyncio
 
 
 @pytest.fixture
-def fast_sleep(monkeypatch):
-    """Replace asyncio.sleep with a near-instant tick plus cycle counter."""
-    real_sleep = asyncio.sleep
-    state = {"cycles": 0}
+def probe_sleep(monkeypatch):
+    """Gated replacement for asyncio.sleep in the probe loop.
 
-    async def _fast(delay, result=None):
+    An instant fake sleep lets the background loop free-run: while the
+    test polls in real time, the loop burns thousands of cycles, flooding
+    the shared executor and the event loop's wakeup pipe.  On Python 3.11
+    that deadlocks the loop (an executor thread gets stuck writing to the
+    full self-pipe while the loop blocks on the future's condition lock,
+    seen on the Windows proactor and on CI runners).  Instead every sleep
+    parks the loop until the test releases the next cycle, so
+    cancellation always finds the task parked between cycles.
+    """
+    state = {"cycles": 0, "pending": 0, "parked": False, "wakeup": None}
+
+    async def _gated(delay, result=None):
         state["cycles"] += 1
-        await real_sleep(0)
+        state["parked"] = True
+        while state["pending"] <= 0:
+            state["wakeup"] = asyncio.Event()
+            await state["wakeup"].wait()
+        state["pending"] -= 1
+        state["parked"] = False
         return result
 
-    monkeypatch.setattr(gm_module.asyncio, "sleep", _fast)
+    def release(cycles=1):
+        state["pending"] += cycles
+        if state["wakeup"] is not None:
+            state["wakeup"].set()
+
+    monkeypatch.setattr(gm_module.asyncio, "sleep", _gated)
+    state["release"] = release
     return state
 
 
@@ -63,13 +83,17 @@ async def _wait_until(predicate, timeout=2.0):
         await _real_sleep(0.001)
 
 
-async def _run_probe_loop(gm, gateway_id, predicate, timeout=2.0):
-    """Run _tedapi_probe_loop as a task until predicate() holds, then stop."""
+async def _run_probe_loop(gm, gateway_id, predicate, state, timeout=2.0):
+    """Run the probe loop until predicate() holds and it is parked.
+
+    Waiting for ``state["parked"]`` guarantees the task sits between two
+    cycles before it is cancelled, so no executor job is in flight.
+    """
     task = asyncio.create_task(
         gm._tedapi_probe_loop(gateway_id), name="probe-test"
     )
     try:
-        await _wait_until(predicate, timeout)
+        await _wait_until(lambda: predicate() and state["parked"], timeout)
     finally:
         task.cancel()
         with suppress(asyncio.CancelledError):
@@ -106,7 +130,7 @@ class TestProbeByConfiguration:
     """The probe must not skip a connection that drifted off TEDAPI."""
 
     async def test_mode_drift_counts_as_failed_probe_and_enters_fallback(
-        self, fast_sleep, monkeypatch, caplog
+        self, probe_sleep, monkeypatch, caplog
     ):
         """State left behind by a timed-out connect() must go to fallback.
 
@@ -124,7 +148,10 @@ class TestProbeByConfiguration:
         monkeypatch.setattr(gm, "_enter_fallback_mode", enter)
 
         caplog.set_level(logging.WARNING)
-        await _run_probe_loop(gm, "gw1", lambda: enter.call_count >= 1)
+        probe_sleep["release"](3)
+        await _run_probe_loop(
+            gm, "gw1", lambda: enter.call_count >= 1, probe_sleep
+        )
 
         assert enter.call_count == 1
         assert gm._fallback_state["gw1"]["is_fallback_mode"] is True
@@ -136,7 +163,7 @@ class TestProbeByConfiguration:
         gm.connections["gw1"].connect.assert_not_called()
 
     async def test_healthy_connection_probes_and_resets_failures(
-        self, fast_sleep, monkeypatch
+        self, probe_sleep, monkeypatch
     ):
         """A TEDAPI-mode connection is probed and clears failure counts."""
         gm = _make_gm()
@@ -147,15 +174,17 @@ class TestProbeByConfiguration:
             gm, "_create_local_connection", AsyncMock()
         )
 
+        probe_sleep["release"](1)
         await _run_probe_loop(
-            gm, "gw1", lambda: gm._tedapi_probe_failures["gw1"] == 0
+            gm, "gw1", lambda: gm._tedapi_probe_failures["gw1"] == 0,
+            probe_sleep,
         )
 
         assert conn.version.called
         assert gm._fallback_state["gw1"]["is_fallback_mode"] is False
 
     async def test_basic_lan_gateway_is_exempt(
-        self, fast_sleep, monkeypatch
+        self, probe_sleep, monkeypatch
     ):
         """PW3 Basic LAN has no TEDAPI client: no probe, no penalty."""
         gm = _make_gm(basic_lan=True)
@@ -165,8 +194,9 @@ class TestProbeByConfiguration:
         enter = Mock(wraps=gm._enter_fallback_mode)
         monkeypatch.setattr(gm, "_enter_fallback_mode", enter)
 
+        probe_sleep["release"](3)
         await _run_probe_loop(
-            gm, "gw1", lambda: fast_sleep["cycles"] >= 25
+            gm, "gw1", lambda: probe_sleep["cycles"] >= 3, probe_sleep
         )
 
         assert enter.call_count == 0
@@ -179,7 +209,7 @@ class TestRecoveryBuildsFreshConnection:
     """Recovery must build a fresh connection, never re-connect the old one."""
 
     async def test_fresh_tedapi_connection_is_swapped_in(
-        self, fast_sleep, monkeypatch, caplog
+        self, probe_sleep, monkeypatch, caplog
     ):
         """A fresh connection in TEDAPI mode with a version replaces the old."""
         gm = _make_gm(fallback=True)
@@ -190,8 +220,11 @@ class TestRecoveryBuildsFreshConnection:
         monkeypatch.setattr(gm, "_create_local_connection", create)
 
         caplog.set_level(logging.INFO)
+        # One fallback cycle: probe-interval tick, then the backoff tick.
+        probe_sleep["release"](2)
         await _run_probe_loop(
-            gm, "gw1", lambda: gm.connections.get("gw1") is fresh
+            gm, "gw1", lambda: gm.connections.get("gw1") is fresh,
+            probe_sleep,
         )
 
         create.assert_awaited_once_with(gm._gateway_configs["gw1"])
@@ -203,7 +236,7 @@ class TestRecoveryBuildsFreshConnection:
         assert "replacing connection" in caplog.text
 
     async def test_fresh_connection_that_landed_in_cloud_is_discarded(
-        self, fast_sleep, monkeypatch, caplog
+        self, probe_sleep, monkeypatch, caplog
     ):
         """An in-time connect() ending on cloud reads is not a recovery.
 
@@ -218,9 +251,10 @@ class TestRecoveryBuildsFreshConnection:
         monkeypatch.setattr(gm, "_create_local_connection", create)
 
         caplog.set_level(logging.WARNING)
-        await _run_probe_loop(gm, "gw1", lambda: create.await_count >= 1)
-        for _ in range(20):
-            await _real_sleep(0.001)
+        probe_sleep["release"](2)
+        await _run_probe_loop(
+            gm, "gw1", lambda: create.await_count >= 1, probe_sleep
+        )
 
         assert gm.connections["gw1"] is old
         assert gm._fallback_state["gw1"]["is_fallback_mode"] is True
@@ -230,7 +264,7 @@ class TestRecoveryBuildsFreshConnection:
         old.connect.assert_not_called()
 
     async def test_fresh_connection_without_version_is_discarded(
-        self, fast_sleep, monkeypatch, caplog
+        self, probe_sleep, monkeypatch, caplog
     ):
         """TEDAPI mode but version() returns None: do not swap it in."""
         gm = _make_gm(fallback=True)
@@ -242,9 +276,10 @@ class TestRecoveryBuildsFreshConnection:
         monkeypatch.setattr(gm, "_create_local_connection", create)
 
         caplog.set_level(logging.WARNING)
-        await _run_probe_loop(gm, "gw1", lambda: create.await_count >= 1)
-        for _ in range(20):
-            await _real_sleep(0.001)
+        probe_sleep["release"](2)
+        await _run_probe_loop(
+            gm, "gw1", lambda: create.await_count >= 1, probe_sleep
+        )
 
         assert gm.connections["gw1"] is old
         assert gm._fallback_state["gw1"]["is_fallback_mode"] is True
@@ -252,7 +287,7 @@ class TestRecoveryBuildsFreshConnection:
         old.connect.assert_not_called()
 
     async def test_recovery_exception_keeps_existing_connection(
-        self, fast_sleep, monkeypatch, caplog
+        self, probe_sleep, monkeypatch, caplog
     ):
         """A failing build logs the repr and keeps the old connection.
 
@@ -266,9 +301,10 @@ class TestRecoveryBuildsFreshConnection:
         monkeypatch.setattr(gm, "_create_local_connection", create)
 
         caplog.set_level(logging.WARNING)
-        await _run_probe_loop(gm, "gw1", lambda: create.await_count >= 1)
-        for _ in range(20):
-            await _real_sleep(0.001)
+        probe_sleep["release"](2)
+        await _run_probe_loop(
+            gm, "gw1", lambda: create.await_count >= 1, probe_sleep
+        )
 
         assert gm.connections["gw1"] is old
         assert gm._fallback_state["gw1"]["is_fallback_mode"] is True
@@ -277,7 +313,7 @@ class TestRecoveryBuildsFreshConnection:
         old.connect.assert_not_called()
 
     async def test_recovery_without_stored_config_is_handled(
-        self, fast_sleep, monkeypatch, caplog
+        self, probe_sleep, monkeypatch, caplog
     ):
         """A missing stored config must warn, not crash the loop."""
         gm = _make_gm(fallback=True)
@@ -288,13 +324,13 @@ class TestRecoveryBuildsFreshConnection:
         monkeypatch.setattr(gm, "_create_local_connection", create)
 
         caplog.set_level(logging.WARNING)
+        probe_sleep["release"](2)
         await _run_probe_loop(
             gm,
             "gw1",
             lambda: gm._fallback_state["gw1"]["recovery_attempts"] >= 1,
+            probe_sleep,
         )
-        for _ in range(20):
-            await _real_sleep(0.001)
 
         create.assert_not_awaited()
         assert gm.connections["gw1"] is old
