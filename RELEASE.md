@@ -2,6 +2,18 @@
 
 ## Version History
 
+### [0.11.1] - Upcoming
+
+**Fixed:**
+- **`/version` matches the proxy** — `vint` now uses pypowerwall's
+  `parse_version`, as the proxy does: firmware `26.26.11` gives `262611`
+  (it was `2626`, dropping the patch level, and `23.44.0` gave `2344` instead
+  of `234400`). With no firmware version, `/version` returns
+  `{"version": "SolarOnly", "vint": 0}` like the proxy (it returned
+  `"Unknown"`). `/pw/version` gets the same `vint` fix and keeps `"Unknown"`.
+  Found comparing the server with the proxy for the Powerwall-Dashboard
+  switch (jasonacox/Powerwall-Dashboard#878).
+
 ### [0.11.0] - 2026-10-18
 
 **Added:**

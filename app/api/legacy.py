@@ -63,6 +63,7 @@ from typing import Any, Dict, Optional
 
 import psutil
 import pypowerwall
+from pypowerwall import parse_version
 from fastapi import APIRouter, HTTPException, Response, Header
 
 from app.api.auth import verify_control_token
@@ -2244,15 +2245,7 @@ async def pw_version():
     if version is None:
         return {"version": "Unknown", "vint": 0}
 
-    vint = 0
-    try:
-        parts = version.split(".")
-        if len(parts) >= 2:
-            vint = int(parts[0]) * 100 + int(parts[1])
-    except Exception:
-        pass
-
-    return {"version": version, "vint": vint}
+    return {"version": version, "vint": parse_version(version)}
 
 
 @router.get("/pw/status")
@@ -2614,17 +2607,9 @@ async def get_version():
     if status and status.data:
         version = status.data.version
 
+    # Same payload as the proxy: "SolarOnly" when there is no version, and vint
+    # from pypowerwall's parse_version (e.g. "26.26.11" -> 262611)
     if version is None:
-        return {"version": "Unknown", "vint": 0}
+        return {"version": "SolarOnly", "vint": 0}
 
-    # Parse version string to integer (basic implementation)
-    vint = 0
-    try:
-        # Extract numbers from version string like "23.44.0"
-        parts = version.split(".")
-        if len(parts) >= 2:
-            vint = int(parts[0]) * 100 + int(parts[1])
-    except Exception:
-        pass
-
-    return {"version": version, "vint": vint}
+    return {"version": version, "vint": parse_version(version)}

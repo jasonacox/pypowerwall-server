@@ -247,7 +247,7 @@ dashboards, Telegraf and Home Assistant configurations keep working.
 | GET | `/battery` | | `{"power"}`: battery power (W). |
 | GET | `/csv` | | Text: `Grid,Home,Solar,Battery,BatteryLevel`. Add `?headers` for a header row. |
 | GET | `/csv/v2` | | Text: adds `GridStatus,Reserve`. Add `?headers` for a header row. |
-| GET | `/version` | | `{"version", "vint"}`: gateway firmware. |
+| GET | `/version` | | `{"version", "vint"}`: gateway firmware; `vint` is the version as an integer (`26.26.11` → `262611`). `"SolarOnly"` with `vint` 0 when there is no firmware version. |
 | GET | `/tedapi` | | Lists the `/tedapi/*` routes (also `/tedapi/`). |
 | GET | `/tedapi/` | | Same as `/tedapi`. |
 | GET | `/tedapi/config` | | Gateway configuration. On demand, TEDAPI only. |
