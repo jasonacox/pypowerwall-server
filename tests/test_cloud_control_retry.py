@@ -159,3 +159,42 @@ class TestCloudControlRetry:
         assert gm._cloud_control is pw
         assert fast_sleep == [gm._CLOUD_CONTROL_RETRY_INITIAL]
         assert factory.call_count == 3
+
+    async def test_unconnected_object_from_constructor_is_retried(
+        self, fast_sleep, monkeypatch
+    ):
+        """pypowerwall's constructor doesn't raise when the cloud is
+        unreachable: it returns an object its failover left in local mode
+        with is_connected() False. That must not count as established."""
+        gm = _make_gm(monkeypatch)
+        dead = Mock(cloudmode=False, fleetapi=False, mode="local")
+        dead.is_connected.return_value = False
+        pw = Mock(cloudmode=True)
+        pw.is_connected.return_value = True
+        factory = Mock(side_effect=[dead, pw])
+        monkeypatch.setattr(gm_module.pypowerwall, "Powerwall", factory)
+
+        await asyncio.wait_for(
+            gm._init_cloud_control([_config()]), timeout=2.0
+        )
+
+        assert gm._cloud_control is pw
+        assert fast_sleep == [gm._CLOUD_CONTROL_RETRY_INITIAL]
+
+    async def test_cloud_mode_but_not_connected_is_retried(
+        self, fast_sleep, monkeypatch
+    ):
+        gm = _make_gm(monkeypatch)
+        stale = Mock(cloudmode=True, mode="cloud")
+        stale.is_connected.return_value = False
+        pw = Mock(cloudmode=True)
+        pw.is_connected.return_value = True
+        factory = Mock(side_effect=[stale, pw])
+        monkeypatch.setattr(gm_module.pypowerwall, "Powerwall", factory)
+
+        await asyncio.wait_for(
+            gm._init_cloud_control([_config()]), timeout=2.0
+        )
+
+        assert gm._cloud_control is pw
+        assert stale is not gm._cloud_control

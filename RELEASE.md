@@ -17,12 +17,13 @@
   connection cannot be established at startup (Tesla cloud unreachable,
   first-setup token exchange failing), the server now retries with
   exponential backoff (60 s doubling up to 300 s) instead of leaving
-  control unavailable until a restart. (#156)
+  control unavailable until a restart. An attempt counts only when it
+  yields a connected cloud or FleetAPI connection. (#156)
 
 **Fixed:**
 - **TEDAPI recovery no longer misses a connection that drifted to cloud
-  reads** — a `connect()` that timed out at boot could leave
-  pypowerwall's failover active: the connection stayed on cloud reads
+  reads** — a recovery `connect()` that timed out during a gateway reboot
+  could leave pypowerwall's failover active: the connection stayed on cloud reads
   (`pw.tedapi` unset, mode "cloud") while the TEDAPI probe skipped it
   silently, holding a gateway on cloud data for hours after a
   firmware-update reboot. The probe now runs for every local TEDAPI

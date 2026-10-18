@@ -764,7 +764,11 @@ async def test_shared_cloud_binds_only_to_an_unambiguous_site(
 
     def fake_powerwall(**kwargs):
         created.update(kwargs)
-        return types.SimpleNamespace(client=_CloudClient(sites, str(path)))
+        return types.SimpleNamespace(
+            client=_CloudClient(sites, str(path)),
+            cloudmode=True,
+            is_connected=lambda: True,
+        )
 
     monkeypatch.setattr(gm_module.pypowerwall, "Powerwall", fake_powerwall)
     monkeypatch.setattr(settings, "siteid", siteid)

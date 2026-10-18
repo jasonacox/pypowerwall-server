@@ -668,13 +668,28 @@ class GatewayManager:
                         cloud_kwargs["siteid"] = (
                             int(siteid) if siteid.isdigit() else siteid
                         )
-                    self._cloud_control = await asyncio.wait_for(
+                    pw = await asyncio.wait_for(
                         loop.run_in_executor(
                             self._executor,
                             lambda kw=cloud_kwargs: pypowerwall.Powerwall(**kw),
                         ),
                         timeout=15.0,
                     )
+                    # pypowerwall's constructor doesn't raise when it can't
+                    # connect: it logs, and its failover may even land in
+                    # local mode. Accept only a connected cloud/FleetAPI one.
+                    connected = getattr(pw, "cloudmode", False) and await (
+                        asyncio.wait_for(
+                            loop.run_in_executor(self._executor, pw.is_connected),
+                            timeout=10.0,
+                        )
+                    )
+                    if not connected:
+                        raise ConnectionError(
+                            "no Tesla cloud connection "
+                            f"(mode={getattr(pw, 'mode', 'unknown')})"
+                        )
+                    self._cloud_control = pw
                     if await self._cloud_site_unambiguous(config.fleetapi):
                         self._cloud_control_gateway_id = config.id
                     logger.info(
