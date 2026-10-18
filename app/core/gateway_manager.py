@@ -905,14 +905,16 @@ class GatewayManager:
         from app.config import settings
 
         if aggregates and not settings.neg_solar:
-            solar_power = aggregates.get("solar", {}).get("instant_power", 0)
-            if solar_power < 0:
+            # A meter can report instant_power as None (data gap); leave it alone
+            solar = aggregates.get("solar") or {}
+            solar_power = solar.get("instant_power")
+            if solar_power is not None and solar_power < 0:
                 # Shift negative solar energy to load
-                if "load" in aggregates and "instant_power" in aggregates["load"]:
-                    aggregates["load"]["instant_power"] -= solar_power
+                load = aggregates.get("load") or {}
+                if load.get("instant_power") is not None:
+                    load["instant_power"] -= solar_power
                 # Clamp solar to 0
-                if "solar" in aggregates:
-                    aggregates["solar"]["instant_power"] = 0
+                solar["instant_power"] = 0
                 logger.debug(
                     f"Applied neg_solar correction for {gateway_id}: solar clamped to 0"
                 )

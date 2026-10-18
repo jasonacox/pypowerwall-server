@@ -2,6 +2,28 @@
 
 ## Version History
 
+### [0.12.0] - Upcoming
+
+**Changed:**
+- **Legacy endpoints return what the proxy returns**, so proxy clients such
+  as Powerwall-Dashboard's Telegraf can switch to the server unchanged
+  (jasonacox/Powerwall-Dashboard#878):
+  - `/soe` `percentage` and `/json` `soe` are the raw gateway battery level,
+    as in the proxy. They were the Tesla app scaled level. `raw_percentage`
+    and `soe_raw` are unchanged, and the scaled level stays at
+    `/api/system_status/soe`. Clients that read the scaled value from `/soe`
+    should use `/api/system_status/soe`.
+  - `/freq` `grid_status` is `-1` while the grid is syncing and `null` when
+    unknown (it was `0`, which reads as a grid outage).
+
+**Fixed:**
+- **`PW_NEG_SOLAR=no` no longer crashes on a missing reading** — a solar or
+  load meter reporting `instant_power: null` raised a `TypeError` on every
+  poll and marked the gateway offline. (#72)
+- **`/csv`, `/csv/v2` and `/json` treat missing power readings as 0**, as
+  the proxy does, instead of returning HTTP 500. `/csv/v2` truncates the
+  reserve like the proxy (19.9 → 19).
+
 ### [0.11.1] - Upcoming
 
 **Fixed:**

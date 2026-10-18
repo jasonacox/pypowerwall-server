@@ -232,7 +232,7 @@ dashboards, Telegraf and Home Assistant configurations keep working.
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
 | GET | `/aggregates` | | Site, battery, load and solar meter data. |
-| GET | `/soe` | | `{"percentage", "raw_percentage"}`: Tesla app scaled and raw battery level. |
+| GET | `/soe` | | `{"percentage", "raw_percentage"}`: raw gateway battery level in both, as in the proxy. The Tesla app scaled level is at `/api/system_status/soe`. |
 | GET | `/vitals` | | Device vitals keyed by device. |
 | GET | `/strings` | | Solar string data. |
 | GET | `/temps` | | Powerwall temperatures (°C) keyed by device. |
@@ -241,11 +241,11 @@ dashboards, Telegraf and Home Assistant configurations keep working.
 | GET | `/alerts/pw` | | Active alerts as `{"<alert>": 1}`. |
 | GET | `/fans` | | Fan data keyed by device. |
 | GET | `/fans/pw` | | `FANn_actual` / `FANn_target` RPM; Powerwall 3 fans add `FANn_duty` (%) and have a null target. |
-| GET | `/freq` | | Per-Powerwall frequency, voltage and power, island/meter readings and `grid_status` (1 up, 0 down). |
+| GET | `/freq` | | Per-Powerwall frequency, voltage and power, island/meter readings and `grid_status` (1 up, 0 down, -1 syncing, `null` unknown). |
 | GET | `/pod` | | Per-Powerwall battery data (`PWn_*`), pack energy, time remaining and reserve. |
 | GET | `/json` | | Power flows, battery level, grid status, reserve, time remaining, pack energy and strings in one object. |
 | GET | `/battery` | | `{"power"}`: battery power (W). |
-| GET | `/csv` | | Text: `Grid,Home,Solar,Battery,BatteryLevel`. Add `?headers` for a header row. |
+| GET | `/csv` | | Text: `Grid,Home,Solar,Battery,BatteryLevel`. Missing readings are 0. Add `?headers` for a header row. |
 | GET | `/csv/v2` | | Text: adds `GridStatus,Reserve`. Add `?headers` for a header row. |
 | GET | `/version` | | `{"version", "vint"}`: gateway firmware; `vint` is the version as an integer (`26.26.11` → `262611`). `"SolarOnly"` with `vint` 0 when there is no firmware version. |
 | GET | `/tedapi` | | Lists the `/tedapi/*` routes (also `/tedapi/`). |
@@ -285,9 +285,8 @@ dashboards, Telegraf and Home Assistant configurations keep working.
 | GET | `/api/auth/toggle/supported` | | Always `{"toggle_auth_supported": false}`. |
 | POST | `/api/login/Basic` | | Login stub for the Power Flow app: sets the `AuthCookie` and `UserRecord` cookies. Checks no credentials. |
 
-The server's `/soe` returns the Tesla app scaled level in `percentage` and the
-raw gateway level in `raw_percentage`. Proxy clients that read `percentage` as
-the raw level should read `raw_percentage`.
+Like the proxy, `/soe`, `/json` (`soe`) and `/csv` report the raw gateway
+battery level; `/api/system_status/soe` reports the Tesla app scaled level.
 
 ### Convenience `/pw`
 
