@@ -22,6 +22,9 @@
 
 **Fixed:**
 - **Docs: v1r follower Powerwalls need `PW_WIFI_HOST`** — the README said `PW_WIFI_HOST` defaults to `192.168.91.1`; it isn't set by default, and without it v1r shows only the leader Powerwall. The README now says to set it to the gateway's WiFi access point for multi-Powerwall sites, and its v1r examples use the wired LAN IP (`10.42.1.x`) for `PW_HOST` instead of the WiFi address. The startup warning names `192.168.91.1` instead of `<gateway-ip>` (#157).
+- **`/stats` reports the real `PW_NEG_SOLAR`** — `config.PW_NEG_SOLAR` was always `true`; it now shows the setting (default `no`).
+- **`/stats` masks the top-level `siteid` and `cf`** — `config` already masked `PW_SITEID` and `PW_CACHE_FILE`, but the proxy-compatible top-level `siteid` and `cf` (the cache file path under `PW_AUTH_PATH`) were readable on this unauthenticated route. Both keys stay, masked the same way.
+- **`PW_SITEID` applies to Cloud and FleetAPI gateways** — it was passed to local and hybrid connections only, so a Cloud or FleetAPI gateway on a multi-site account used the site saved by `pypowerwall setup` (or the first site) instead.
 
 ### [0.10.0] - 2026-10-11
 

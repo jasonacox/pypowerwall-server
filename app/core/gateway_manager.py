@@ -1333,6 +1333,13 @@ class GatewayManager:
                         }
                         if config.authpath:
                             cloud_kwargs["authpath"] = config.authpath
+                        if settings.siteid:
+                            # PW_SITEID picks the site on multi-site accounts.
+                            # The cloud client compares it with integer ids.
+                            siteid = str(settings.siteid).strip()
+                            cloud_kwargs["siteid"] = (
+                                int(siteid) if siteid.isdigit() else siteid
+                            )
                         pw = await asyncio.wait_for(
                             loop.run_in_executor(
                                 self._executor,

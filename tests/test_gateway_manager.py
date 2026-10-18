@@ -407,6 +407,56 @@ def test_stats_config_reports_failover(client, monkeypatch, failover):
     assert response.json()["config"]["PW_FAILOVER"] is failover
 
 
+@pytest.mark.parametrize("neg_solar", [True, False])
+def test_stats_config_reports_neg_solar(client, monkeypatch, neg_solar):
+    """/stats config reports the PW_NEG_SOLAR setting, not a fixed value."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "neg_solar", neg_solar)
+    response = client.get("/stats")
+    assert response.status_code == 200
+    assert response.json()["config"]["PW_NEG_SOLAR"] is neg_solar
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fleetapi", [False, True], ids=["cloud", "fleetapi"])
+@pytest.mark.parametrize(
+    "siteid, expected", [("123", 123), ("abc", "abc"), (None, None)]
+)
+async def test_siteid_passed_to_cloud_powerwall_constructor(
+    monkeypatch, mock_pypowerwall, fleetapi, siteid, expected
+):
+    """PW_SITEID reaches Cloud and FleetAPI connections, as an integer when
+    numeric (the cloud clients compare it with integer site ids)."""
+    from unittest.mock import Mock
+    from app.config import GatewayConfig, settings
+    from app.models.gateway import Gateway, GatewayStatus
+    import pypowerwall
+
+    powerwall_spy = Mock(return_value=mock_pypowerwall)
+    monkeypatch.setattr(pypowerwall, "Powerwall", powerwall_spy)
+    monkeypatch.setattr(settings, "siteid", siteid)
+
+    kwargs = dict(
+        id="cl", name="Cloud", email="a@b.c", cloud_mode=True, fleetapi=fleetapi
+    )
+    gw = Gateway(**kwargs)
+    gateway_manager.gateways["cl"] = gw
+    gateway_manager._pending_configs["cl"] = GatewayConfig(**kwargs)
+    gateway_manager.cache["cl"] = GatewayStatus(gateway=gw, online=False)
+    gateway_manager._consecutive_failures["cl"] = 0
+    gateway_manager._next_poll_time["cl"] = 0
+
+    await gateway_manager._poll_gateway("cl")
+
+    assert powerwall_spy.called, "pypowerwall.Powerwall() was never called"
+    call_kwargs = powerwall_spy.call_args.kwargs
+    assert call_kwargs.get("cloudmode") is True
+    assert call_kwargs.get("fleetapi") is fleetapi
+    assert call_kwargs.get("siteid") == expected
+    assert ("siteid" in call_kwargs) is (siteid is not None)
+
+
 def test_failover_setting_defaults_on_and_parses_no(monkeypatch):
     from app.config import Settings
 

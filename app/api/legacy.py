@@ -2484,7 +2484,7 @@ async def get_stats():
         "PW_CACHE_FILE": "**********" if settings.cache_file else None,
         "PW_CONTROL_SECRET": "**********" if settings.control_secret else None,
         "PW_GW_PWD": "**********" if settings.pw_gw_pwd else None,
-        "PW_NEG_SOLAR": True,  # Always enabled in this implementation
+        "PW_NEG_SOLAR": settings.neg_solar,
         "PW_SUPPRESS_NETWORK_ERRORS": settings.suppress_network_errors,
         "PW_NETWORK_ERROR_RATE_LIMIT": settings.network_error_rate_limit,
         "PW_FAIL_FAST": settings.fail_fast,
@@ -2543,9 +2543,11 @@ async def get_stats():
         "cloud_control": cloud_link,
         "pw3": True if pw3 else (None if pw3_unknown else False),
         "tedapi_mode": tedapi_mode,
-        "siteid": siteid,
+        # Kept for proxy compatibility but masked like PW_SITEID and
+        # PW_CACHE_FILE in config: cf is a path under PW_AUTH_PATH.
+        "siteid": "**********" if siteid else None,
         "counter": 0,  # Legacy field, not used
-        "cf": settings.cache_file,
+        "cf": "**********" if settings.cache_file else None,
         "config": config,
         "connection_health": connection_health,
         "gateways": {
