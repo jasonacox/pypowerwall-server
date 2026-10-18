@@ -16,7 +16,8 @@ and `/redoc`.
 
 ## Configuration
 
-Settings come from environment variables (names are case-insensitive). Command
+Settings come from environment variables. Names are case-insensitive, except
+`PW_CONFIG` and `PW_GATEWAYS`, which must be uppercase. Command
 line flags (`pypowerwall-server --help`) override the matching variables.
 Booleans accept `yes`/`no`, `true`/`false`, `1`/`0` or `on`/`off`.
 
@@ -355,14 +356,17 @@ An unknown `gateway_id` returns `404`.
 
 ### Aggregates (all gateways)
 
-Combined data from online gateways: power and capacity are summed, battery
-levels averaged.
+Combined data from every gateway with data: power is summed and battery levels
+averaged. With `PW_GRACEFUL_DEGRADATION`, an offline gateway still contributes
+its last good data for up to `PW_CACHE_TTL` seconds and is counted in
+`num_degraded`, not `num_online`. Battery capacity is not collected yet, so
+the capacity fields are always `0`.
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
-| GET | `/api/aggregate/` | | All totals: battery level (scaled and raw), capacity, site/battery/load/solar/grid power, `num_gateways`, `num_online`, `timestamp`. |
+| GET | `/api/aggregate/` | | All totals: battery level (scaled and raw), capacity, site/battery/load/solar/grid power, primary `grid_status`, `num_gateways`, `num_online`, `num_degraded`, `timestamp`, and each gateway's status under `gateways`. |
 | GET | `/api/aggregate/power` | | `{"site", "battery", "load", "solar", "grid", "timestamp"}` in W. |
-| GET | `/api/aggregate/soe` | | `{"percentage", "raw_percentage", "num_gateways", "timestamp"}`. |
+| GET | `/api/aggregate/soe` | | `{"percentage", "raw_percentage", "num_gateways", "timestamp"}`; `num_gateways` is the online count. |
 | GET | `/api/aggregate/battery` | | Capacity, battery level, battery power and gateway counts. |
 | GET | `/api/aggregate/strings` | | Strings keyed by gateway id. |
 | GET | `/api/aggregate/alerts` | | Alerts keyed by gateway id. |
@@ -381,8 +385,8 @@ query values return `422`.
 | GET | `/api/timeseries/trend` | | About 360 bucketed points of solar/home/battery/grid kW and battery level. Query: `hours` (1-168, default 24), `gateway`, `start`/`end` (epoch seconds), `fit`. |
 | GET | `/api/timeseries/samples` | | Raw power samples. Query: `gateway`, `start`, `end`, `limit` (1-10000, default 500). |
 | GET | `/api/timeseries/status` | | Retention settings, database size, row counts and gateway names. |
-| GET | `/api/timeseries/signals` | | Recorded temperature/fan series with their time ranges and `powerwall` labels, plus the metric and chart-group catalog. Query: `gateway`. |
-| GET | `/api/timeseries/signal_trend` | | Temperature/fan history (avg/min/max/count per point). Query: `metrics`, `gateway`, `devices` (comma lists), `start`/`end` (epoch seconds up to 2100-01-01), `hours`, `resolution` (`auto`, `raw` or `daily`). |
+| GET | `/api/timeseries/signals` | | Recorded temperature/fan series with their time ranges and `powerwall` labels, plus the metric and chart-group catalog. Query: `gateway` (one id). |
+| GET | `/api/timeseries/signal_trend` | | Temperature/fan history (avg/min/max/count per point). Query: `metrics` and `devices` (comma lists), `gateway` (one id), `start`/`end` (epoch seconds up to 2100-01-01), `hours`, `resolution` (`auto`, `raw` or `daily`). |
 
 ### WebSockets
 
@@ -390,7 +394,7 @@ Each pushes one JSON message per second.
 
 | Path | Message |
 |------|---------|
-| `/ws/aggregate` | The `/api/aggregate/` object, plus each gateway's full status. |
+| `/ws/aggregate` | The `/api/aggregate/` object (including each gateway's status). |
 | `/ws/gateway/{gateway_id}` | That gateway's status (as `/api/gateways/{gateway_id}`), or `{"error": "Gateway not found"}`. |
 
 ### Health and stats
@@ -492,7 +496,10 @@ acknowledgement is not proof of grid state: check
   trusted network (`PW_BIND_ADDRESS`) and terminate TLS at a reverse proxy if
   the server is reachable from elsewhere.
 - `/stats` masks passwords, the control secret and the Tesla email.
-- `/api/gateways/*` never returns gateway passwords, RSA key paths or emails.
+- The `gateway` object in `/api/gateways/` and `/api/gateways/{gateway_id}`
+  omits gateway passwords, RSA key paths and emails. The raw
+  `/api/gateways/{gateway_id}/api/{path}` route returns the gateway's response
+  unchanged and is open for GET.
 - `PW_RATE_LIMIT_*` throttles per client IP, but it is not a substitute for a
   reverse proxy's limits on an internet-facing server.
 
