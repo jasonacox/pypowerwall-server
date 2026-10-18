@@ -1332,8 +1332,11 @@ def _extract_battery_blocks(system_status: Optional[dict]) -> list:
     """Extract per-battery capacity/charge values (Wh) from system status.
 
     Returns a list of {"index": int, "capacity": float|None,
-    "charge": float|None} dicts, one per battery block that reports at
-    least one of the two values.  "index" is the block's 1-based position
+    "charge": float|None, "serial": str|None} dicts, one per battery
+    block that reports at least one of the two values.  "serial" is the
+    block's PackageSerialNumber when present, used to group the battery's
+    entities under its own Home Assistant device (#153).  "index" is the
+    block's 1-based position
     in the gateway's battery_blocks list, so a block that temporarily
     reports neither value is skipped without collapsing the numbering of
     the batteries after it — degradation histories keep pointing at the
@@ -1355,7 +1358,13 @@ def _extract_battery_blocks(system_status: Optional[dict]) -> list:
         charge = _safe_float(block.get("nominal_energy_remaining"))
         if capacity is None and charge is None:
             continue
-        batteries.append({"index": index, "capacity": capacity, "charge": charge})
+        serial = block.get("PackageSerialNumber")
+        batteries.append({
+            "index": index,
+            "capacity": capacity,
+            "charge": charge,
+            "serial": serial if isinstance(serial, str) and serial else None,
+        })
     return batteries
 
 
