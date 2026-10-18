@@ -194,8 +194,8 @@ class GatewayManager:
     # Recovery retry intervals (seconds) — exponential backoff.
     _TEDAPI_RECOVERY_INITIAL_INTERVAL = 60
     _TEDAPI_RECOVERY_MAX_INTERVAL = 300
-    # Timeout for constructing a fresh local connection (lazy init and
-    # TEDAPI recovery share it).
+    # Minimum timeout for constructing a fresh local connection (lazy init
+    # and TEDAPI recovery share it); raised to PW_TIMEOUT + 5 s when higher.
     _CONNECTION_BUILD_TIMEOUT = 15.0
     # Cloud-control init retry backoff (seconds) when the connection could
     # not be established at startup: a Tesla cloud that is unreachable at
@@ -1892,10 +1892,13 @@ class GatewayManager:
         """Create a fresh local pypowerwall connection.
 
         The blocking constructor runs in the shared executor under
-        _CONNECTION_BUILD_TIMEOUT, same as the lazy init.  Used by the
+        max(_CONNECTION_BUILD_TIMEOUT, PW_TIMEOUT + 5 s), so a slow gateway
+        with a raised PW_TIMEOUT isn't abandoned mid-connect.  Used by the
         lazy init and by TEDAPI recovery, so both paths build the
         connection the same way.
         """
+        from app.config import settings
+
         loop = asyncio.get_running_loop()
         tedapi_kwargs = self._local_connection_kwargs(config)
         return await asyncio.wait_for(
@@ -1903,7 +1906,7 @@ class GatewayManager:
                 self._executor,
                 lambda kw=tedapi_kwargs: pypowerwall.Powerwall(**kw),
             ),
-            timeout=self._CONNECTION_BUILD_TIMEOUT,
+            timeout=max(self._CONNECTION_BUILD_TIMEOUT, settings.timeout + 5.0),
         )
 
     async def _tedapi_probe_loop(self, gateway_id: str):

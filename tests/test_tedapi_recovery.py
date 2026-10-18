@@ -336,3 +336,30 @@ class TestRecoveryBuildsFreshConnection:
         assert gm.connections["gw1"] is old
         assert gm._fallback_state["gw1"]["is_fallback_mode"] is True
         assert "no stored configuration" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pw_timeout, expected", [(5, 15.0), (30, 35.0)])
+async def test_connection_build_timeout_follows_pw_timeout(
+    monkeypatch, pw_timeout, expected
+):
+    """Building a connection allows max(15 s, PW_TIMEOUT + 5 s), the budget
+    recovery used before: with PW_TIMEOUT=30 a replacement that connects in
+    20 s must not be abandoned."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "timeout", pw_timeout)
+    monkeypatch.setattr(gm_module.pypowerwall, "Powerwall", Mock())
+    seen = {}
+    real_wait_for = gm_module.asyncio.wait_for
+
+    async def spy_wait_for(aw, timeout):
+        seen["timeout"] = timeout
+        return await real_wait_for(aw, timeout)
+
+    monkeypatch.setattr(gm_module.asyncio, "wait_for", spy_wait_for)
+    gm = GatewayManager()
+    await gm._create_local_connection(
+        GatewayConfig(id="gw", host="10.42.1.40", gw_pwd="pw")
+    )
+    assert seen["timeout"] == expected
