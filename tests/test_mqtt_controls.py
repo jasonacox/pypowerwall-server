@@ -332,6 +332,104 @@ async def test_unbound_shared_cloud_is_never_used(env, gm, monkeypatch, caplog):
     assert "can't write it" in caplog.text
 
 
+# --- PW_LOCAL_FIRST (opt-in local-first control writes, issue #149) -----------
+
+
+def _connection(lan_failed=False):
+    """Stand-in for a gateway's pypowerwall connection object."""
+    return MagicMock(tedapi=MagicMock(lan_failed=lan_failed))
+
+
+def bind_hybrid_v1r(monkeypatch, flag=True, lan_failed=False, connection=True):
+    """The shared cloud bound to the v1r gateway (hybrid setup)."""
+    monkeypatch.setattr(settings, "local_first", flag)
+    monkeypatch.setattr(gateway_manager, "_cloud_control_gateway_id", "v1r")
+    monkeypatch.setattr(
+        gateway_manager,
+        "connections",
+        {"v1r": _connection(lan_failed)} if connection else {},
+    )
+
+
+@pytest.mark.asyncio
+async def test_local_first_takes_the_write_on_v1r(env, gm, monkeypatch, caplog):
+    """Flag on with LAN up: the v1r gateway writes locally even though the
+    shared cloud connection is bound to it - the flag's whole point."""
+    bind_hybrid_v1r(monkeypatch)
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await run_commands(cmd("v1r", "mode", {"value": "backup"}))
+    assert calls(gm.local_control) == [
+        (("v1r", "set_mode", "backup"), {"timeout": 10.0})
+    ]
+    assert gm.cloud_control.await_count == 0
+    assert "applied (value='backup' via local v1r)" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_local_first_lan_failed_falls_back_to_cloud(env, gm, monkeypatch, caplog):
+    """Flag on but the library tripped its LAN failover: the helper declines
+    and the historical hybrid dispatch writes via the cloud connection."""
+    bind_hybrid_v1r(monkeypatch, lan_failed=True)
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await run_commands(cmd("v1r", "mode", {"value": "backup"}))
+    assert gm.local_control.await_count == 0
+    assert calls(gm.cloud_control) == [(("set_mode", "backup"), {"timeout": 10.0})]
+    assert "applied (value='backup' via hybrid cloud)" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_local_first_no_local_connection_falls_back_to_cloud(
+    env, gm, monkeypatch
+):
+    """Flag on but no local connection object: the helper declines and the
+    historical dispatch runs (cloud, for a bound hybrid gateway)."""
+    bind_hybrid_v1r(monkeypatch, connection=False)
+    await run_commands(cmd("v1r", "reserve", {"value": 30}))
+    assert gm.local_control.await_count == 0
+    assert calls(gm.cloud_control) == [(("set_reserve", 30), {"timeout": 10.0})]
+
+
+@pytest.mark.asyncio
+async def test_local_first_ignores_non_v1r_gateways(env, gm, monkeypatch, caplog):
+    """Flag on but TEDAPI full: the helper declines and the bound cloud
+    writes exactly as it does without the flag."""
+    monkeypatch.setattr(settings, "local_first", True)
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await run_commands(cmd("hybrid", "mode", {"value": "backup"}))
+    assert gm.local_control.await_count == 0
+    assert calls(gm.cloud_control) == [(("set_mode", "backup"), {"timeout": 10.0})]
+    assert "via hybrid cloud" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_local_first_off_keeps_the_historical_cloud_path(
+    env, gm, monkeypatch, caplog
+):
+    """Default off: with the very same live v1r setup the cloud-bound gateway
+    writes via the cloud exactly as before the flag existed."""
+    bind_hybrid_v1r(monkeypatch, flag=False)
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await run_commands(cmd("v1r", "reserve", {"value": 30}))
+    assert gm.local_control.await_count == 0
+    assert calls(gm.cloud_control) == [(("set_reserve", 30), {"timeout": 10.0})]
+    assert "applied (value=30 via hybrid cloud)" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_local_first_no_cloud_retry_after_a_failed_local_write(
+    env, gm, monkeypatch, caplog
+):
+    """Flag on: a timed-out local v1r write is final - the cloud is never
+    tried afterwards (it could double-apply)."""
+    bind_hybrid_v1r(monkeypatch)
+    gm.local_control.return_value = None
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await run_commands(cmd("v1r", "reserve", {"value": 30}))
+    assert gm.local_control.await_count == 1
+    assert gm.cloud_control.await_count == 0
+    assert "failed (value=30 via local v1r)" in caplog.text
+
+
 @pytest.mark.parametrize("control, value, ok", [
     ("reserve", 0, True), ("reserve", 100, True), ("reserve", 101, False),
     ("reserve", -1, False), ("reserve", True, False), ("reserve", "30", False),
@@ -764,7 +862,11 @@ async def test_shared_cloud_binds_only_to_an_unambiguous_site(
 
     def fake_powerwall(**kwargs):
         created.update(kwargs)
-        return types.SimpleNamespace(client=_CloudClient(sites, str(path)))
+        return types.SimpleNamespace(
+            client=_CloudClient(sites, str(path)),
+            cloudmode=True,
+            is_connected=lambda: True,
+        )
 
     monkeypatch.setattr(gm_module.pypowerwall, "Powerwall", fake_powerwall)
     monkeypatch.setattr(settings, "siteid", siteid)

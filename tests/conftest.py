@@ -23,6 +23,7 @@ def _reset_singleton_state():
     gateway_manager.connections.clear()
     gateway_manager.cache.clear()
     gateway_manager._cloud_control = None
+    gateway_manager._cloud_control_gateway_id = None
     gateway_manager._cloud_control_task = None
     # Hybrid cloud-link health bookkeeping (issue #87)
     gateway_manager._cloud_control_configured = False
@@ -57,6 +58,7 @@ def _reset_singleton_state():
     gateway_manager._fallback_state.clear()
     gateway_manager._tedapi_probe_failures.clear()
     gateway_manager._probe_tasks.clear()
+    gateway_manager._gateway_configs.clear()
 
 
 @pytest.fixture(autouse=True)

@@ -66,6 +66,7 @@ import pypowerwall
 from fastapi import APIRouter, HTTPException, Response, Header
 
 from app.api.auth import verify_control_token
+from app.mqtt.publisher import is_error_result
 from app.core.gateway_manager import (
     IslandingCommandInProgressError,
     IslandingCooldownError,
@@ -283,9 +284,13 @@ async def control_api(
 ):
     """Authenticated control endpoint for POST operations.
 
-    Routes to cloud control connection for write operations (set_reserve, set_mode,
-    set_grid_charging) when available, since TEDAPI doesn't support POST/write APIs.
-    Falls back to direct post for cloud-mode or FleetAPI gateways.
+    Write priority is shared with the MQTT controls
+    (gateway_manager.control_write): write operations (set_reserve,
+    set_mode, set_grid_charging, set_grid_export) go to the hybrid cloud
+    connection when one is configured, else the gateway's own local connection
+    — unless PW_LOCAL_FIRST is set, which tries a confirmed v1r transport
+    first while its LAN is up and a local connection exists. Unmapped paths
+    fall back to a direct post for cloud-mode or FleetAPI gateways.
 
     Optional companion parameters (ported from pypowerwall PR #308):
     - POST /control/reserve with mode=<mode> calls set_operation(level, mode)
@@ -356,24 +361,31 @@ async def control_api(
                        + ", ".join(valid_modes),
             )
         level = data["value"]
-        if gateway_manager._cloud_control:
-            result = await gateway_manager.cloud_control(
-                "set_operation", level, mode_val, timeout=10.0
-            )
-            if result is None:
-                raise HTTPException(
-                    status_code=503,
-                    detail="Control operation failed via cloud",
-                )
-            return result
-        # Fallback for local gateways (v1r / Basic LAN): use the library's
-        # set_operation() on the gateway's own local connection so the write
-        # is translated correctly instead of a raw POST the gateway rejects.
         gateway_id = get_default_gateway()
-        result = await gateway_manager.local_control(
+        # PW_LOCAL_FIRST: try a confirmed local v1r transport first. When
+        # the helper declines (flag off, non-v1r, LAN down or no local
+        # connection), the historical dispatch below runs verbatim.
+        path_label, result = await gateway_manager.control_write(
             gateway_id, "set_operation", level, mode_val, timeout=10.0
         )
-        if result is None:
+        if path_label is None:
+            if gateway_manager._cloud_control:
+                result = await gateway_manager.cloud_control(
+                    "set_operation", level, mode_val, timeout=10.0
+                )
+                if result is None:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Control operation failed via cloud",
+                    )
+                return result
+            # Fallback for local gateways (v1r / Basic LAN): use the library's
+            # set_operation() on the gateway's own local connection so the write
+            # is translated correctly instead of a raw POST the gateway rejects.
+            result = await gateway_manager.local_control(
+                gateway_id, "set_operation", level, mode_val, timeout=10.0
+            )
+        if result is None or (path_label is not None and is_error_result(result)):
             raise HTTPException(
                 status_code=503,
                 detail="Control operation failed or gateway not available",
@@ -388,23 +400,30 @@ async def control_api(
                 detail="Invalid 'level' companion value. Must be an integer.",
             )
         mode = data["value"]
-        if gateway_manager._cloud_control:
-            result = await gateway_manager.cloud_control(
-                "set_operation", level_val, mode, timeout=10.0
-            )
-            if result is None:
-                raise HTTPException(
-                    status_code=503,
-                    detail="Control operation failed via cloud",
-                )
-            return result
-        # Fallback for local gateways (v1r / Basic LAN): set_operation() on
-        # the local connection rather than a raw POST to /api/operation.
         gateway_id = get_default_gateway()
-        result = await gateway_manager.local_control(
+        # PW_LOCAL_FIRST: try a confirmed local v1r transport first. When
+        # the helper declines (flag off, non-v1r, LAN down or no local
+        # connection), the historical dispatch below runs verbatim.
+        path_label, result = await gateway_manager.control_write(
             gateway_id, "set_operation", level_val, mode, timeout=10.0
         )
-        if result is None:
+        if path_label is None:
+            if gateway_manager._cloud_control:
+                result = await gateway_manager.cloud_control(
+                    "set_operation", level_val, mode, timeout=10.0
+                )
+                if result is None:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Control operation failed via cloud",
+                    )
+                return result
+            # Fallback for local gateways (v1r / Basic LAN): set_operation() on
+            # the local connection rather than a raw POST to /api/operation.
+            result = await gateway_manager.local_control(
+                gateway_id, "set_operation", level_val, mode, timeout=10.0
+            )
+        if result is None or (path_label is not None and is_error_result(result)):
             raise HTTPException(
                 status_code=503,
                 detail="Control operation failed or gateway not available",
@@ -448,19 +467,26 @@ async def control_api(
 
     if path in control_map:
         method, args_fn = control_map[path]
-        if gateway_manager._cloud_control:
-            result = await gateway_manager.cloud_control(
-                method, *args_fn(data), timeout=10.0
-            )
-        else:
-            # Local mode (v1r / Basic LAN): call the mapped library method on
-            # the gateway's own connection instead of a raw POST, which the
-            # gateway's local API rejects with "Unknown API".
-            gateway_id = get_default_gateway()
-            result = await gateway_manager.local_control(
-                gateway_id, method, *args_fn(data), timeout=10.0
-            )
-        if result is None:
+        # PW_LOCAL_FIRST: try a confirmed local v1r transport first. When
+        # the helper declines (flag off, non-v1r, LAN down or no local
+        # connection), the historical dispatch below runs verbatim.
+        gateway_id = get_default_gateway()
+        path_label, result = await gateway_manager.control_write(
+            gateway_id, method, *args_fn(data), timeout=10.0
+        )
+        if path_label is None:
+            if gateway_manager._cloud_control:
+                result = await gateway_manager.cloud_control(
+                    method, *args_fn(data), timeout=10.0
+                )
+            else:
+                # Local mode (v1r / Basic LAN): call the mapped library method on
+                # the gateway's own connection instead of a raw POST, which the
+                # gateway's local API rejects with "Unknown API".
+                result = await gateway_manager.local_control(
+                    gateway_id, method, *args_fn(data), timeout=10.0
+                )
+        if result is None or (path_label is not None and is_error_result(result)):
             raise HTTPException(
                 status_code=503, detail=f"Control operation failed for {path}"
             )
@@ -2484,7 +2510,7 @@ async def get_stats():
         "PW_CACHE_FILE": "**********" if settings.cache_file else None,
         "PW_CONTROL_SECRET": "**********" if settings.control_secret else None,
         "PW_GW_PWD": "**********" if settings.pw_gw_pwd else None,
-        "PW_NEG_SOLAR": True,  # Always enabled in this implementation
+        "PW_NEG_SOLAR": settings.neg_solar,
         "PW_SUPPRESS_NETWORK_ERRORS": settings.suppress_network_errors,
         "PW_NETWORK_ERROR_RATE_LIMIT": settings.network_error_rate_limit,
         "PW_FAIL_FAST": settings.fail_fast,
@@ -2543,9 +2569,11 @@ async def get_stats():
         "cloud_control": cloud_link,
         "pw3": True if pw3 else (None if pw3_unknown else False),
         "tedapi_mode": tedapi_mode,
-        "siteid": siteid,
+        # Kept for proxy compatibility but masked like PW_SITEID and
+        # PW_CACHE_FILE in config: cf is a path under PW_AUTH_PATH.
+        "siteid": "**********" if siteid else None,
         "counter": 0,  # Legacy field, not used
-        "cf": settings.cache_file,
+        "cf": "**********" if settings.cache_file else None,
         "config": config,
         "connection_health": connection_health,
         "gateways": {

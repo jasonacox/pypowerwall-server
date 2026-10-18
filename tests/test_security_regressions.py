@@ -253,6 +253,35 @@ def test_stats_masks_pii(client, connected_gateway, monkeypatch):
     assert json.loads(text)["config"]["PW_SITEID"] == "**********"
 
 
+def test_stats_masks_top_level_siteid_and_cache_file(
+    client, connected_gateway, monkeypatch
+):
+    """The proxy-compatible top-level siteid and cf keys stay, but masked like
+    PW_SITEID and PW_CACHE_FILE in config (cf is a path under PW_AUTH_PATH)."""
+    from app.config import settings
+    from app.core.gateway_manager import gateway_manager
+
+    monkeypatch.setattr(settings, "cache_file", "/secret/auth/.powerwall")
+    monkeypatch.setattr(gateway_manager.gateways["test-gateway"], "site_id", "987654")
+    response = client.get("/stats")
+    assert response.status_code == 200
+    assert "/secret/auth" not in response.text
+    assert "987654" not in response.text
+    stats = response.json()
+    assert stats["cf"] == "**********"
+    assert stats["siteid"] == "**********"
+    assert stats["config"]["PW_CACHE_FILE"] == "**********"
+
+
+def test_stats_unset_siteid_and_cache_file_are_null(client, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "cache_file", None)
+    stats = client.get("/stats").json()
+    assert stats["cf"] is None
+    assert stats["siteid"] is None
+
+
 # ---------------------------------------------------------------------------
 # Rate limiting - disabled by default (see tests/test_rate_limit_middleware.py
 # for enabled-state behavior; the middleware is wired in at import time from

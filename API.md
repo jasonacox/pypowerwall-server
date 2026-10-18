@@ -120,7 +120,7 @@ PW_GATEWAYS='[
 | `PW_WIFI_HOST` | none | v1r | ✓ | Gateway WiFi address used for follower Powerwalls and as the fallback when the wired LAN fails (single-gateway form). |
 | `PW_EMAIL` | none | Cloud, Hybrid | ✓ | Tesla account email (single-gateway form). |
 | `PW_AUTH_PATH` | none | Cloud, Hybrid | ✓ | Directory with the Tesla auth files (single-gateway form). Also the default auth directory for the hybrid cloud connection. |
-| `PW_SITEID` | none | Hybrid, Local | ✓ | Tesla energy site id on accounts with several sites; picks the site the hybrid cloud connection controls. |
+| `PW_SITEID` | none | Cloud, FleetAPI, Hybrid, Local | ✓ | Tesla energy site id on accounts with several sites; picks the site for Cloud and FleetAPI gateways and the site the hybrid cloud connection controls. |
 | `PW_TIMEZONE` | `America/Los_Angeles` | All | ✓ | Gateway time zone (single-gateway form). |
 | `PW_FAILOVER` | `yes` | All | ✓ | pypowerwall transport failover. `no` pins the configured transports: the v1r leader stays on the wired LAN, failed requests are not rerouted, and a local connection never falls back to Cloud or FleetAPI. |
 
@@ -130,6 +130,7 @@ PW_GATEWAYS='[
 |----------|---------|------------|:-----:|-------------|
 | `PW_CONTROL_SECRET` | none | All | ✓ | Enables all write routes; clients send it as the control token (see [Control and security](#control-and-security)). Unset means read-only. The proxy uses the same variable but a different request format. |
 | `PW_ISLANDING_COOLDOWN` | `30` | v1r | | Minimum seconds between islanding commands per gateway; `0` disables the cooldown. |
+| `PW_LOCAL_FIRST` | `no` | v1r, Hybrid | | `yes` sends reserve, mode and grid writes over a confirmed local v1r connection first, even when a hybrid cloud connection exists (see [write path](#post-controlpath)). |
 
 `MQTT_CONTROLS` (below) separately enables control over MQTT.
 
@@ -472,6 +473,13 @@ connection, which can write in Cloud, FleetAPI and TEDAPI v1r modes. A failed
 or unsupported write returns `503`. The hybrid connection is shared: on a Tesla
 account with several sites, set `PW_SITEID`.
 
+With `PW_LOCAL_FIRST=yes`, a gateway confirmed on TEDAPI v1r, with its wired LAN
+up and a local connection, writes over that local connection first, even when
+a hybrid cloud connection exists. A write that was sent is final: there's no
+second attempt through the cloud, even after a timeout, since it may already
+have been applied. When the LAN is down or there's no local connection, the
+path above applies. Islanding is unaffected.
+
 ### Islanding: `POST /control/islanding`
 
 Physically opens or closes the grid contactor of the default gateway. It needs
@@ -512,7 +520,8 @@ window. The cooldown counts failed and timed-out commands too.
 - Read routes, `/stats` and `/console` need no authentication. Bind to a
   trusted network (`PW_BIND_ADDRESS`) and terminate TLS at a reverse proxy if
   the server is reachable from elsewhere.
-- `/stats` masks passwords, the control secret and the Tesla email.
+- `/stats` masks passwords, the control secret, the Tesla email, the site id
+  and file paths.
 - The `gateway` object in `/api/gateways/` and `/api/gateways/{gateway_id}`
   omits gateway passwords, RSA key paths and emails. The raw
   `/api/gateways/{gateway_id}/api/{path}` route returns the gateway's response
