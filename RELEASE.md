@@ -2,7 +2,7 @@
 
 ## Version History
 
-### [0.11.1] - Upcoming
+### [0.11.1] - 2026-10-18
 
 **Fixed:**
 - **`/version` matches the proxy** — `vint` now uses pypowerwall's
