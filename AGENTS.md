@@ -209,6 +209,14 @@ history UI:
 
 ## Configuration
 
+### Documenting Settings and Routes in API.md
+
+`API.md` is the reference for every setting and route. A new `Settings` field
+(or environment variable) or a new route must be documented there in the same
+change; `tests/test_api_md.py` fails when a `Settings` alias or a registered
+route path is missing from API.md, or when API.md names an unknown `PW_`/`MQTT_`
+variable. The tables below are a quick summary only.
+
 ### Environment Variables
 
 All configuration uses `PW_` prefix for consistency with pypowerwall proxy:
@@ -220,7 +228,7 @@ All configuration uses `PW_` prefix for consistency with pypowerwall proxy:
 | `PW_EMAIL` | None | Tesla account email |
 | `PW_PORT` | 8675 | Server port |
 | `PW_CACHE_EXPIRE` | 5 | Polling interval (seconds) |
-| `PW_NEG_SOLAR` | yes | Allow negative solar values |
+| `PW_NEG_SOLAR` | no | Allow negative solar values |
 | `PW_GRACEFUL_DEGRADATION` | yes | Serve stale data when offline |
 
 MQTT uses a separate `MQTT_` prefix (not a Powerwall concept):
@@ -392,6 +400,7 @@ The `track_requests` middleware in `app/main.py` does double duty: request stati
 | File | Purpose |
 |------|---------|
 | `app/main.py` | FastAPI app, lifespan, auth cookie middleware, log filtering, router ordering, CLI |
+| `API.md` | Reference for every setting and route (kept complete by `tests/test_api_md.py`) |
 | `app/config.py` | Pydantic settings, environment variables |
 | `app/core/gateway_manager.py` | Connection management, polling, caching |
 | `app/api/legacy.py` | Backward-compatible proxy endpoints + fake `/api/login/Basic` auth endpoint |

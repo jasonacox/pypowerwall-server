@@ -7,7 +7,8 @@ All routes are prefixed with /api/gateways (configured in main.py).
 Routes:
     - GET  /api/gateways/              -> List all configured gateways
     - GET  /api/gateways/{id}          -> Get specific gateway status
-    - POST /api/gateways/{id}/control  -> Control operations for specific gateway
+    - GET  /api/gateways/{id}/api/{path} -> Raw gateway API read (on demand)
+    - POST /api/gateways/{id}/api/{path} -> Raw gateway API write (control token)
     
 Design Notes:
     - Router prefix prevents conflicts with legacy routes

@@ -4,6 +4,9 @@ Configuration Management for PyPowerwall Server
 This module handles all server configuration through environment variables and provides
 100% backward compatibility with the original pypowerwall proxy server settings.
 
+The full reference for every setting is API.md (tests/test_api_md.py checks
+that each Settings field is documented there).
+
 Configuration Methods:
 
     1. Multi-Gateway Configuration (recommended for multiple Powerwalls):
@@ -70,16 +73,24 @@ Environment Variables (Proxy Compatible):
         PW_RATE_LIMIT_MAX_BUCKETS     - Max tracked client IPs before pruning (default: 10000)
 
     UI and Advanced:
-        PW_STYLE             - UI style: clear/black/white/grafana/grafana-dark (default: "clear")
+        PW_STYLE             - UI style: clear/black/white/grafana/grafana-dark/
+                               solar/dakboard (default: "clear")
         PW_AUTH_MODE         - Auth mode: cookie/token (default: "cookie")
         PW_CACHE_FILE        - Cache file path (default: auto - uses PW_AUTH_PATH/.powerwall or /tmp/.powerwall)
         PW_SITEID            - Tesla site ID for multi-site accounts (default: none)
         PW_CONTROL_SECRET    - Enable control commands (default: none/disabled)
+        PW_ISLANDING_COOLDOWN - Seconds between islanding commands per gateway
+                               (default: 30; 0 disables)
         PW_NEG_SOLAR         - Allow negative solar values "yes"/"no" (default: "no")
         PW_RSA_KEY_PATH      - Path to RSA-4096 private key PEM for TEDAPI v1r LAN access (default: none)
         PW_WIFI_HOST         - WiFi host IP for TEDAPI v1r WiFi fallback (default: none)
         PW_FAILOVER          - Transport/mode failover "yes"/"no" (default: "yes")
         PROXY_BASE_URL       - Base URL for reverse proxy (default: "/")
+        CORS_ORIGINS         - JSON array of allowed CORS origins (default: ["*"])
+        PW_CONFIG            - Gateway config file path (YAML/JSON; overrides
+                               PW_GATEWAYS and the single-gateway variables)
+
+    MQTT (MQTT_HOST enables publishing; all MQTT_* settings are in API.md)
 
     Time-Series Storage (Daily Energy Stats):
         PW_TIMESERIES_RETENTION       - Raw 5s sample retention, e.g. "24h" (default), "7d",
@@ -117,7 +128,8 @@ Connection Modes:
     FleetAPI Mode:
         • Official Tesla API
         • Requires app registration with Tesla
-        • Configuration: PW_EMAIL + PW_AUTH_PATH + fleetapi=true
+        • Configuration: a PW_GATEWAYS / PW_CONFIG entry with email + authpath
+          + fleetapi: true
 
 Gateway Configuration Priority:
 
@@ -179,7 +191,7 @@ Adding New Settings:
 
     3. Use in code via settings.new_setting
 
-    4. Update README with new variable
+    4. Document it in API.md (tests/test_api_md.py enforces this)
 
 Accessing Configuration:
 

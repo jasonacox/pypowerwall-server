@@ -37,7 +37,7 @@ Routing Structure:
     3. Multi-gateway API (prefix: /api/gateways):
        - GET  /api/gateways/              -> List all gateways
        - GET  /api/gateways/{id}          -> Get gateway status
-       - POST /api/gateways/{id}/control  -> Control operations
+       - POST /api/gateways/{id}/api/{path} -> Raw gateway write (token)
        
     4. Aggregate data API (prefix: /api/aggregate):
        - GET  /api/aggregate/battery      -> Aggregated battery data
@@ -786,11 +786,11 @@ def cli():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Environment Variables:
-  PW_HOST            Powerwall gateway IP (default: 192.168.91.1)
+  PW_HOST            Powerwall gateway IP (e.g. 192.168.91.1)
   PW_GW_PWD          Gateway Wi-Fi password (required for TEDAPI)
   PW_EMAIL           Tesla account email (for Cloud/FleetAPI)
   PW_PASSWORD        Customer password for local API (PW2 local / PW3 Basic LAN)
-  PW_AUTH_PATH        Path to store authentication files (default: .)
+  PW_AUTH_PATH       Path to store authentication files
   PW_STYLE           Theme style (default: clear)
   PW_SITEID          Specific site ID (for multiple sites)
   PW_CACHE_EXPIRE    Polling interval in seconds (default: 5)

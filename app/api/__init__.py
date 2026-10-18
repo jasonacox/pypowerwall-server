@@ -14,7 +14,7 @@ Module Organization:
     
     gateways.py - Multi-gateway management API
         • Prefix: /api/gateways
-        • Routes: / (list), /{id} (status), /{id}/control (operations)
+        • Routes: / (list), /{id} (status), /{id}/api/{path} (raw GET/POST)
         • Purpose: Manage multiple Powerwall systems independently
         • Design: Per-gateway targeting, independent status tracking
     

@@ -9,6 +9,9 @@
 
 A high-performance FastAPI-based server for monitoring and managing Tesla Powerwall systems. Designed as the next-generation evolution of the [pypowerwall proxy](https://github.com/jasonacox/pypowerwall/tree/main/proxy#pypowerwall-proxy-server) with multi-gateway support, real-time monitoring, and a built-in status console.
 
+**Reference:** [API.md](API.md) lists every environment variable, config file
+field and API route.
+
 <img alt="PyPowerwall Server Console" src="https://github.com/user-attachments/assets/0a12fa85-b054-4a62-90a6-f1557bec9e56" />
 
 The **Energy** panel toggles between **Energy Summary** (current kW totals) and **Energy Trend** (raw kW data with battery level % overlay).
@@ -192,6 +195,9 @@ pypowerwall-server --email "your@email.com"
 ```
 
 ## Configuration
+
+The complete list of settings, with defaults and the modes they apply to, is in
+[API.md](API.md#configuration). This section covers common setups.
 
 > **Note**: Most users will use **TEDAPI** to connect to their Powerwall gateway, which is accessible at the standard IP address `192.168.91.1` on your local network. You'll need your gateway password (found in the Tesla app under your gateway settings).
 
@@ -652,112 +658,10 @@ For example `MQTT_CONTROLS=15` enables everything except going off grid, which n
 
 ## API Endpoints
 
-### Legacy Proxy Compatibility
-
-All existing proxy endpoints work unchanged:
-
-**Core Data Endpoints:**
-- `GET /vitals` - Detailed system vitals
-- `GET /aggregates` - Power meter aggregates
-- `GET /soe` - State of energy (battery %)
-- `GET /freq` - Grid frequency data
-- `GET /pod` - Battery pod details
-- `GET /strings` - Solar string data
-- `GET /battery` - Battery information
-- `GET /json` - Combined metrics and status (JSON)
-
-**Temperature & Environment:**
-- `GET /temps` - All temperature sensors
-- `GET /temps/pw` - Powerwall temperatures only
-
-**Alerts & Status:**
-- `GET /alerts` - System alerts
-- `GET /alerts/pw` - Powerwall alerts only
-
-**Fan Information:**
-- `GET /fans` - All fan status
-- `GET /fans/pw` - Powerwall fans only (`FANn_actual`/`FANn_target` RPM; Powerwall 3 adds `FANn_duty` %, with `FANn_target` null)
-
-**Data Export:**
-- `GET /csv` - CSV format for Telegraf/InfluxDB
-- `GET /csv/v2` - Enhanced CSV format
-
-**TEDAPI Raw Access:**
-- `GET /tedapi` - TEDAPI endpoint list
-- `GET /tedapi/config` - Gateway configuration
-- `GET /tedapi/status` - System status
-- `GET /tedapi/components` - Component details
-- `GET /tedapi/battery` - Battery information
-- `GET /tedapi/controller` - Controller data
-
-**Tesla API Endpoints:**
-- `GET /api/system_status/soe` - State of energy
-- `GET /api/system_status/grid_status` - Grid connection status
-- `GET /api/system_status/grid_faults` - Grid fault log
-- `GET /api/sitemaster` - Sitemaster information
-- `GET /api/meters/aggregates` - Power meters
-- `GET /api/status` - System status
-- `GET /api/site_info` - Site information
-- `GET /api/site_info/site_name` - Site name
-- `GET /api/customer/registration` - Customer registration info
-- `GET /api/troubleshooting/problems` - Problem list
-- `GET /api/auth/toggle/supported` - Auth toggle support
-- `GET /api/networks` - Network configuration
-- `GET /api/system/networks` - System networks
-- `GET /api/powerwalls` - Powerwall device list
-
-**Server Status:**
-- `GET /version` - Server and firmware versions
-- `GET /stats` - Server statistics (uptime, requests, errors)
-
-**Control Operations (requires authentication):**
-- `GET /control/status` - Control availability for the Console (`{"enabled": bool}`, unauthenticated)
-- `POST /control/{path}` - Control operations (reserve, mode, etc.)
-
-**Tesla Tariff (server-only, not in the pypowerwall proxy):**
-- `GET /api/tesla/tariff_rate` - The site's utility tariff from the Tesla cloud
-  (`code`, `name`, `utility`, `seasons`, `energy_charges`, ...). Cached for 5
-  minutes; if a refresh fails, the last good tariff is served.
-- `POST /api/tesla/time_of_use_settings` - Update the Time-of-Use tariff
-  (requires `Authorization: Bearer <PW_CONTROL_SECRET>`). Body:
-  `{"tou_settings": {"optimization_strategy": "economics", "tariff_content_v2": {...}}}`.
-  Only `tou_settings` is sent to Tesla. `tariff_content_v2` uses Tesla's v2
-  tariff schema, which differs from what the GET returns, so a read result
-  can't be posted back unchanged. Returns e.g. `{"Message": "Updated", "Code": 201}`.
-
-Both need a Tesla cloud connection: hybrid mode (a local gateway with
-`PW_EMAIL` cloud control), or a cloud or FleetAPI gateway. Otherwise they
-return `503`; a Tesla-side error returns `502`, and an invalid POST body `400`.
-
-### Multi-Gateway Endpoints
-
-**Gateway Selection:**
-- `GET /api/gateways` - List all configured gateways
-- `GET /api/gateways/{id}` - Gateway details
-- `GET /api/gateways/{id}/vitals` - Gateway-specific vitals
-- `GET /api/gateways/{id}/aggregates` - Gateway-specific power data
-
-**Aggregated Data:**
-- `GET /api/aggregate/power` - Combined power across all gateways
-- `GET /api/aggregate/soe` - Total battery capacity and charge
-- `GET /api/aggregate/status` - Health status of all gateways
-
-**Time-Series Endpoints (Daily Energy, Temperatures, Fans):**
-- `GET /api/timeseries/today` - Today's running kWh totals per gateway
-- `GET /api/timeseries/daily?days=7` - Daily kWh totals (per gateway/category); `start`/`end` (`YYYY-MM-DD`) select any range of local days instead, e.g. `?start=2026-01-01&end=2026-06-30`
-- `GET /api/timeseries/trend?hours=24` - Bucketed kW + battery level for charting (per-gateway mean, summed across gateways)
-- `GET /api/timeseries/samples` - Raw samples (troubleshooting; filters: `gateway`, `start`, `end`, `limit`) — includes battery level (`soe`)
-- `GET /api/timeseries/status` - Subsystem status, retention settings, DB size
-- `GET /api/timeseries/signals` - Recorded temperature/fan series per gateway and device (each with its `powerwall` label, e.g. `PW1` / `PW1 Exp 1`, and the time range it covers), plus the `metrics` / `groups` catalog and gateway names
-- `GET /api/timeseries/signal_trend` - Temperature/fan history for charting, with avg/min/max and sample count per point (filters: `metrics`, `gateway`, `devices`, `start`, `end`, `hours`; `resolution=auto|raw|daily`; `raw` is served as daily beyond 14 days or ~500k rows)
-
-On `/signal_trend`, `start` / `end` are epoch seconds between 0 and 4102444800 (2100-01-01); other values return 422. `/trend` rejects only non-finite values (`nan`, `inf`).
-
-All report `{"enabled": false, ...}` when disabled (`PW_TIMESERIES_RETENTION=-1`).
-
-**WebSocket Endpoints:**
-- `WS /ws/gateway/{id}` - Real-time data stream for specific gateway
-- `WS /ws/aggregate` - Real-time aggregated data stream
+All existing pypowerwall proxy endpoints work unchanged, alongside multi-gateway
+(`/api/gateways/*`), aggregate (`/api/aggregate/*`), time-series
+(`/api/timeseries/*`) and WebSocket (`/ws/*`) endpoints. [API.md](API.md#routes)
+lists every route with its method, auth requirement and response.
 
 ### Interactive API Documentation
 

@@ -20,6 +20,14 @@
   "Default Gateway Battery 1 Capacity" becomes "Powerwall TG… Capacity".
   (#153)
 
+**Docs:**
+- **API reference (`API.md`)** — one reference for every environment variable,
+  config file field and route: defaults, the connection modes each setting
+  applies to, proxy-compatible names, auth requirements, the control write path
+  and islanding, and safe-default behavior. It also lists the proxy variables
+  the server accepts but ignores. A test fails when a setting or route is added
+  without an API.md entry. The README's endpoint list now points to it.
+
 **Fixed:**
 - **Docs: v1r follower Powerwalls need `PW_WIFI_HOST`** — the README said `PW_WIFI_HOST` defaults to `192.168.91.1`; it isn't set by default, and without it v1r shows only the leader Powerwall. The README now says to set it to the gateway's WiFi access point for multi-Powerwall sites, and its v1r examples use the wired LAN IP (`10.42.1.x`) for `PW_HOST` instead of the WiFi address. The startup warning names `192.168.91.1` instead of `<gateway-ip>` (#157).
 
