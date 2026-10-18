@@ -7,12 +7,14 @@ outer poll timeouts can be tested without depending on SQLite or machine speed.
 import asyncio
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Coroutine, Optional
 
 import pytest
 import pytest_asyncio
 
+from app.core import timeseries as timeseries_module
 from app.core.timeseries import TimeSeriesStore
 
 BASE_TS = 1792231200.0
@@ -88,7 +90,10 @@ class WriterHarness:
         pending = list(self.store._pending_writes)
         if pending:
             await asyncio.wait_for(
-                asyncio.gather(*(asyncio.shield(future) for future in pending)),
+                asyncio.gather(
+                    *(asyncio.shield(future) for future in pending),
+                    return_exceptions=True,
+                ),
                 timeout=5,
             )
 
@@ -170,8 +175,6 @@ async def test_queued_write_survives_actual_five_second_poll_timeout(
 
         stats = await store.status()
         assert stats["writes_pending"] == 0
-        assert stats["write_wait_interruptions"] == 1
-        assert stats["late_write_completions"] == 1
         assert stats["write_failures"] == 0
     finally:
         release.set()
@@ -238,7 +241,7 @@ async def test_queued_writes_preserve_admission_order_and_energy_integral(
 
 
 @pytest.mark.asyncio
-async def test_signal_timeout_reserves_interval_until_commit(
+async def test_accepted_signal_gates_interval_after_wait_timeout(
     writer: WriterHarness,
 ) -> None:
     release = await writer.block_writer()
@@ -246,7 +249,7 @@ async def test_signal_timeout_reserves_interval_until_commit(
         writer.store.record_signal_sample("test", BASE_TS, METRICS, "UTC")
     )
     await writer.timeout(task)
-    assert SIGNAL_KEY not in writer.store._signal_last
+    assert writer.store._signal_last[SIGNAL_KEY] == BASE_TS
     assert not await writer.store.record_signal_sample(
         "test", BASE_TS + 5, METRICS, "UTC"
     )
@@ -255,7 +258,6 @@ async def test_signal_timeout_reserves_interval_until_commit(
 
     assert writer.rows("SELECT ts FROM device_samples") == [(int(BASE_TS),)]
     assert writer.store._signal_last[SIGNAL_KEY] == BASE_TS
-    assert SIGNAL_KEY not in writer.store._signal_pending
     assert not await writer.store.record_signal_sample(
         "test", BASE_TS + 5, METRICS, "UTC"
     )
@@ -267,7 +269,7 @@ async def test_signal_timeout_reserves_interval_until_commit(
 
 
 @pytest.mark.asyncio
-async def test_failed_signal_write_retries_on_next_poll(
+async def test_failed_signal_write_consumes_interval_until_next_due_poll(
     writer: WriterHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     original = writer.store._ensure_conn
@@ -282,61 +284,13 @@ async def test_failed_signal_write_retries_on_next_poll(
 
     monkeypatch.setattr(writer.store, "_ensure_conn", fail_once)
     assert not await writer.store.record_signal_sample("test", BASE_TS, METRICS, "UTC")
-    assert SIGNAL_KEY not in writer.store._signal_last
-    assert SIGNAL_KEY not in writer.store._signal_pending
-    assert await writer.store.record_signal_sample("test", BASE_TS + 5, METRICS, "UTC")
-    assert writer.rows("SELECT ts FROM device_samples") == [(int(BASE_TS + 5),)]
-    assert (await writer.store.status())["write_failures"] == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("fail_first", [False, True], ids=["commit", "failure"])
-async def test_signal_completion_releases_only_its_own_reservation(
-    writer: WriterHarness, monkeypatch: pytest.MonkeyPatch, fail_first: bool
-) -> None:
-    original = writer.store._record_signal_sample_sync
-    release_queue = await writer.block_writer()
-    second_started, release_second = writer.worker_barrier()
-    loop = asyncio.get_running_loop()
-
-    def run_signal(*args: Any) -> Any:
-        if args[1] == BASE_TS and fail_first:
-            raise sqlite3.OperationalError("injected first reservation failure")
-        if args[1] == BASE_TS + 60:
-            loop.call_soon_threadsafe(second_started.set)
-            assert release_second.wait(20), "second signal write was not released"
-        return original(*args)
-
-    monkeypatch.setattr(writer.store, "_record_signal_sample_sync", run_signal)
-    first_task, first_future = await writer.enqueue(
-        writer.store.record_signal_sample("test", BASE_TS, METRICS, "UTC")
-    )
-    second_task, _ = await writer.enqueue(
-        writer.store.record_signal_sample("test", BASE_TS + 60, METRICS, "UTC")
-    )
-    await asyncio.gather(writer.timeout(first_task), writer.timeout(second_task))
-    assert len(writer.store._signal_pending[SIGNAL_KEY]) == 2
-    release_queue.set()
-    await asyncio.wait_for(second_started.wait(), timeout=5)
-    await asyncio.wait_for(asyncio.shield(first_future), timeout=5)
-
-    assert len(writer.store._signal_pending[SIGNAL_KEY]) == 1
-    if fail_first:
-        assert SIGNAL_KEY not in writer.store._signal_last
-    else:
-        assert writer.store._signal_last[SIGNAL_KEY] == BASE_TS
+    assert writer.store._signal_last[SIGNAL_KEY] == BASE_TS
     assert not await writer.store.record_signal_sample(
-        "test", BASE_TS + 65, METRICS, "UTC"
+        "test", BASE_TS + 5, METRICS, "UTC"
     )
-    release_second.set()
-    await writer.flush()
-
-    assert SIGNAL_KEY not in writer.store._signal_pending
-    assert writer.store._signal_last[SIGNAL_KEY] == BASE_TS + 60
-    expected = [(int(BASE_TS + 60),)]
-    if not fail_first:
-        expected.insert(0, (int(BASE_TS),))
-    assert writer.rows("SELECT ts FROM device_samples ORDER BY ts") == expected
+    assert await writer.store.record_signal_sample("test", BASE_TS + 60, METRICS, "UTC")
+    assert writer.rows("SELECT ts FROM device_samples") == [(int(BASE_TS + 60),)]
+    assert (await writer.store.status())["write_failures"] == 1
 
 
 @pytest.mark.asyncio
@@ -361,7 +315,6 @@ async def test_backlog_overflow_is_visible_and_preserves_accepted_rows(
     stats = await writer.store.status()
     assert stats["write_rejections"] == 1
     assert stats["writes_pending"] == 0
-    assert stats["writes_pending_limit"] == 2
 
 
 @pytest.mark.asyncio
@@ -373,7 +326,6 @@ async def test_rejected_signal_does_not_consume_sampling_interval(
     pending, _ = await writer.enqueue(writer.sample(5, 100))
     assert not await writer.store.record_signal_sample("test", BASE_TS, METRICS, "UTC")
     assert SIGNAL_KEY not in writer.store._signal_last
-    assert SIGNAL_KEY not in writer.store._signal_pending
     release.set()
     await pending
     await writer.flush()
@@ -384,7 +336,7 @@ async def test_rejected_signal_does_not_consume_sampling_interval(
 
 
 @pytest.mark.asyncio
-async def test_late_worker_error_is_counted_and_consumed_then_writer_recovers(
+async def test_detached_worker_error_is_counted_and_consumed_then_writer_recovers(
     writer: WriterHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     release = await writer.block_writer()
@@ -405,8 +357,6 @@ async def test_late_worker_error_is_counted_and_consumed_then_writer_recovers(
         await writer.flush()
         stats = await writer.store.status()
         assert stats["write_failures"] == 1
-        assert stats["late_write_failures"] == 1
-        assert stats["late_write_completions"] == 0
         assert stats["writes_pending"] == 0
         assert unhandled == []
         monkeypatch.setattr(writer.store, "_record_sample_sync", original)
@@ -454,7 +404,7 @@ async def test_power_commit_failure_rolls_back_rows_energy_and_integration_state
 
 
 @pytest.mark.asyncio
-async def test_signal_commit_failure_rolls_back_series_and_allows_complete_retry(
+async def test_signal_commit_failure_rolls_back_series_and_retries_when_due(
     writer: WriterHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fail_next_commit(writer, monkeypatch)
@@ -463,9 +413,11 @@ async def test_signal_commit_failure_rolls_back_series_and_allows_complete_retry
     assert not await writer.store.record_signal_sample("test", BASE_TS, metrics, "UTC")
     assert writer.rows("SELECT COUNT(*) FROM device_samples") == [(0,)]
     assert writer.rows("SELECT COUNT(*) FROM device_series") == [(0,)]
-    assert writer.store._signal_last == {}
-    assert writer.store._signal_pending == {}
-    assert await writer.store.record_signal_sample("test", BASE_TS + 5, metrics, "UTC")
+    assert writer.store._signal_last[SIGNAL_KEY] == BASE_TS
+    assert not await writer.store.record_signal_sample(
+        "test", BASE_TS + 5, metrics, "UTC"
+    )
+    assert await writer.store.record_signal_sample("test", BASE_TS + 60, metrics, "UTC")
 
     assert writer.rows("SELECT COUNT(*) FROM device_samples") == [(2,)]
     assert writer.rows("SELECT COUNT(*) FROM device_series") == [(2,)]
@@ -512,6 +464,115 @@ async def test_stop_drains_accepted_writes_before_closing(
     )
     assert writer.store._conn is None
     assert writer.store._executor is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hold_lock", [False, True], ids=["worker", "writer-lock"])
+async def test_stop_bounds_drain_and_discards_queued_accepted_write(
+    writer: WriterHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    hold_lock: bool,
+) -> None:
+    monkeypatch.setattr(timeseries_module, "_STOP_DRAIN_TIMEOUT", 0.05)
+    original = writer.store._record_sample_sync
+    started, release = writer.worker_barrier()
+    finished = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    calls = []
+
+    def blocked(*args: Any) -> Any:
+        calls.append(args[1])
+        if args[1] != BASE_TS + 60:
+            return original(*args)
+        if hold_lock:
+            writer.store._lock.acquire()
+        try:
+            loop.call_soon_threadsafe(started.set)
+            assert release.wait(20), "running write was not released"
+            return original(*args)
+        finally:
+            if hold_lock:
+                writer.store._lock.release()
+            loop.call_soon_threadsafe(finished.set)
+
+    monkeypatch.setattr(writer.store, "_record_sample_sync", blocked)
+    await writer.enqueue(writer.sample(60, 1200))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await writer.enqueue(writer.sample(120, 600))
+    assert len(writer.store._pending_writes) == 2
+    # A regression that synchronously takes the writer lock cannot hang the
+    # entire test runner; the elapsed-time assertion still detects it.
+    watchdog = threading.Timer(2, release.set)
+    watchdog.start()
+    try:
+        before = time.monotonic()
+        await asyncio.wait_for(writer.store.stop(), timeout=1)
+        assert time.monotonic() - before < 0.5
+        assert not release.is_set()
+        assert calls == [BASE_TS + 60]
+        assert "abandoning 2 accepted write jobs" in caplog.text
+        assert await writer.sample(180, 100) is None
+        assert not await writer.store.record_signal_sample(
+            "test", BASE_TS, METRICS, "UTC"
+        )
+    finally:
+        release.set()
+        watchdog.cancel()
+        watchdog.join()
+        await asyncio.wait_for(finished.wait(), timeout=5)
+        await asyncio.wait_for(
+            asyncio.wrap_future(writer.store._close_future), timeout=5
+        )
+
+    assert calls == [BASE_TS + 60]
+    assert writer.store._conn is None
+    assert writer.store._executor is None
+    assert writer.rows("SELECT ts FROM samples WHERE ts=?", (BASE_TS + 120,)) == []
+
+
+@pytest.mark.asyncio
+async def test_stop_bounds_sqlite_checkpoint_during_cleanup(
+    writer: WriterHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(timeseries_module, "_STOP_DRAIN_TIMEOUT", 0.05)
+    connection = writer.store._conn
+    started, release = writer.worker_barrier()
+    loop = asyncio.get_running_loop()
+
+    class BlockedCheckpointConnection:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(connection, name)
+
+        def execute(self, query: str, *args: Any, **kwargs: Any) -> Any:
+            if query == "PRAGMA wal_checkpoint(TRUNCATE)":
+                loop.call_soon_threadsafe(started.set)
+                assert release.wait(20), "checkpoint was not released"
+            return connection.execute(query, *args, **kwargs)
+
+    monkeypatch.setattr(writer.store, "_conn", BlockedCheckpointConnection())
+    watchdog = threading.Timer(2, release.set)
+    watchdog.start()
+    try:
+        before = time.monotonic()
+        stopping = writer.spawn(writer.store.stop())
+        await asyncio.wait_for(started.wait(), timeout=1)
+        await asyncio.wait_for(stopping, timeout=1)
+        assert time.monotonic() - before < 0.5
+        assert not release.is_set()
+        assert not writer.store._close_future.done()
+        assert "shutdown timed out" in caplog.text
+    finally:
+        release.set()
+        watchdog.cancel()
+        watchdog.join()
+        await asyncio.wait_for(
+            asyncio.wrap_future(writer.store._close_future), timeout=5
+        )
+
+    assert writer.store._conn is None
 
 
 @pytest.mark.asyncio
@@ -588,7 +649,6 @@ async def test_queries_during_shutdown_return_empty_without_entering_either_lane
     assert status["samples"] == status["daily_rows"] == 0
     assert status["signal_samples"] == status["signal_daily_rows"] == 0
     assert status["writes_pending"] == 1
-    assert status["writer_stopping"] is True
     assert trend["points"] == []
     assert trend["count"] == 0
     assert daily == {"enabled": True, "days": [], "last_updated": None}
@@ -601,8 +661,7 @@ async def test_queries_during_shutdown_return_empty_without_entering_either_lane
 
     release.set()
     await asyncio.wait_for(stopping, timeout=5)
-    result, committed = future.result()
-    assert committed
+    result = future.result()
     assert result["solar_kwh"] == pytest.approx(0.01)
     if writer.database != ":memory:":
         assert writer.rows() == [(BASE_TS,), (BASE_TS + 60,)]
