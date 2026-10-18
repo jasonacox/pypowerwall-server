@@ -58,6 +58,7 @@ def _reset_singleton_state():
     gateway_manager._fallback_state.clear()
     gateway_manager._tedapi_probe_failures.clear()
     gateway_manager._probe_tasks.clear()
+    gateway_manager._gateway_configs.clear()
 
 
 @pytest.fixture(autouse=True)

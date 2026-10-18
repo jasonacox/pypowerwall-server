@@ -872,8 +872,8 @@ async def test_initialize_cloud_control_uses_pw_authpath_fallback(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_initialize_cloud_control_exception_is_handled(monkeypatch):
-    """Test that initialize() logs a warning and continues when cloud control setup fails."""
+async def test_initialize_cloud_control_exception_is_retried(monkeypatch):
+    """Test that a failed cloud-control init is retried, and shutdown stops it."""
     from app.config import GatewayConfig
 
     call_count = 0
@@ -902,13 +902,21 @@ async def test_initialize_cloud_control_exception_is_handled(monkeypatch):
     gm.cache.clear()
     gm._cloud_control = None
 
-    # Should not raise — exception is swallowed with a warning
+    # Should not raise — the failure is logged and retried in the background
     await gm.initialize(configs, poll_interval=5)
-    await gm._cloud_control_task
+    task = gm._cloud_control_task
+    assert task is not None
 
+    deadline = asyncio.get_running_loop().time() + 5
+    while call_count < 1 and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.01)
+
+    assert call_count >= 1
     assert gm._cloud_control is None
+    assert not task.done()  # now waiting out the retry backoff
 
     await gm.shutdown()
+    assert task.done()
 
 
 # --- Firmware change logging (Powerwall-Dashboard #854) ---

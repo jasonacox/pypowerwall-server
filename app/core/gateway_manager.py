@@ -194,6 +194,14 @@ class GatewayManager:
     # Recovery retry intervals (seconds) — exponential backoff.
     _TEDAPI_RECOVERY_INITIAL_INTERVAL = 60
     _TEDAPI_RECOVERY_MAX_INTERVAL = 300
+    # Minimum timeout for constructing a fresh local connection (lazy init
+    # and TEDAPI recovery share it); raised to PW_TIMEOUT + 5 s when higher.
+    _CONNECTION_BUILD_TIMEOUT = 15.0
+    # Cloud-control init retry backoff (seconds) when the connection could
+    # not be established at startup: a Tesla cloud that is unreachable at
+    # boot must not leave control permanently unavailable.
+    _CLOUD_CONTROL_RETRY_INITIAL = 60
+    _CLOUD_CONTROL_RETRY_MAX = 300
     # /api/site_info changes rarely and local gateways rate-limit: refresh it at most
     # this often, and retry a failed fetch no sooner than _SITE_INFO_RETRY
     _SITE_INFO_REFRESH = 300
@@ -234,6 +242,10 @@ class GatewayManager:
         self._pending_configs: Dict[
             str, GatewayConfig
         ] = {}  # Gateways waiting for lazy initialization
+        # Original per-gateway configuration, kept for TEDAPI recovery: a
+        # replacement connection must be built exactly like startup builds
+        # the first one. (Lives on after _pending_configs is drained.)
+        self._gateway_configs: Dict[str, GatewayConfig] = {}
         self._preserve_stale_count: Dict[str, int] = {}  # Multi-PW snapshot preservation staleness tracker
         # Gateways whose current vitals were copied from the previous poll by
         # the multi-PW guard: not fresh readings, so not recorded as history.
@@ -527,6 +539,10 @@ class GatewayManager:
                 # Store gateway - connection will be created lazily on first poll
                 self.gateways[config.id] = gateway
                 self._pending_configs[config.id] = config  # All start as pending
+                # Keep the configuration for TEDAPI recovery (see
+                # _create_local_connection): a replacement connection is
+                # built the same way the lazy init builds the first one.
+                self._gateway_configs[config.id] = config
 
                 self.cache[config.id] = GatewayStatus(
                     gateway=gateway, online=False, error="Initializing..."
@@ -588,8 +604,9 @@ class GatewayManager:
             )
 
         # Start TEDAPI probe/recovery tasks for TEDAPI gateways.
-        # Probes pw.version() on an interval; after N consecutive None results,
-        # enters fallback mode and attempts pw.connect() with exponential backoff.
+        # Probes pw.version() on an interval; after N consecutive failed
+        # probes (or a connection that left TEDAPI mode), enters fallback
+        # mode and recovers with a fresh connection on a backoff.
         if settings.tedapi_recovery:
             for gateway_id, gw in self.gateways.items():
                 if gw.host and not gw.cloud_mode and not gw.fleetapi:
@@ -619,44 +636,78 @@ class GatewayManager:
         await get_timeseries_store().start()
 
     async def _init_cloud_control(self, hybrid_configs: List[GatewayConfig]):
-        """Create the hybrid cloud-control connection in the background."""
+        """Create the hybrid cloud-control connection in the background.
+
+        Retries with exponential backoff (_CLOUD_CONTROL_RETRY_INITIAL up
+        to _CLOUD_CONTROL_RETRY_MAX) while no connection exists: a Tesla
+        cloud that is unreachable at boot (or during a first-setup token
+        exchange) must not leave control permanently unavailable. Stops
+        once a connection is established; the task is cancelled at
+        shutdown.
+        """
         from app.config import settings
 
-        for config in hybrid_configs:
-            try:
-                authpath = config.authpath or settings.pw_authpath or ""
-                loop = asyncio.get_running_loop()
-                cloud_kwargs = {
-                    "email": config.email,
-                    "authpath": authpath,
-                    "cachefile": "/tmp/.powerwall.cloud",
-                    "timezone": config.timezone,
-                    "fleetapi": config.fleetapi,
-                    "auto_select": True,
-                    "failover": settings.failover,
-                }
-                if settings.siteid:
-                    # PW_SITEID picks the site on multi-site accounts. The
-                    # cloud client compares it with integer site ids.
-                    siteid = str(settings.siteid).strip()
-                    cloud_kwargs["siteid"] = int(siteid) if siteid.isdigit() else siteid
-                self._cloud_control = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        self._executor,
-                        lambda kw=cloud_kwargs: pypowerwall.Powerwall(**kw),
-                    ),
-                    timeout=15.0,
-                )
-                if await self._cloud_site_unambiguous(config.fleetapi):
-                    self._cloud_control_gateway_id = config.id
-                logger.info(
-                    "Cloud control connection established for write operations"
-                )
-                return  # Only need one cloud control connection
-            except Exception as e:
-                logger.warning(
-                    f"Cloud control connection failed (control will be unavailable): {e}"
-                )
+        retry_interval = self._CLOUD_CONTROL_RETRY_INITIAL
+        while self._cloud_control is None:
+            for config in hybrid_configs:
+                try:
+                    authpath = config.authpath or settings.pw_authpath or ""
+                    loop = asyncio.get_running_loop()
+                    cloud_kwargs = {
+                        "email": config.email,
+                        "authpath": authpath,
+                        "cachefile": "/tmp/.powerwall.cloud",
+                        "timezone": config.timezone,
+                        "fleetapi": config.fleetapi,
+                        "auto_select": True,
+                        "failover": settings.failover,
+                    }
+                    if settings.siteid:
+                        # PW_SITEID picks the site on multi-site accounts. The
+                        # cloud client compares it with integer site ids.
+                        siteid = str(settings.siteid).strip()
+                        cloud_kwargs["siteid"] = (
+                            int(siteid) if siteid.isdigit() else siteid
+                        )
+                    pw = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            self._executor,
+                            lambda kw=cloud_kwargs: pypowerwall.Powerwall(**kw),
+                        ),
+                        timeout=15.0,
+                    )
+                    # pypowerwall's constructor doesn't raise when it can't
+                    # connect: it logs, and its failover may even land in
+                    # local mode. Accept only a connected cloud/FleetAPI one.
+                    connected = getattr(pw, "cloudmode", False) and await (
+                        asyncio.wait_for(
+                            loop.run_in_executor(self._executor, pw.is_connected),
+                            timeout=10.0,
+                        )
+                    )
+                    if not connected:
+                        raise ConnectionError(
+                            "no Tesla cloud connection "
+                            f"(mode={getattr(pw, 'mode', 'unknown')})"
+                        )
+                    self._cloud_control = pw
+                    if await self._cloud_site_unambiguous(config.fleetapi):
+                        self._cloud_control_gateway_id = config.id
+                    logger.info(
+                        "Cloud control connection established for write operations"
+                    )
+                    return  # Only need one cloud control connection
+                except Exception as e:
+                    logger.warning(
+                        "Cloud control connection failed "
+                        "(will retry in %.0fs): %s",
+                        retry_interval,
+                        e,
+                    )
+            await asyncio.sleep(retry_interval)
+            retry_interval = min(
+                retry_interval * 2, self._CLOUD_CONTROL_RETRY_MAX
+            )
 
     async def _cloud_site_unambiguous(self, fleetapi: bool) -> bool:
         """True when the shared cloud connection's Tesla site is certain.
@@ -1349,46 +1400,10 @@ class GatewayManager:
                                 f"pypowerwall failed to connect to gateway {gateway_id} (cloud mode)"
                             )
                     else:
-                        # Build host string with optional non-standard port
-                        # e.g. host="192.168.1.50", port=8443 -> "192.168.1.50:8443"
-                        effective_host = (
-                            f"{config.host}:{config.port}" if config.port else config.host
-                        )
-                        tedapi_kwargs = {
-                            "host": effective_host,
-                            "gw_pwd": config.gw_pwd,
-                            "timezone": config.timezone,
-                            "timeout": settings.timeout,
-                            "poolmaxsize": settings.pool_maxsize,
-                            "failover": settings.failover,
-                            "pwcacheexpire": pwcacheexpire,
-                        }
-                        # Per-gateway password (PW_GATEWAYS/config file) or the
-                        # legacy PW_PASSWORD env var. Without gw_pwd/rsa_key this
-                        # selects pypowerwall's local client (PW3 Basic LAN /
-                        # PW2 local mode); alongside gw_pwd it selects hybrid.
-                        local_password = config.password or settings.pw_password
-                        if local_password:
-                            tedapi_kwargs["password"] = local_password
-                        if config.email:
-                            tedapi_kwargs["email"] = config.email
-                        if config.authpath:
-                            tedapi_kwargs["authpath"] = config.authpath
-                        if settings.cache_file:
-                            tedapi_kwargs["cachefile"] = settings.cache_file
-                        if settings.siteid:
-                            tedapi_kwargs["siteid"] = settings.siteid
-                        if config.rsa_key_path:
-                            tedapi_kwargs["rsa_key_path"] = config.rsa_key_path
-                        if config.wifi_host:
-                            tedapi_kwargs["wifi_host"] = config.wifi_host
-                        pw = await asyncio.wait_for(
-                            loop.run_in_executor(
-                                self._executor,
-                                lambda kw=tedapi_kwargs: pypowerwall.Powerwall(**kw),
-                            ),
-                            timeout=15.0,
-                        )
+                        # Same construction path as TEDAPI recovery
+                        # (_create_local_connection) so a replacement
+                        # connection is built exactly like this one.
+                        pw = await self._create_local_connection(config)
                         connected = await asyncio.wait_for(
                             loop.run_in_executor(self._executor, pw.is_connected),
                             timeout=10.0,
@@ -1623,9 +1638,9 @@ class GatewayManager:
         Runs after the cache update on every successful poll cycle. Storage
         failures are logged and swallowed — statistics must never break
         polling. Samples are awaited (not fire-and-forget) so each gateway's
-        samples stay strictly ordered for trapezoidal integration, but capped
-        by a timeout so a hung SQLite write (disk full, dying flash) can
-        never stall the poll loop.
+        samples stay strictly ordered for trapezoidal integration. The
+        timeout bounds how long polling waits; the store retains accepted
+        writes and shields them from cancellation until they finish.
         """
         try:
             aggregates = data.aggregates or {}
@@ -1655,7 +1670,8 @@ class GatewayManager:
             )
         except asyncio.TimeoutError:
             logger.warning(
-                "Time-series sample write timed out for %s — polling continues",
+                "Time-series sample write timed out for %s — "
+                "accepted write remains queued; polling continues",
                 gateway_id,
             )
         except Exception as e:
@@ -1670,8 +1686,8 @@ class GatewayManager:
         Signals come from the vitals and fan_speeds already fetched this
         cycle (no extra gateway calls). The store keeps at most one snapshot
         per PW_TIMESERIES_SIGNAL_INTERVAL, so most calls return immediately.
-        Like power samples, failures are logged and swallowed and a hung
-        write is capped by a timeout.
+        Like power samples, failures are logged and swallowed. The timeout
+        bounds the polling wait without cancelling accepted store writes.
 
         Args:
             gateway_id: Gateway identifier.
@@ -1704,7 +1720,8 @@ class GatewayManager:
             )
         except asyncio.TimeoutError:
             logger.warning(
-                "Device signal write timed out for %s — polling continues",
+                "Device signal write timed out for %s — "
+                "accepted write remains queued; polling continues",
                 gateway_id,
             )
         except Exception as e:
@@ -1824,19 +1841,101 @@ class GatewayManager:
             self._tedapi_probe_failures[gid] = 0
             logger.info("Reset fallback state for gateway %s", gid)
 
+    def _local_connection_kwargs(self, config: GatewayConfig) -> Dict[str, Any]:
+        """Keyword arguments for a local pypowerwall connection.
+
+        Shared by lazy initialization and TEDAPI recovery so a replacement
+        connection is built exactly like the one startup builds.
+        """
+        from app.config import settings
+
+        # Keep pypowerwall's internal cache alive for the whole poll cycle:
+        # with the library default of 5s, a cycle that takes longer
+        # re-fetches mid-cycle data it already has.
+        pwcacheexpire = max(5, int(self._poll_interval))
+        # Build host string with optional non-standard port
+        # e.g. host="192.168.1.50", port=8443 -> "192.168.1.50:8443"
+        effective_host = (
+            f"{config.host}:{config.port}" if config.port else config.host
+        )
+        tedapi_kwargs = {
+            "host": effective_host,
+            "gw_pwd": config.gw_pwd,
+            "timezone": config.timezone,
+            "timeout": settings.timeout,
+            "poolmaxsize": settings.pool_maxsize,
+            "failover": settings.failover,
+            "pwcacheexpire": pwcacheexpire,
+        }
+        # Per-gateway password (PW_GATEWAYS/config file) or the legacy
+        # PW_PASSWORD env var. Without gw_pwd/rsa_key this selects
+        # pypowerwall's local client (PW3 Basic LAN / PW2 local mode);
+        # alongside gw_pwd it selects hybrid.
+        local_password = config.password or settings.pw_password
+        if local_password:
+            tedapi_kwargs["password"] = local_password
+        if config.email:
+            tedapi_kwargs["email"] = config.email
+        if config.authpath:
+            tedapi_kwargs["authpath"] = config.authpath
+        if settings.cache_file:
+            tedapi_kwargs["cachefile"] = settings.cache_file
+        if settings.siteid:
+            tedapi_kwargs["siteid"] = settings.siteid
+        if config.rsa_key_path:
+            tedapi_kwargs["rsa_key_path"] = config.rsa_key_path
+        if config.wifi_host:
+            tedapi_kwargs["wifi_host"] = config.wifi_host
+        return tedapi_kwargs
+
+    async def _create_local_connection(
+        self, config: GatewayConfig
+    ) -> pypowerwall.Powerwall:
+        """Create a fresh local pypowerwall connection.
+
+        The blocking constructor runs in the shared executor under
+        max(_CONNECTION_BUILD_TIMEOUT, PW_TIMEOUT + 5 s), so a slow gateway
+        with a raised PW_TIMEOUT isn't abandoned mid-connect.  Used by the
+        lazy init and by TEDAPI recovery, so both paths build the
+        connection the same way.
+        """
+        from app.config import settings
+
+        loop = asyncio.get_running_loop()
+        tedapi_kwargs = self._local_connection_kwargs(config)
+        return await asyncio.wait_for(
+            loop.run_in_executor(
+                self._executor,
+                lambda kw=tedapi_kwargs: pypowerwall.Powerwall(**kw),
+            ),
+            timeout=max(self._CONNECTION_BUILD_TIMEOUT, settings.timeout + 5.0),
+        )
+
     async def _tedapi_probe_loop(self, gateway_id: str):
         """Background task: probe TEDAPI health and recover from SolarOnly fallback.
 
         Probes pw.version() every PW_TEDAPI_PROBE_INTERVAL seconds.  After
-        _TEDAPI_FALLBACK_THRESHOLD consecutive None results, enters fallback
-        mode and attempts pw.connect() with exponential backoff (60s → max 300s).
+        _TEDAPI_FALLBACK_THRESHOLD consecutive failed probes, enters fallback
+        mode and attempts recovery with exponential backoff (60s → max 300s).
         On success, exits fallback mode and resets backoff.  On failure, stays
         in SolarOnly — the gateway keeps serving whatever data is available.
 
-        Hybrid-mode note: the gate is pw.tedapi, which includes hybrid mode
-        (v1r + WiFi fallback).  In that topology pw.version() may be served by
-        the local API, so a WiFi TEDAPI outage might not be detected.  Monitoring
-        is best-effort for hybrid; pure TEDAPI mode gets full coverage.
+        The probe is driven by the gateway's configuration, not by the
+        connection's current mode: a gateway configured for local TEDAPI is
+        always probed, and a connection that is no longer in TEDAPI mode
+        (the library's failover can switch it to cloud inside a timed-out
+        connect(), #155) counts as a failed probe instead of skipping
+        silently.  Recovery builds a fresh connection the same way startup
+        does (_create_local_connection) and swaps it in only if it comes up
+        in TEDAPI mode and reports a version; the existing connection keeps
+        serving until then.  connect() on the drifted object would resume
+        from cloud mode — the library restores the configured mode only
+        when every mode fails (#366 in pypowerwall), so it can't recover.
+
+        Hybrid-mode note: a hybrid connection (v1r + WiFi fallback) has
+        pw.tedapi set, so its probes run against the local API; a WiFi
+        TEDAPI outage might not be detected.  Monitoring is best-effort for
+        hybrid; pure TEDAPI mode gets full coverage.
         """
         from app.config import settings
 
@@ -1852,16 +1951,41 @@ class GatewayManager:
                     # Connection not yet established; skip probe
                     continue
 
-                # Only probe when TEDAPI mode is active
-                if not getattr(pw, 'tedapi', None):
-                    self._tedapi_probe_failures[gateway_id] = 0
-                    continue
-
                 state = self._fallback_state.get(gateway_id)
                 if not state:
                     continue
 
                 if not state["is_fallback_mode"]:
+                    # PW3 Basic LAN (host + password) has no TEDAPI client
+                    # at all, so there is nothing to probe.
+                    gateway = self.gateways.get(gateway_id)
+                    if gateway is not None and gateway.basic_lan:
+                        self._tedapi_probe_failures[gateway_id] = 0
+                        continue
+
+                    # Probe based on configuration: a connection that is no
+                    # longer in TEDAPI mode counts as a failed probe instead
+                    # of skipping silently — skipping once held a gateway on
+                    # cloud reads for hours after a firmware update (#155).
+                    if not getattr(pw, "tedapi", None):
+                        failures = self._tedapi_probe_failures.get(gateway_id, 0) + 1
+                        self._tedapi_probe_failures[gateway_id] = failures
+                        logger.warning(
+                            "TEDAPI probe for %s: connection is in %s mode, "
+                            "not TEDAPI — counting as failed probe (%d/%d)",
+                            gateway_id,
+                            getattr(pw, "mode", "unknown"),
+                            failures,
+                            self._TEDAPI_FALLBACK_THRESHOLD,
+                        )
+                        if failures >= self._TEDAPI_FALLBACK_THRESHOLD:
+                            self._enter_fallback_mode(
+                                gateway_id,
+                                "connection left TEDAPI mode "
+                                f"(mode={getattr(pw, 'mode', 'unknown')})",
+                            )
+                        continue
+
                     # Healthy path: probe TEDAPI
                     try:
                         loop = asyncio.get_running_loop()
@@ -1910,23 +2034,52 @@ class GatewayManager:
 
                     recovered = False
                     try:
-                        loop = asyncio.get_running_loop()
-                        connect_result = await asyncio.wait_for(
-                            loop.run_in_executor(
-                                self._executor, lambda: pw.connect(retry=False)
-                            ),
-                            timeout=max(15.0, settings.timeout + 5.0),
-                        )
-                        if connect_result:
+                        config = self._gateway_configs.get(gateway_id)
+                        if config is None:
+                            raise RuntimeError("no stored configuration")
+                        # Fresh connection, built the same way the lazy init
+                        # builds the first one.  connect() on the drifted
+                        # object would resume from cloud mode and cannot
+                        # recover (#155).  Swap it in only if it comes up in
+                        # TEDAPI mode and reports a version, so the current
+                        # connection keeps serving otherwise.
+                        fresh_pw = await self._create_local_connection(config)
+                        verify_version = None
+                        if getattr(fresh_pw, "tedapi", None):
+                            loop = asyncio.get_running_loop()
                             verify_version = await asyncio.wait_for(
-                                loop.run_in_executor(self._executor, pw.version),
+                                loop.run_in_executor(
+                                    self._executor, fresh_pw.version
+                                ),
                                 timeout=max(5.0, settings.timeout + 2.0),
                             )
-                            if verify_version is not None:
-                                recovered = True
+                        if verify_version is not None:
+                            self.connections[gateway_id] = fresh_pw
+                            recovered = True
+                            logger.info(
+                                "TEDAPI recovery attempt #%d for %s: fresh "
+                                "connection in TEDAPI mode (version=%s), "
+                                "replacing connection",
+                                attempt_num, gateway_id, verify_version,
+                            )
+                        elif getattr(fresh_pw, "tedapi", None):
+                            logger.warning(
+                                "TEDAPI recovery attempt #%d for %s: fresh "
+                                "connection reported no version — discarded",
+                                attempt_num, gateway_id,
+                            )
+                        else:
+                            logger.warning(
+                                "TEDAPI recovery attempt #%d for %s: fresh "
+                                "connection is not in TEDAPI mode (mode=%s) "
+                                "— discarded",
+                                attempt_num,
+                                gateway_id,
+                                getattr(fresh_pw, "mode", "unknown"),
+                            )
                     except Exception as exc:
                         logger.warning(
-                            "TEDAPI recovery attempt #%d for %s exception: %s",
+                            "TEDAPI recovery attempt #%d for %s exception: %r",
                             attempt_num, gateway_id, exc,
                         )
 
