@@ -159,19 +159,47 @@ class TestExtractBatteryBlocks:
         }
         blocks = _extract_battery_blocks(status)
         assert len(blocks) == 2
-        assert blocks[0] == {"index": 1, "capacity": 13_500.0, "charge": 11_547.0}
-        assert blocks[1] == {"index": 2, "capacity": 13_500.0, "charge": 11_000.0}
+        assert blocks[0] == {
+            "index": 1,
+            "capacity": 13_500.0,
+            "charge": 11_547.0,
+            "serial": None,
+        }
+        assert blocks[1] == {
+            "index": 2,
+            "capacity": 13_500.0,
+            "charge": 11_000.0,
+            "serial": None,
+        }
+
+    def test_package_serial_number_captured(self):
+        """#153: a block's PackageSerialNumber is captured for HA grouping."""
+        status = {
+            "battery_blocks": [
+                {
+                    "PackageSerialNumber": "TG1234567890AB",
+                    "nominal_full_pack_energy": 13_500,
+                },
+                {
+                    "PackageSerialNumber": 42,  # non-string -> ignored
+                    "nominal_full_pack_energy": 13_500,
+                },
+            ]
+        }
+        blocks = _extract_battery_blocks(status)
+        assert blocks[0]["serial"] == "TG1234567890AB"
+        assert blocks[1]["serial"] is None
 
     def test_partial_block_included(self):
         status = {"battery_blocks": [{"nominal_energy_remaining": 9_000}]}
         assert _extract_battery_blocks(status) == [
-            {"index": 1, "capacity": None, "charge": 9_000.0}
+            {"index": 1, "capacity": None, "charge": 9_000.0, "serial": None}
         ]
 
     def test_blocks_with_no_values_skipped(self):
         status = {"battery_blocks": [{"pin": 5}, {"nominal_full_pack_energy": 100}]}
         assert _extract_battery_blocks(status) == [
-            {"index": 2, "capacity": 100.0, "charge": None}
+            {"index": 2, "capacity": 100.0, "charge": None, "serial": None}
         ]
 
     def test_block_numbering_preserved_when_a_block_goes_silent(self):

@@ -496,8 +496,9 @@ class GatewayManager:
                         "all set — TEDAPI v1r mode is active but follower "
                         "Powerwall data will be limited to the primary unit only. "
                         "To see all Powerwalls, either: "
-                        "(a) set PW_WIFI_HOST=<gateway-ip> to enable WiFi fallback "
-                        "for follower queries while keeping v1r, or "
+                        "(a) set PW_WIFI_HOST to the gateway's WiFi access point "
+                        "(normally 192.168.91.1, which this host must be able to "
+                        "reach) for follower queries while keeping v1r, or "
                         "(b) remove PW_RSA_KEY_PATH to use TEDAPI WiFi mode.",
                         config.id,
                     )

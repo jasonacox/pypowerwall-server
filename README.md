@@ -81,7 +81,7 @@ docker run -d \
 docker run -d \
   --name pypowerwall-server \
   --network host \
-  -e PW_HOST=192.168.91.1 \
+  -e PW_HOST=10.42.1.40 \
   -e PW_GW_PWD=your_gateway_password \
   -e PW_RSA_KEY_PATH=/keys/tedapi_rsa_private.pem \
   -e PW_WIFI_HOST=192.168.91.1 \
@@ -90,7 +90,9 @@ docker run -d \
   jasonacox/pypowerwall-server
 ```
 
-> **Note:** `PW_WIFI_HOST` is the IP address pypowerwall uses for the WiFi fallback path in v1r mode. It defaults to `192.168.91.1`. Only set it if your gateway is on a different IP (e.g. behind a travel router).
+> **Note:** `PW_HOST` is the gateway's wired LAN IP for v1r: its vendor-subnet address (`10.42.1.x`), or its home LAN IP on units that answer v1r there.
+>
+> **Note:** v1r reaches only the leader Powerwall, so with two or more Powerwalls set `PW_WIFI_HOST` to the gateway's WiFi access point (`192.168.91.1`, or the address that forwards to it, e.g. behind a travel router). Follower Powerwalls are queried over it, and it is the fallback if the wired LAN goes down. It is not set by default: without it the console shows only the leader. The server must be able to reach that address, by joining the gateway's `TeslaPW_` WiFi network or through a static route.
 >
 > **Note:** The `-v pws-data:/data` mount persists the daily energy, temperature and fan history (SQLite time-series store) across container upgrades. Omit it if you run with `PW_TIMESERIES_RETENTION=-1` (subsystem disabled).
 
@@ -220,10 +222,10 @@ PROXY_BASE_URL=/pypowerwall  # Optional: serve under a sub-path (see Reverse Pro
 
 **Single Gateway Mode (TEDAPI v1r — RSA Key Auth):**
 ```bash
-PW_HOST=192.168.91.1
+PW_HOST=10.42.1.40                               # Gateway wired LAN IP (vendor subnet, or home LAN IP on some units)
 PW_GW_PWD=your_gateway_password                  # Gateway password (last 5 chars used as customer password)
 PW_RSA_KEY_PATH=/path/to/tedapi_rsa_private.pem  # RSA-4096 private key for v1r encrypted channel
-PW_WIFI_HOST=192.168.91.1                         # WiFi fallback IP for v1r mode (default: 192.168.91.1)
+PW_WIFI_HOST=192.168.91.1                         # Gateway WiFi AP: follower Powerwalls + LAN fallback (default: not set)
 PW_TIMEZONE=America/Los_Angeles
 ```
 
@@ -440,10 +442,10 @@ gateways:
 
   - id: v1r-gateway
     name: TEDAPI v1r Gateway
-    host: 192.168.91.1
+    host: 10.42.1.40                            # Gateway wired LAN IP (vendor subnet, or home LAN IP on some units)
     gw_pwd: your_gateway_password                # Required even in v1r mode (used to derive customer password)
     rsa_key_path: /keys/tedapi_rsa_private.pem  # RSA-4096 private key (TEDAPI v1r mode)
-    wifi_host: 192.168.91.1                     # WiFi fallback IP (optional, defaults to 192.168.91.1)
+    wifi_host: 192.168.91.1                     # Gateway WiFi AP: follower Powerwalls + LAN fallback (not set by default)
     timezone: America/Los_Angeles
 ```
 
@@ -457,13 +459,13 @@ gateways:
 **TEDAPI connection modes:**
 - `host` + `gw_pwd` → TEDAPI (standard, uses gateway Wi-Fi password)
 - `host` + `gw_pwd` + `rsa_key_path` → TEDAPI v1r (RSA-4096 encrypted channel + customer password from gw_pwd; shown as "TEDAPI v1r" in console)
-- `wifi_host` → Optional WiFi fallback IP for v1r mode (default `192.168.91.1`; only needed when your gateway is on a non-standard IP)
+- `wifi_host` → the gateway's WiFi access point for v1r mode (normally `192.168.91.1`; not set by default). Needed to see follower Powerwalls, and used as the fallback if the wired LAN goes down
 
 **Optional fields:**
 - `port`: Non-standard HTTPS port (e.g. `8443`) — use when the gateway is behind a travel router that forwards a custom port to `192.168.91.1:443`
 - `type`: Gateway device type — `powerwall` (default, has batteries) or `inverter` (solar-only; suppresses battery panels in the console)
 - `rsa_key_path`: RSA-4096 private key PEM path for TEDAPI v1r LAN authentication (requires `gw_pwd` — see above)
-- `wifi_host`: WiFi host IP for TEDAPI v1r WiFi fallback (default `192.168.91.1`; set this when your gateway's WiFi AP is on a different subnet, e.g. behind a travel router)
+- `wifi_host`: the gateway's WiFi access point for TEDAPI v1r (normally `192.168.91.1`, or the address that forwards to it, e.g. behind a travel router; not set by default). Follower Powerwalls are queried over it
 
 ### Reverse Proxy / HTTPS Proxy
 
