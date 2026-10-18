@@ -2,6 +2,11 @@
 
 ## Version History
 
+### [0.10.1] - Upcoming
+
+**Fixed:**
+- **History samples survive storage wait timeouts** — Slow SQLite writes no longer lose queued power, temperature or fan records when polling's five-second wait expires. Accepted writes finish in order and drain on shutdown; failed signal writes can retry. Storage status now reports pending and rejected writes, plus successful or failed writes that finish after their caller stops waiting.
+
 ### [0.10.0] - 2026-10-11
 
 **Added:**

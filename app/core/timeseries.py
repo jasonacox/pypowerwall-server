@@ -152,6 +152,11 @@ MAINTENANCE_INTERVAL = 60.0
 # Minimum seconds between repeated write-failure warnings.
 _FAILURE_WARN_INTERVAL = 300.0
 
+# Bound accepted recording work when storage is stalled. At normal polling
+# this buffers several minutes without letting a blocked disk grow memory
+# indefinitely. Maintenance and read-only queries do not consume these slots.
+_MAX_PENDING_WRITES = 128
+
 # Signal registry: what gets recorded and how it is shown lives in
 # app/core/signals.py (SIGNAL_METRICS / SIGNAL_GROUPS), shared with MQTT so
 # history and Home Assistant use one vocabulary. Adding a metric (or a whole
@@ -369,9 +374,20 @@ class TimeSeriesStore:
         self._conn: Optional[sqlite3.Connection] = None
         self._executor: Optional[ThreadPoolExecutor] = None
         self._maintenance_task: Optional[asyncio.Task] = None
+        self._stop_task: Optional[asyncio.Task] = None
+        self._stopping = False
+        self._max_pending_writes = _MAX_PENDING_WRITES
+        # The store owns accepted work, even after its caller stops waiting.
+        self._pending_writes: Dict[asyncio.Future, Dict[str, Any]] = {}
+        self._write_rejections = 0
+        self._write_wait_interruptions = 0
+        self._late_write_completions = 0
+        self._late_write_failures = 0
+        self._last_rejection_warn = 0.0
         # Write-failure tracking: surfaced in status(), warned at most once
         # per _FAILURE_WARN_INTERVAL so a full disk is visible without spam.
         self._write_failures = 0
+        self._write_context = threading.local()
         self._last_failure_warn = 0.0
         # In-memory cache of the last integrated sample per gateway:
         # {gateway_id: {"ts": float, "values": {category: watts}}}
@@ -379,6 +395,11 @@ class TimeSeriesStore:
         # Last recorded ts per series (gateway, device, metric), for interval
         # gating, and the (gateway, device, metric) -> series_id cache.
         self._signal_last: Dict[Tuple[str, str, str], float] = {}
+        # Reservations gate duplicate submissions while their writes wait.
+        # _signal_last contains only snapshots that actually committed.
+        self._signal_pending: Dict[
+            Tuple[str, str, str], Dict[asyncio.Future, float]
+        ] = {}
         self._series_ids: Dict[Tuple[str, str, str], int] = {}
         # Read lane: a second, read-only connection on its own thread so
         # queries never wait behind (or block) recording. WAL mode lets it
@@ -444,6 +465,95 @@ class TimeSeriesStore:
             )
         return self._executor
 
+    def _submit_write(
+        self,
+        func: Callable[[], Any],
+        kind: str,
+        on_done: Optional[Callable[[bool], None]] = None,
+    ) -> Optional[asyncio.Future]:
+        """Admit one FIFO write and retain it until its worker completes.
+
+        Called on the event loop without intervening awaits, so admission,
+        submission, and signal reservation are ordered across callers.
+        """
+        if self._closed or self._stopping:
+            return None
+        if len(self._pending_writes) >= self._max_pending_writes:
+            self._write_rejections += 1
+            now = time.time()
+            if now - self._last_rejection_warn >= _FAILURE_WARN_INTERVAL:
+                self._last_rejection_warn = now
+                logger.warning(
+                    "TimeSeriesStore writer backlog full (%d pending); "
+                    "rejecting %s sample (%d total rejected)",
+                    len(self._pending_writes),
+                    kind,
+                    self._write_rejections,
+                )
+            return None
+        loop = asyncio.get_running_loop()
+        future = loop.run_in_executor(
+            self._ensure_executor(), self._run_write_sync, func, kind
+        )
+        self._pending_writes[future] = {
+            "detached": False,
+            "kind": kind,
+            "on_done": on_done,
+        }
+        future.add_done_callback(self._write_done)
+        return future
+
+    def _run_write_sync(self, func: Callable[[], Any], kind: str) -> Tuple[Any, bool]:
+        """Preserve the public result while distinguishing a committed None.
+
+        The first power sample successfully returns None; SQLite failures
+        also return None. Track failure on this worker, independently of
+        counters that a late completion can update on the event loop.
+        """
+        self._write_context.failed = False
+        try:
+            result = func()
+        except Exception as exc:
+            self._note_write_failure(exc)
+            return None, False
+        succeeded = not self._write_context.failed
+        if kind == "signal":
+            succeeded = succeeded and result is True
+        return result, succeeded
+
+    def _write_done(self, future: asyncio.Future) -> None:
+        info = self._pending_writes.pop(future, None)
+        if info is None:
+            return
+        succeeded = False
+        try:
+            _, succeeded = future.result()
+        except asyncio.CancelledError:
+            # Protected writes should only be cancelled by event-loop
+            # teardown. This is a lost job, distinct from a slow waiter.
+            self._note_write_failure(RuntimeError("accepted database write cancelled"))
+        except Exception as exc:
+            self._note_write_failure(exc)
+        if info["detached"]:
+            if succeeded:
+                self._late_write_completions += 1
+            else:
+                self._late_write_failures += 1
+        callback = info["on_done"]
+        if callback is not None:
+            callback(succeeded)
+
+    async def _wait_for_write(self, future: asyncio.Future) -> Any:
+        try:
+            result, _ = await asyncio.shield(future)
+            return result
+        except asyncio.CancelledError:
+            info = self._pending_writes.get(future)
+            if info is not None and not info["detached"]:
+                info["detached"] = True
+                self._write_wait_interruptions += 1
+            raise
+
     def _ensure_read_executor(self) -> ThreadPoolExecutor:
         """The read lane's single worker thread (separate from the writer)."""
         if self._read_executor is None:
@@ -461,11 +571,11 @@ class TimeSeriesStore:
     async def _run_query(self, func: Callable[[], Any]) -> Any:
         """Run one API query off the event loop, on the query lane.
 
-        After stop() the query runs inline instead: its connection refuses
-        to reopen, so it returns its empty result at once without starting
-        the lanes' threads again.
+        During and after stop() the query runs inline instead: the reader
+        refuses a connection, so it returns its empty result at once without
+        starting the lanes' threads or waiting behind draining writes.
         """
-        if self._closed:
+        if self._closed or self._stopping:
             return func()
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._query_executor(), func)
@@ -520,8 +630,13 @@ class TimeSeriesStore:
         before. Yielding an opener keeps open errors inside each caller's
         ``except sqlite3.Error``.
         """
-        if self._closed:
-            yield self._ensure_conn  # raises: no reopening after stop()
+        if self._closed or self._stopping:
+            # Accepted writes must still open the writer connection while
+            # draining. Refuse only query opens, without taking its locks.
+            def unavailable() -> sqlite3.Connection:
+                raise sqlite3.ProgrammingError("TimeSeriesStore is closing or closed")
+
+            yield unavailable
             return
         if not self._read_unavailable:
             with self._read_lock:
@@ -663,7 +778,7 @@ class TimeSeriesStore:
             The updated daily-energy row for the gateway's current local day
             (or None when the store is disabled or stopped / sample skipped).
         """
-        if not self.enabled or self._closed:
+        if not self.enabled or self._closed or self._stopping:
             return None
         values = {
             "solar": max(0.0, float(solar_w or 0.0)),
@@ -673,13 +788,15 @@ class TimeSeriesStore:
             "grid_import": max(0.0, float(site_w or 0.0)),
             "grid_export": max(0.0, -float(site_w or 0.0)),
         }
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            self._ensure_executor(),
+        future = self._submit_write(
             partial(
                 self._record_sample_sync, gateway_id, float(ts), values, soe, timezone
             ),
+            "power",
         )
+        if future is None:
+            return None
+        return await self._wait_for_write(future)
 
     def _record_sample_sync(
         self,
@@ -766,8 +883,9 @@ class TimeSeriesStore:
                             values["grid_export"],
                         ),
                     )
-                    self._state[gateway_id] = {"ts": ts, "values": dict(values)}
                 conn.commit()
+                if state is None or ts > state["ts"]:
+                    self._state[gateway_id] = {"ts": ts, "values": dict(values)}
 
                 if daily_deltas:
                     zone = _get_zone(timezone)
@@ -776,11 +894,24 @@ class TimeSeriesStore:
                         return self._get_day_row(gateway_id, today, conn)
                 return None
             except Exception as e:  # storage must never break polling
+                self._rollback_write()
+                self._state.pop(gateway_id, None)
                 self._note_write_failure(e)
                 return None
 
+    def _rollback_write(self) -> None:
+        """Discard a failed transaction before another queued sample runs."""
+        if self._conn is not None:
+            try:
+                self._conn.rollback()
+            except sqlite3.Error as exc:
+                logger.debug("TimeSeriesStore rollback failed: %s", exc)
+        # A failed signal transaction may have created ids that rolled back.
+        self._series_ids.clear()
+
     def _note_write_failure(self, exc: Exception) -> None:
         """Count a failed write; warn at most once per interval."""
+        self._write_context.failed = True
         self._write_failures += 1
         now = time.time()
         if now - self._last_failure_warn >= _FAILURE_WARN_INTERVAL:
@@ -892,24 +1023,39 @@ class TimeSeriesStore:
         Returns:
             True when the snapshot was stored.
         """
-        if not self.signals_enabled or not metrics or self._closed:
+        if not self.signals_enabled or not metrics or self._closed or self._stopping:
             return False
         # Poll timing jitters by a second or two; don't let a gap just short
         # of the interval (e.g. 59.9s at 60s) push the sample to the next poll.
         slack = min(2.5, self._signal_interval / 2.0)
         due: Dict[Tuple[str, str], float] = {}
         for (device, metric), value in metrics.items():
-            last = self._signal_last.get((gateway_id, device, metric))
+            key = (gateway_id, device, metric)
+            last = self._signal_last.get(key)
+            pending = self._signal_pending.get(key)
+            if pending:
+                # Use the most recently submitted reservation, including
+                # clock steps backwards, just as the committed gate does.
+                last = next(reversed(pending.values()))
             if last is not None and 0 <= ts - last < self._signal_interval - slack:
                 continue
             due[(device, metric)] = value
-            self._signal_last[(gateway_id, device, metric)] = float(ts)
         if not due:
             return False
         metrics = due
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            self._ensure_executor(),
+        keys = [(gateway_id, device, metric) for device, metric in metrics]
+
+        def completed(succeeded: bool) -> None:
+            for key in keys:
+                pending = self._signal_pending.get(key)
+                if pending is not None:
+                    pending.pop(future, None)
+                    if not pending:
+                        self._signal_pending.pop(key, None)
+                if succeeded and not self._closed:
+                    self._signal_last[key] = float(ts)
+
+        future = self._submit_write(
             partial(
                 self._record_signal_sample_sync,
                 gateway_id,
@@ -917,7 +1063,14 @@ class TimeSeriesStore:
                 dict(metrics),
                 timezone,
             ),
+            "signal",
+            on_done=completed,
         )
+        if future is None:
+            return False
+        for key in keys:
+            self._signal_pending.setdefault(key, {})[future] = float(ts)
+        return await self._wait_for_write(future)
 
     def _series_id(
         self,
@@ -1003,6 +1156,7 @@ class TimeSeriesStore:
                 conn.commit()
                 return True
             except Exception as e:  # storage must never break polling
+                self._rollback_write()
                 self._note_write_failure(e)
                 return False
 
@@ -1463,7 +1617,7 @@ class TimeSeriesStore:
         self, gateway_id: str, timezone: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """Today's running totals for one gateway (gateway-local day)."""
-        if not self.enabled or self._closed:
+        if not self.enabled or self._closed or self._stopping:
             return None
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
@@ -1685,9 +1839,23 @@ class TimeSeriesStore:
                 "signal_samples": 0,
                 "signal_daily_rows": 0,
                 "write_failures": 0,
+                **self._write_status(),
                 "gateways": [],
             }
         return await self._run_query(self._status_sync)
+
+    def _write_status(self) -> Dict[str, Any]:
+        # status() runs on the read thread: use scalar snapshots, without
+        # iterating the event loop's mutable future/reservation dictionaries.
+        return {
+            "writes_pending": len(self._pending_writes),
+            "writes_pending_limit": self._max_pending_writes,
+            "write_rejections": self._write_rejections,
+            "write_wait_interruptions": self._write_wait_interruptions,
+            "late_write_completions": self._late_write_completions,
+            "late_write_failures": self._late_write_failures,
+            "writer_stopping": self._stopping,
+        }
 
     def _status_sync(self) -> Dict[str, Any]:
         db_size = 0
@@ -1745,6 +1913,7 @@ class TimeSeriesStore:
             "signal_samples": device_samples,
             "signal_daily_rows": device_daily,
             "write_failures": self._write_failures,
+            **self._write_status(),
             "gateways": gateways,
         }
 
@@ -1754,7 +1923,7 @@ class TimeSeriesStore:
 
     async def start(self) -> None:
         """Start the background maintenance loop (no-op when disabled or stopped)."""
-        if not self.enabled or self._closed:
+        if not self.enabled or self._closed or self._stopping:
             return
         if self._maintenance_task is None or self._maintenance_task.done():
             self._maintenance_task = asyncio.create_task(
@@ -1780,7 +1949,7 @@ class TimeSeriesStore:
 
     async def maintenance(self) -> None:
         """Prune raw samples and stale daily aggregates, checkpoint WAL."""
-        if not self.enabled or self._closed:
+        if not self.enabled or self._closed or self._stopping:
             return
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(self._ensure_executor(), self._maintenance_sync)
@@ -1839,11 +2008,20 @@ class TimeSeriesStore:
     # ------------------------------------------------------------------
 
     async def stop(self) -> None:
-        """Stop maintenance and close the database. Safe to call repeatedly.
+        """Stop admission, drain accepted writes, then close the database.
 
         The store stays closed: recording becomes a no-op and queries
-        return empty results (the app builds a new store to restart).
+        return empty results (the app builds a new store to restart). A
+        cancelled shutdown waiter does not cancel the shared drain task.
         """
+        if self._closed:
+            return
+        if self._stop_task is None:
+            self._stopping = True
+            self._stop_task = asyncio.create_task(self._stop_and_drain())
+        await asyncio.shield(self._stop_task)
+
+    async def _stop_and_drain(self) -> None:
         if self._maintenance_task and not self._maintenance_task.done():
             self._maintenance_task.cancel()
             try:
@@ -1852,12 +2030,27 @@ class TimeSeriesStore:
                 pass
             self._maintenance_task = None
         loop = asyncio.get_running_loop()
+        if self._pending_writes:
+            await asyncio.gather(
+                *(asyncio.shield(future) for future in list(self._pending_writes)),
+                return_exceptions=True,
+            )
+        # A maintenance call can already be running after its asyncio task
+        # was cancelled. A FIFO barrier also drains that work before close.
+        if self._executor is not None:
+            await loop.run_in_executor(self._executor, lambda: None)
         if loop.is_running():
             await loop.run_in_executor(None, self._close_sync)
         else:  # pragma: no cover - defensive
             self._close_sync()
 
     def _close_sync(self) -> None:
+        self._stopping = True
+        if self._executor is not None:
+            # Synchronous reset/teardown must preserve accepted writes too.
+            # Do not mark the DB closed until the writer has drained.
+            self._executor.shutdown(wait=True, cancel_futures=False)
+            self._executor = None
         self._closed = True  # later queries and records never reopen
         # Read lane first: the writer's final checkpoint removes the -wal and
         # -shm files only when it is the last connection open.
@@ -1881,11 +2074,8 @@ class TimeSeriesStore:
                 self._conn = None
             self._state.clear()
             self._signal_last.clear()
+            self._signal_pending.clear()
             self._series_ids.clear()
-        if self._executor is not None:
-            # cancel_futures: queued writes must not reopen the closed DB
-            self._executor.shutdown(wait=False, cancel_futures=True)
-            self._executor = None
 
 
 # module-level singleton, built lazily from settings (never at import time,

@@ -1619,9 +1619,9 @@ class GatewayManager:
         Runs after the cache update on every successful poll cycle. Storage
         failures are logged and swallowed — statistics must never break
         polling. Samples are awaited (not fire-and-forget) so each gateway's
-        samples stay strictly ordered for trapezoidal integration, but capped
-        by a timeout so a hung SQLite write (disk full, dying flash) can
-        never stall the poll loop.
+        samples stay strictly ordered for trapezoidal integration. The
+        timeout bounds how long polling waits; the store retains accepted
+        writes and shields them from cancellation until they finish.
         """
         try:
             aggregates = data.aggregates or {}
@@ -1651,7 +1651,8 @@ class GatewayManager:
             )
         except asyncio.TimeoutError:
             logger.warning(
-                "Time-series sample write timed out for %s — polling continues",
+                "Time-series sample write timed out for %s — "
+                "accepted write remains queued; polling continues",
                 gateway_id,
             )
         except Exception as e:
@@ -1666,8 +1667,8 @@ class GatewayManager:
         Signals come from the vitals and fan_speeds already fetched this
         cycle (no extra gateway calls). The store keeps at most one snapshot
         per PW_TIMESERIES_SIGNAL_INTERVAL, so most calls return immediately.
-        Like power samples, failures are logged and swallowed and a hung
-        write is capped by a timeout.
+        Like power samples, failures are logged and swallowed. The timeout
+        bounds the polling wait without cancelling accepted store writes.
 
         Args:
             gateway_id: Gateway identifier.
@@ -1700,7 +1701,8 @@ class GatewayManager:
             )
         except asyncio.TimeoutError:
             logger.warning(
-                "Device signal write timed out for %s — polling continues",
+                "Device signal write timed out for %s — "
+                "accepted write remains queued; polling continues",
                 gateway_id,
             )
         except Exception as e:
