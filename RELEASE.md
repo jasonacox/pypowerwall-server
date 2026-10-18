@@ -2,7 +2,7 @@
 
 ## Version History
 
-### [0.10.1] - Upcoming
+### [0.11.0] - 2026-10-18
 
 **Added:**
 - **`PW_FAILOVER` setting** — exposes pypowerwall's `failover` option
@@ -56,6 +56,12 @@
 - **`/stats` reports the real `PW_NEG_SOLAR`** — `config.PW_NEG_SOLAR` was always `true`; it now shows the setting (default `no`).
 - **`/stats` masks the top-level `siteid` and `cf`** — `config` already masked `PW_SITEID` and `PW_CACHE_FILE`, but the proxy-compatible top-level `siteid` and `cf` (the cache file path under `PW_AUTH_PATH`) were readable on this unauthenticated route. Both keys stay, masked the same way.
 - **`PW_SITEID` applies to Cloud and FleetAPI gateways** — it was passed to local and hybrid connections only, so a Cloud or FleetAPI gateway on a multi-site account used the site saved by `pypowerwall setup` (or the first site) instead.
+
+**Changed:**
+- **pypowerwall upgraded to 0.21.0** (from 0.20.0; `requirements.txt` pin and `pyproject.toml` minimum). Library changes that reach server users:
+  - Powerwall 2 per-Powerwall vitals: lifetime charged and discharged energy, inverter state and heatsink temperature, `THC_State` and the `SYNC_*` values, which were `null` (jasonacox/pypowerwall#416). Powerwall 3 sites with a SYNC device report `SYNC_ExternallyPowered` / `SYNC_SiteSwitchEnabled` as `false` instead of `null`.
+  - TEDAPI `/api/system_status` fills `max_charge_power`, `max_discharge_power` and `max_apparent_power` the way the gateway's local API reports them, and `inverter_nominal_usable_power` where the inverters report it (jasonacox/pypowerwall#423).
+  - `Powerwall.connect()` starts from the configured mode after a failover, so a reconnect tries local again first (jasonacox/pypowerwall#425).
 
 ### [0.10.0] - 2026-10-11
 
