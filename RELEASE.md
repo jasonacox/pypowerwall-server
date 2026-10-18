@@ -5,6 +5,12 @@
 ### [0.10.1] - Upcoming
 
 **Added:**
+- **`PW_FAILOVER` setting** — exposes pypowerwall's `failover` option
+  (default `yes`). Set `PW_FAILOVER=no` to pin the configured transports: the
+  v1r leader stays on the wired LAN instead of switching to `PW_WIFI_HOST`, a
+  failed request returns no data instead of being rerouted, and a local
+  connection never falls back to FleetAPI or Cloud mode. `/stats` reports it
+  under `config`. Requested by @BJReplay (jasonacox/pypowerwall#402).
 - **Home Assistant: one device per Powerwall** — each battery's entities
   (capacity, charge, per-unit temperature and fan sensors) are now grouped
   under their own HA device named `Powerwall {serial}` and keyed by serial,

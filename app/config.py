@@ -78,6 +78,7 @@ Environment Variables (Proxy Compatible):
         PW_NEG_SOLAR         - Allow negative solar values "yes"/"no" (default: "no")
         PW_RSA_KEY_PATH      - Path to RSA-4096 private key PEM for TEDAPI v1r LAN access (default: none)
         PW_WIFI_HOST         - WiFi host IP for TEDAPI v1r WiFi fallback (default: none)
+        PW_FAILOVER          - Transport/mode failover "yes"/"no" (default: "yes")
         PROXY_BASE_URL       - Base URL for reverse proxy (default: "/")
 
     Time-Series Storage (Daily Energy Stats):
@@ -354,6 +355,9 @@ class Settings(BaseSettings):
     pw_wifi_host: Optional[str] = Field(
         default=None, alias="PW_WIFI_HOST"
     )  # WiFi host IP for TEDAPI v1r WiFi fallback
+    failover: bool = Field(
+        default=True, alias="PW_FAILOVER"
+    )  # pypowerwall failover; false pins the configured transports
     neg_solar: bool = Field(
         default=False, alias="PW_NEG_SOLAR"
     )  # Allow negative solar values (default: no)
