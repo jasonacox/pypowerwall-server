@@ -358,7 +358,9 @@ async def test_local_first_takes_the_write_on_v1r(env, gm, monkeypatch, caplog):
     bind_hybrid_v1r(monkeypatch)
     with caplog.at_level(logging.INFO, logger=LOGGER):
         await run_commands(cmd("v1r", "mode", {"value": "backup"}))
-    assert calls(gm.local_control) == [(("v1r", "set_mode", "backup"), {"timeout": 10.0})]
+    assert calls(gm.local_control) == [
+        (("v1r", "set_mode", "backup"), {"timeout": 10.0})
+    ]
     assert gm.cloud_control.await_count == 0
     assert "applied (value='backup' via local v1r)" in caplog.text
 
@@ -376,7 +378,9 @@ async def test_local_first_lan_failed_falls_back_to_cloud(env, gm, monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_local_first_no_local_connection_falls_back_to_cloud(env, gm, monkeypatch):
+async def test_local_first_no_local_connection_falls_back_to_cloud(
+    env, gm, monkeypatch
+):
     """Flag on but no local connection object: the helper declines and the
     historical dispatch runs (cloud, for a bound hybrid gateway)."""
     bind_hybrid_v1r(monkeypatch, connection=False)
@@ -398,7 +402,9 @@ async def test_local_first_ignores_non_v1r_gateways(env, gm, monkeypatch, caplog
 
 
 @pytest.mark.asyncio
-async def test_local_first_off_keeps_the_historical_cloud_path(env, gm, monkeypatch, caplog):
+async def test_local_first_off_keeps_the_historical_cloud_path(
+    env, gm, monkeypatch, caplog
+):
     """Default off: with the very same live v1r setup the cloud-bound gateway
     writes via the cloud exactly as before the flag existed."""
     bind_hybrid_v1r(monkeypatch, flag=False)
@@ -410,7 +416,9 @@ async def test_local_first_off_keeps_the_historical_cloud_path(env, gm, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_local_first_no_cloud_retry_after_a_failed_local_write(env, gm, monkeypatch, caplog):
+async def test_local_first_no_cloud_retry_after_a_failed_local_write(
+    env, gm, monkeypatch, caplog
+):
     """Flag on: a timed-out local v1r write is final - the cloud is never
     tried afterwards (it could double-apply)."""
     bind_hybrid_v1r(monkeypatch)
