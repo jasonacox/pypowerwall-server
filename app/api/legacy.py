@@ -2518,6 +2518,7 @@ async def get_stats():
         "PW_CACHE_TTL": settings.cache_ttl,
         "PW_TEDAPI_RECOVERY": settings.tedapi_recovery,
         "PW_TEDAPI_PROBE_INTERVAL": settings.tedapi_probe_interval,
+        "PW_FAILOVER": settings.failover,
     }
 
     # Build connection health section

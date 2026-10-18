@@ -633,6 +633,7 @@ class GatewayManager:
                     "timezone": config.timezone,
                     "fleetapi": config.fleetapi,
                     "auto_select": True,
+                    "failover": settings.failover,
                 }
                 if settings.siteid:
                     # PW_SITEID picks the site on multi-site accounts. The
@@ -1328,6 +1329,7 @@ class GatewayManager:
                             "fleetapi": config.fleetapi,
                             "timezone": config.timezone,
                             "pwcacheexpire": pwcacheexpire,
+                            "failover": settings.failover,
                         }
                         if config.authpath:
                             cloud_kwargs["authpath"] = config.authpath
@@ -1358,6 +1360,7 @@ class GatewayManager:
                             "timezone": config.timezone,
                             "timeout": settings.timeout,
                             "poolmaxsize": settings.pool_maxsize,
+                            "failover": settings.failover,
                             "pwcacheexpire": pwcacheexpire,
                         }
                         # Per-gateway password (PW_GATEWAYS/config file) or the

@@ -363,6 +363,59 @@ async def test_rsa_key_path_passed_to_powerwall_constructor(monkeypatch, mock_py
     call_kwargs = powerwall_spy.call_args.kwargs
     assert call_kwargs.get("rsa_key_path") == "/keys/tedapi_rsa_private.pem"
     assert call_kwargs.get("host") == "192.168.91.1"
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failover", [True, False])
+async def test_failover_setting_passed_to_powerwall_constructor(
+    monkeypatch, mock_pypowerwall, failover
+):
+    """PW_FAILOVER reaches pypowerwall.Powerwall(failover=...) (pypowerwall#402).
+
+    Unwired, PW_FAILOVER=no would be silently ignored and the library would keep
+    rerouting to WiFi or cloud.
+    """
+    from unittest.mock import Mock
+    from app.config import GatewayConfig, settings
+    from app.models.gateway import Gateway, GatewayStatus
+    import pypowerwall
+
+    powerwall_spy = Mock(return_value=mock_pypowerwall)
+    monkeypatch.setattr(pypowerwall, "Powerwall", powerwall_spy)
+    monkeypatch.setattr(settings, "failover", failover)
+
+    gw = Gateway(id="fo", name="TEDAPI", host="10.42.1.40", gw_pwd="pw")
+    config = GatewayConfig(id="fo", name="TEDAPI", host="10.42.1.40", gw_pwd="pw")
+    gateway_manager.gateways["fo"] = gw
+    gateway_manager._pending_configs["fo"] = config
+    gateway_manager.cache["fo"] = GatewayStatus(gateway=gw, online=False)
+    gateway_manager._consecutive_failures["fo"] = 0
+    gateway_manager._next_poll_time["fo"] = 0
+
+    await gateway_manager._poll_gateway("fo")
+
+    assert powerwall_spy.called, "pypowerwall.Powerwall() was never called"
+    assert powerwall_spy.call_args.kwargs.get("failover") is failover
+
+
+@pytest.mark.parametrize("failover", [True, False])
+def test_stats_config_reports_failover(client, monkeypatch, failover):
+    """/stats config reports PW_FAILOVER, as the proxy's /stats does."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "failover", failover)
+    response = client.get("/stats")
+    assert response.status_code == 200
+    assert response.json()["config"]["PW_FAILOVER"] is failover
+
+
+def test_failover_setting_defaults_on_and_parses_no(monkeypatch):
+    from app.config import Settings
+
+    monkeypatch.delenv("PW_FAILOVER", raising=False)
+    assert Settings().failover is True
+    monkeypatch.setenv("PW_FAILOVER", "no")
+    assert Settings().failover is False
+
+
 # ---------------------------------------------------------------------------
 # Multi-PW snapshot guard — config convergence & staleness cap
 # ---------------------------------------------------------------------------
