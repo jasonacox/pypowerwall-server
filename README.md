@@ -218,6 +218,9 @@ This will:
 
 ### Environment Variables
 
+Every setting, with its default and the modes it applies to, is in
+[API.md](API.md#configuration). Common examples:
+
 **Single Gateway Mode (Read-Only via TEDAPI):**
 ```bash
 PW_HOST=192.168.91.1
@@ -658,10 +661,12 @@ For example `MQTT_CONTROLS=15` enables everything except going off grid, which n
 
 ## API Endpoints
 
+**Full reference: [API.md](API.md#routes)** lists every route with its method,
+auth requirement and response.
+
 All existing pypowerwall proxy endpoints work unchanged, alongside multi-gateway
 (`/api/gateways/*`), aggregate (`/api/aggregate/*`), time-series
-(`/api/timeseries/*`) and WebSocket (`/ws/*`) endpoints. [API.md](API.md#routes)
-lists every route with its method, auth requirement and response.
+(`/api/timeseries/*`) and WebSocket (`/ws/*`) endpoints.
 
 ### Interactive API Documentation
 
