@@ -27,6 +27,7 @@
   yields a connected cloud or FleetAPI connection. (#156)
 
 **Fixed:**
+- **History samples survive storage wait timeouts** — Slow SQLite writes no longer lose accepted power, temperature or fan records when polling's five-second wait expires. Accepted writes finish in order, with up to ten seconds to drain on shutdown. Storage status reports pending and rejected writes.
 - **TEDAPI recovery no longer misses a connection that drifted to cloud
   reads** — a recovery `connect()` that timed out during a gateway reboot
   could leave pypowerwall's failover active: the connection stayed on cloud reads
