@@ -24,6 +24,15 @@
   slightly lower home load. Daily solar totals in the history are unchanged
   (they already ignore negative solar). Set `PW_NEG_SOLAR=no` to keep the old
   behavior.
+- **The hybrid cloud connection starts only when it is wanted**, like the
+  proxy: with `PW_CONTROL_SECRET` (writes need it) or the new
+  `PW_CLOUD_HYBRID=yes`. It used to start for any local gateway with
+  `PW_EMAIL`, so Powerwall 2 local setups, whose login needs an email, opened
+  a Tesla cloud session and logged retry warnings they never asked for. If you
+  run Basic LAN with `PW_EMAIL` and no control secret to see the
+  cloud-sourced mode and reserve, set `PW_CLOUD_HYBRID=yes`. Control setups
+  (`PW_CONTROL_SECRET` set), Cloud and FleetAPI are unchanged. `/stats`
+  reports the setting under `config`.
 
 **Fixed:**
 - **FleetAPI works with the single-gateway settings**, as in the proxy: with

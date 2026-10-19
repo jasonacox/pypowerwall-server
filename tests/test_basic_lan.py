@@ -595,6 +595,8 @@ async def test_stats_reports_per_link_hybrid_health(monkeypatch):
             authpath="/auth",
         )
     ]
+    from app.config import settings as _cfg
+    monkeypatch.setattr(_cfg, "control_secret", "test-secret")  # hybrid needs it (or PW_CLOUD_HYBRID)
     await gateway_manager.initialize(configs, poll_interval=5)
 
     # Simulate the background cloud-control init having completed
@@ -639,6 +641,8 @@ async def test_stats_degraded_when_cloud_down_but_local_healthy(monkeypatch):
             authpath="/auth",
         )
     ]
+    from app.config import settings as _cfg
+    monkeypatch.setattr(_cfg, "control_secret", "test-secret")  # hybrid needs it (or PW_CLOUD_HYBRID)
     await gateway_manager.initialize(configs, poll_interval=5)
 
     # Cloud link up at some point (values recorded), then WAN dropped.

@@ -41,7 +41,7 @@ The mode is chosen per gateway from the settings it has:
 | Basic LAN | `PW_HOST` + `PW_PASSWORD`, no gateway password or RSA key | Powerwall 3 wired LAN, detected on connect when `/api/status` isn't served. Core metrics only: aggregates, battery level, grid status. |
 | Cloud | `PW_EMAIL` without `PW_HOST`, or `.pypowerwall.auth` in `PW_AUTH_PATH` (its account fills a missing `PW_EMAIL`) | Tesla cloud. Run `pypowerwall-server --setup` once to create the auth files. |
 | FleetAPI | `.pypowerwall.fleetapi` in `PW_AUTH_PATH` without `PW_HOST` (picked before Cloud, as the proxy does), or `fleetapi: true` on a gateway in `PW_GATEWAYS` or the config file | Tesla Fleet API. |
-| Hybrid | Any local mode plus `PW_EMAIL` | Reads stay local; control writes use a Tesla cloud connection. |
+| Hybrid | Any local mode plus `PW_EMAIL`, and `PW_CONTROL_SECRET` or `PW_CLOUD_HYBRID=yes` | Reads stay local; control writes use a Tesla cloud connection, which also fills values the local API lacks (Basic LAN mode and reserve, grid charging/export settings). |
 
 In the tables, **Local** means TEDAPI, TEDAPI v1r, the Powerwall 2 local API and Basic LAN.
 
@@ -131,6 +131,7 @@ PW_GATEWAYS='[
 |----------|---------|------------|:-----:|-------------|
 | `PW_CONTROL_SECRET` | none | All | ✓ | Enables all write routes; clients send it as the control token (see [Control and security](#control-and-security)). Unset means read-only. The proxy uses the same variable but a different request format. |
 | `PW_ISLANDING_COOLDOWN` | `30` | v1r | | Minimum seconds between islanding commands per gateway; `0` disables the cooldown. |
+| `PW_CLOUD_HYBRID` | `no` | Local with `PW_EMAIL` | | `yes` starts the hybrid cloud connection without `PW_CONTROL_SECRET`, for its read-only values (Basic LAN mode and reserve, grid charging/export settings). With `PW_CONTROL_SECRET` set it starts anyway. Like the proxy, `PW_EMAIL` alone doesn't start it. |
 | `PW_LOCAL_FIRST` | `no` | v1r, Hybrid | | `yes` sends reserve, mode and grid writes over a confirmed local v1r connection first, even when a hybrid cloud connection exists (see [write path](#post-controlpath)). |
 
 `MQTT_CONTROLS` (below) separately enables control over MQTT.
@@ -468,7 +469,7 @@ Any other `path` is sent as a raw POST of the body to the default gateway's
 `/api/{path}`.
 
 **Write path.** When a hybrid cloud connection is up (a local gateway with
-`PW_EMAIL`), writes go through it. Otherwise they use the default gateway's own
+`PW_EMAIL` and `PW_CONTROL_SECRET`), writes go through it. Otherwise they use the default gateway's own
 connection, which can write in Cloud, FleetAPI and TEDAPI v1r modes. A failed
 or unsupported write returns `503`. The hybrid connection is shared: on a Tesla
 account with several sites, set `PW_SITEID`.

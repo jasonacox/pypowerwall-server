@@ -792,6 +792,8 @@ async def test_initialize_creates_cloud_control(monkeypatch):
     gm.cache.clear()
     gm._cloud_control = None
 
+    from app.config import settings as _cfg
+    monkeypatch.setattr(_cfg, "control_secret", "test-secret")  # hybrid needs it (or PW_CLOUD_HYBRID)
     await gm.initialize(configs, poll_interval=5)
 
     # Cloud control connects in the background so startup isn't blocked
@@ -835,6 +837,8 @@ async def test_initialize_creates_cloud_control_for_basic_lan(monkeypatch):
     gm.cache.clear()
     gm._cloud_control = None
 
+    from app.config import settings as _cfg
+    monkeypatch.setattr(_cfg, "control_secret", "test-secret")  # hybrid needs it (or PW_CLOUD_HYBRID)
     await gm.initialize(configs, poll_interval=5)
 
     assert gm._cloud_control_task is not None
@@ -910,6 +914,8 @@ async def test_initialize_cloud_control_uses_pw_authpath_fallback(monkeypatch):
     gm.cache.clear()
     gm._cloud_control = None
 
+    from app.config import settings as _cfg
+    monkeypatch.setattr(_cfg, "control_secret", "test-secret")  # hybrid needs it (or PW_CLOUD_HYBRID)
     await gm.initialize(configs, poll_interval=5)
     await gm._cloud_control_task
 
@@ -953,6 +959,8 @@ async def test_initialize_cloud_control_exception_is_retried(monkeypatch):
     gm._cloud_control = None
 
     # Should not raise — the failure is logged and retried in the background
+    from app.config import settings as _cfg
+    monkeypatch.setattr(_cfg, "control_secret", "test-secret")  # hybrid needs it (or PW_CLOUD_HYBRID)
     await gm.initialize(configs, poll_interval=5)
     task = gm._cloud_control_task
     assert task is not None
@@ -1290,3 +1298,44 @@ async def test_cloud_control_local_fallback_skips_stub_grid_getters(
         assert status.data.grid_export is None
     finally:
         mock_gateway_manager._cloud_control = None
+
+
+# PW_CLOUD_HYBRID: the hybrid cloud login starts only when it is wanted
+@pytest.mark.asyncio
+@pytest.mark.parametrize("secret, hybrid, expected", [
+    (None, False, False),          # PW_EMAIL alone: no cloud login (proxy parity)
+    ("test-secret", False, True),  # control needs the cloud link
+    (None, True, True),            # read-only cloud values
+])
+async def test_hybrid_cloud_login_needs_control_secret_or_opt_in(monkeypatch, caplog, secret, hybrid, expected):
+    from app.config import GatewayConfig, settings
+
+    monkeypatch.setattr(settings, "control_secret", secret)
+    monkeypatch.setattr(settings, "cloud_hybrid", hybrid)
+    import pypowerwall
+    monkeypatch.setattr(pypowerwall, "Powerwall", lambda **kw: _make_realistic_pw_mock())
+
+    gm = gateway_manager
+    gm.gateways.clear()
+    gm.connections.clear()
+    gm.cache.clear()
+    gm._cloud_control = None
+    gm._cloud_control_task = None
+    configs = [GatewayConfig(id="home", name="Home", host="10.0.1.2", password="pw", email="user@example.com")]
+
+    with caplog.at_level("INFO"):
+        await gm.initialize(configs, poll_interval=5)
+    try:
+        assert (gm._cloud_control_task is not None) is expected
+        assert gm._cloud_control_configured is expected
+        assert ("Hybrid cloud connection off" in caplog.text) is (not expected)
+    finally:
+        await gm.shutdown()
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_stats_config_reports_cloud_hybrid(client, monkeypatch, value):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "cloud_hybrid", value)
+    assert client.get("/stats").json()["config"]["PW_CLOUD_HYBRID"] is value

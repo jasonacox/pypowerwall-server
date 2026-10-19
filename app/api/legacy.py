@@ -2512,6 +2512,7 @@ async def get_stats():
         "PW_TEDAPI_RECOVERY": settings.tedapi_recovery,
         "PW_TEDAPI_PROBE_INTERVAL": settings.tedapi_probe_interval,
         "PW_FAILOVER": settings.failover,
+        "PW_CLOUD_HYBRID": settings.cloud_hybrid,
     }
 
     # Build connection health section
