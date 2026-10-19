@@ -4,6 +4,20 @@
 
 ### [0.12.0] - Upcoming
 
+**Added:**
+- **The proxy's control API** — `GET /control/reserve`, `/control/mode`,
+  `/control/grid_charging`, `/control/grid_export` and `/control/max_backup`
+  read the current settings without a token, and `POST /control/<name>`
+  takes the proxy's form-encoded `value=...&token=...` (plus the `mode` and
+  `level` companions; an empty `value` reads), with the proxy's
+  `{"error": ...}` / `{"unauthorized": ...}` responses. Clients written for
+  the proxy, such as Powerwall-Dashboard's `tools/switch-mode`, work
+  unchanged. The JSON API is unchanged. (jasonacox/Powerwall-Dashboard#878)
+- **Max backup (storm watch) control** — `POST /control/max_backup` with a
+  duration in seconds or `cancel` schedules or cancels a manual backup event,
+  and `GET /control/max_backup` lists backup events, as in the proxy. Needs
+  the TEDAPI v1r transport.
+
 **Changed:**
 - **Legacy endpoints return what the proxy returns**, so proxy clients such
   as Powerwall-Dashboard's Telegraf can switch to the server unchanged

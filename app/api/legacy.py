@@ -55,16 +55,19 @@ Adding New Endpoints:
     Do NOT add catch-all routes - they break graceful degradation.
 """
 import asyncio
+import hmac
 import logging
 import os
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
+from urllib.parse import parse_qs
 
 import psutil
 import pypowerwall
 from pypowerwall import parse_version
-from fastapi import APIRouter, HTTPException, Response, Header
+from fastapi import APIRouter, HTTPException, Request, Response, Header
+from fastapi.responses import JSONResponse
 
 from app.api.auth import verify_control_token
 from app.mqtt.publisher import is_error_result
@@ -210,6 +213,139 @@ async def control_status():
     return {"enabled": settings.control_enabled}
 
 
+# The proxy's control API (pypowerwall proxy/server.py), so proxy clients such
+# as Powerwall-Dashboard's tools/switch-mode work unchanged: GET reads without
+# a token, and form-encoded POSTs (`curl -d "value=20&token=..."`) whose
+# responses carry "error" (400) or "unauthorized" (401) keys.
+_PROXY_CONTROL_DISABLED = "Control Commands Disabled - Set PW_CONTROL_SECRET to enable"
+_PROXY_FORM_MAX_BYTES = 4096  # value/token/mode/level only
+
+
+def _proxy_response(body: dict) -> JSONResponse:
+    """A proxy control response: 400 with "error", 401 with "unauthorized"."""
+    status = 400 if "error" in body else 401 if "unauthorized" in body else 200
+    return JSONResponse(body, status_code=status)
+
+
+def _is_v1r(gateway_id: str) -> bool:
+    """True when the gateway's live connection uses the TEDAPI v1r transport."""
+    return getattr(gateway_manager.get_connection(gateway_id), "tedapi_mode", None) == "v1r"
+
+
+async def _operation_value(key: str):
+    """One value from /api/operation (cache, with the hybrid stale fallback)."""
+    return (await get_api_operation()).get(key)
+
+
+async def _proxy_read(action: str):
+    """The proxy's read for a control action, or None if it has none."""
+    if action == "reserve":
+        return {"reserve": await _operation_value("backup_reserve_percent") or 0}
+    if action == "mode":
+        return {"mode": await _operation_value("real_mode") or "unknown"}
+    if action == "grid_charging":
+        return {"grid_charging": bool(await _operation_value("grid_charging"))}
+    if action == "grid_export":
+        return {"grid_export": await _operation_value("grid_export") or "unknown"}
+    if action == "max_backup":
+        gateway_id = get_default_gateway()
+        if not _is_v1r(gateway_id):
+            return {"error": "max_backup requires v1r LAN transport"}
+        events = await gateway_manager.local_control(gateway_id, "get_backup_events", timeout=10.0)
+        return events if isinstance(events, dict) else {"error": "Failed to get backup events"}
+    return None
+
+
+@router.get("/control/reserve")
+@router.get("/control/mode")
+@router.get("/control/grid_charging")
+@router.get("/control/grid_export")
+async def control_read(request: Request):
+    """Current reserve, mode, grid charging or grid export, as in the proxy
+    (no token; control must be enabled). Values come from the poll cache."""
+    if not settings.control_enabled:
+        return _proxy_response({"error": _PROXY_CONTROL_DISABLED})
+    return _proxy_response(await _proxy_read(request.url.path.rsplit("/", 1)[-1]))
+
+
+@router.get("/control/max_backup")
+async def control_read_max_backup(token: Optional[str] = None):
+    """Current backup events (TEDAPI v1r), as in the proxy. With a valid
+    ?token=, an expired manual backup event is cancelled (a write)."""
+    if not settings.control_enabled:
+        return _proxy_response({"error": _PROXY_CONTROL_DISABLED})
+    events = await _proxy_read("max_backup")
+    manual = events.get("manual_backup") if "error" not in events else None
+    if (
+        isinstance(manual, dict)
+        and not manual.get("active")
+        and token
+        and hmac.compare_digest(token, settings.control_secret)
+    ):
+        await gateway_manager.local_control(get_default_gateway(), "cancel_max_backup", timeout=10.0)
+        events["manual_backup"] = None
+    return _proxy_response(events)
+
+
+async def _proxy_form_control(path: str, body: bytes, authorization: Optional[str]) -> JSONResponse:
+    """A form-encoded control POST (the proxy's format): value and token
+    fields, optional mode/level companions; an empty value reads the current
+    setting. Writes go through the same validation and dispatch as JSON."""
+    if not settings.control_enabled:
+        return _proxy_response({"error": _PROXY_CONTROL_DISABLED})
+    if len(body) > _PROXY_FORM_MAX_BYTES:
+        return _proxy_response({"error": "Control Command Error: Invalid Request"})
+    form = parse_qs(body.decode("utf-8", errors="replace"))
+
+    def field(name: str) -> str:
+        return form.get(name, [""])[0]
+
+    token = field("token")
+    if not token and authorization:
+        token = authorization[len("Bearer "):] if authorization.startswith("Bearer ") else authorization
+    if not token or not hmac.compare_digest(token, settings.control_secret):
+        return _proxy_response({"unauthorized": "Control Command Token Invalid"})
+
+    action, value = path, field("value")
+    if not value:
+        read = await _proxy_read(action)
+        return _proxy_response(read if read is not None else {"error": "Invalid Command Action"})
+
+    success = None  # the proxy's fixed reply for some writes; else the library result
+    if action == "reserve":
+        if not value.isdigit():
+            return _proxy_response({"error": "Control Command Value Invalid"})
+        data = {"value": int(value)}
+        if field("mode"):
+            data["mode"] = field("mode")
+    elif action == "mode":
+        data = {"value": value}
+        if field("level"):
+            if not field("level").isdigit():
+                return _proxy_response({"error": "Control Command Level Invalid"})
+            data["level"] = int(field("level"))
+    elif action == "grid_charging":
+        if value.lower() not in ("true", "false"):
+            return _proxy_response({"error": "Control Command Value Invalid"})
+        data, success = {"value": value.lower() == "true"}, {"grid_charging": "Set Successfully"}
+    elif action == "grid_export":
+        data, success = {"value": value.lower()}, {"grid_export": "Set Successfully"}
+    elif action == "max_backup":
+        if value.lower() != "cancel" and not value.isdigit():
+            return _proxy_response({"error": "Control Command Value Invalid - use seconds or cancel"})
+        data = {"value": "cancel" if value.lower() == "cancel" else int(value)}
+    else:
+        return _proxy_response({"error": "Invalid Command Action"})
+
+    try:
+        result = await _control_json(action, data)
+    except HTTPException as e:
+        return _proxy_response({"error": e.detail if isinstance(e.detail, str) else "Control Command Error"})
+    if success is not None:
+        return _proxy_response(success)
+    return _proxy_response(result if isinstance(result, dict) else {"result": result})
+
+
 @router.post("/control/islanding")
 async def control_islanding(
     data: dict, authorization: Optional[str] = Header(None)
@@ -281,7 +417,7 @@ async def control_islanding(
 
 @router.post("/control/{path:path}")
 async def control_api(
-    path: str, data: dict, authorization: Optional[str] = Header(None)
+    path: str, request: Request, authorization: Optional[str] = Header(None)
 ):
     """Authenticated control endpoint for POST operations.
 
@@ -300,8 +436,29 @@ async def control_api(
     Reserve hold:
     - POST /control/reserve_hold sets backup reserve to the cached SoC
       (takes an empty JSON object).
+
+    Max backup (TEDAPI v1r):
+    - POST /control/max_backup with value=<seconds> or "cancel".
+
+    A form-encoded body (the proxy's `value=...&token=...`) is handled by
+    _proxy_form_control with the proxy's responses.
     """
+    if request.headers.get("content-type", "").startswith("application/x-www-form-urlencoded"):
+        return await _proxy_form_control(path, await request.body(), authorization)
+    try:
+        data = await request.json()
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=422, detail="Request body must be a JSON object")
     verify_control_token(authorization)
+    return await _control_json(path, data)
+
+
+async def _control_json(path: str, data: dict):
+    """Validate and run one authenticated control request (the JSON API; the
+    proxy form API maps onto it). Raises HTTPException on bad input or a
+    failed write."""
 
     # Validate grid_charging requires an explicit boolean value to prevent
     # silent state changes from malformed or empty payloads.
@@ -455,6 +612,29 @@ async def control_api(
             "Control reserve_hold for %s: reserve %d", gateway_id, level
         )
         path, data = "reserve", {"value": level}
+
+    if path == "max_backup":
+        value = data.get("value")
+        cancel = isinstance(value, str) and value.lower() == "cancel"
+        if not cancel and (not isinstance(value, int) or isinstance(value, bool) or value <= 0):
+            raise HTTPException(
+                status_code=400,
+                detail="'value' must be a duration in seconds or 'cancel'",
+            )
+        gateway_id = get_default_gateway()
+        if not _is_v1r(gateway_id):
+            raise HTTPException(
+                status_code=503, detail="max_backup requires v1r LAN transport"
+            )
+        if cancel:
+            result = await gateway_manager.local_control(gateway_id, "cancel_max_backup", timeout=10.0)
+            if not result:
+                raise HTTPException(status_code=503, detail="Failed to cancel max backup")
+            return {"max_backup": "Cancelled"}
+        result = await gateway_manager.local_control(gateway_id, "schedule_max_backup", value, timeout=10.0)
+        if not result:
+            raise HTTPException(status_code=503, detail="Failed to schedule max backup")
+        return {"max_backup": f"Scheduled for {value} seconds"}
 
     # Map control paths to pypowerwall control methods. Used for both cloud
     # control (TEDAPI gateways with cloud credentials, hybrid mode) and local
