@@ -714,7 +714,8 @@ class Settings(BaseSettings):
         email = self.pw_email
         fleetapi = False
         if not self.pw_host:
-            authpath = self.pw_authpath or ""
+            # pypowerwall expands "~" in authpath; look where it will
+            authpath = os.path.expanduser(self.pw_authpath or "")
             if os.path.exists(os.path.join(authpath, FLEETAPI_FILE)):
                 fleetapi = True
             elif not email:

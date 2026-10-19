@@ -53,7 +53,8 @@
   mode, reserve and system status (so `/pod` lost pack energy and reserve).
   The server now tells them apart on connect: a gateway that answers
   `/api/status` is polled in full, like the proxy's local mode; one that
-  doesn't is Basic LAN as before. The TEDAPI probe runs only for gateways
+  doesn't is Basic LAN as before, re-checked every 5 minutes so a Powerwall 2
+  whose status request failed once still gets full polling. The TEDAPI probe runs only for gateways
   configured for TEDAPI, and `/stats` reports `tedapi: false` for local and
   Basic LAN gateways.
 - **A proxy `pypowerwall.env` no longer stops the server from starting** —

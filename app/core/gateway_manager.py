@@ -224,6 +224,9 @@ class GatewayManager:
     # this often, and retry a failed fetch no sooner than _SITE_INFO_RETRY
     _SITE_INFO_REFRESH = 300
     _SITE_INFO_RETRY = 60
+    # Basic LAN detected on connect is provisional: re-check /api/status this
+    # often so a Powerwall 2 whose status probe failed once gets full polling
+    _BASIC_LAN_RECHECK = 300
 
     def __init__(self):
         self.gateways: Dict[str, Gateway] = {}
@@ -300,6 +303,8 @@ class GatewayManager:
         # Last good /api/site_info per gateway, and (monotonic time, succeeded) of the last fetch
         self._site_info: Dict[str, Dict[str, Any]] = {}
         self._site_info_attempt: Dict[str, Tuple[float, bool]] = {}
+        # Monotonic time of the last /api/status check per Basic LAN gateway
+        self._basic_lan_checked: Dict[str, float] = {}
 
         # Cloud connection for control operations (set_reserve, set_mode).
         # TEDAPI doesn't support POST/write APIs, so a separate cloud-mode
@@ -914,6 +919,27 @@ class GatewayManager:
 
         # Run blocking pypowerwall calls in dedicated executor with timeout protection
         loop = asyncio.get_running_loop()
+
+        # Basic LAN is decided on connect from a failed /api/status, which a
+        # Powerwall 2 can also hit transiently. Re-check now and then: once
+        # the gateway answers, it gets the full local API from then on.
+        now = time.monotonic()
+        checked = self._basic_lan_checked.setdefault(gateway_id, now)  # clock starts at the first poll
+        if basic_lan and now - checked >= self._BASIC_LAN_RECHECK:
+            self._basic_lan_checked[gateway_id] = now
+            try:
+                full_api = await asyncio.wait_for(
+                    loop.run_in_executor(self._executor, pw.is_connected),
+                    timeout=step_timeout,
+                )
+            except (asyncio.TimeoutError, Exception):
+                full_api = False
+            if full_api is True:
+                gateway.basic_lan = basic_lan = False
+                logger.info(
+                    f"Gateway {gateway_id} now answers /api/status: polling the "
+                    "full local API (not Basic LAN)"
+                )
 
         # Fetch core data - aggregates is required, vitals/strings are optional
         # Use asyncio.wait_for to timeout if pypowerwall hangs

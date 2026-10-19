@@ -194,3 +194,54 @@ def test_stats_uses_the_configuration_before_the_first_poll(client, mock_gateway
     gateway_manager.cache["fa"] = GatewayStatus(gateway=gw, online=False)
     stats = client.get("/stats").json()
     assert (stats["mode"], stats["fleetapi"]) == ("FleetAPI", True)
+
+
+def test_auth_path_with_tilde_is_expanded_like_pypowerwall(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".auth").mkdir()
+    (tmp_path / ".auth" / ".pypowerwall.fleetapi").write_text("{}")
+    for name in ("PW_HOST", "PW_EMAIL", "PW_GATEWAYS", "PW_CONFIG"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PW_AUTH_PATH", "~/.auth")
+    [gw] = Settings().gateways
+    assert gw.fleetapi is True
+
+
+@pytest.mark.asyncio
+async def test_basic_lan_is_rechecked_and_a_recovered_pw2_gets_full_polling(
+    mock_gateway_manager, mock_pypowerwall
+):
+    """A Powerwall 2 whose /api/status failed once at connect (classed Basic LAN)
+    is polled in full once a later re-check sees /api/status answer."""
+    mock_pypowerwall.tedapi = None
+    mock_pypowerwall.grid_status.return_value = "UP"
+    mock_pypowerwall.is_connected.return_value = False  # transient failure at connect
+    gw = Gateway(id="pw", name="PW", host="10.0.1.2", basic_lan=True)
+    _pending("pw", gw, GatewayConfig(id="pw", name="PW", host="10.0.1.2", password="pw"))
+    await gateway_manager._poll_gateway("pw")
+    assert gateway_manager.gateways["pw"].basic_lan is True
+
+    mock_pypowerwall.is_connected.return_value = True  # /api/status recovered
+    pw = gateway_manager.connections["pw"]
+    mock_pypowerwall.vitals.reset_mock()
+    await gateway_manager._fetch_gateway_data("pw", pw)  # before the re-check is due
+    assert gateway_manager.gateways["pw"].basic_lan is True
+    assert not mock_pypowerwall.vitals.called
+
+    gateway_manager._basic_lan_checked["pw"] -= gateway_manager._BASIC_LAN_RECHECK + 1
+    await gateway_manager._fetch_gateway_data("pw", pw)
+    assert gateway_manager.gateways["pw"].basic_lan is False
+    assert mock_pypowerwall.vitals.called
+
+
+@pytest.mark.asyncio
+async def test_basic_lan_recheck_keeps_a_real_pw3_on_basic_lan(mock_gateway_manager, mock_pypowerwall):
+    mock_pypowerwall.tedapi = None
+    mock_pypowerwall.is_connected.return_value = False  # PW3: /api/status never served
+    gw = Gateway(id="pw3", name="PW3", host="10.42.1.44", basic_lan=True)
+    gateway_manager.gateways["pw3"] = gw
+    gateway_manager.connections["pw3"] = mock_pypowerwall
+    gateway_manager._basic_lan_checked["pw3"] = 0  # re-check due
+    await gateway_manager._fetch_gateway_data("pw3", mock_pypowerwall)
+    assert gw.basic_lan is True
+    mock_pypowerwall.is_connected.assert_called()
