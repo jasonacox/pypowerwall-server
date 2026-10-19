@@ -32,7 +32,9 @@
   (`/api/aggregate/*`, the Console's live stream) count a missing reading as 0.
 - **`/csv`, `/csv/v2` and `/json` treat missing power readings as 0**, as
   the proxy does, instead of returning HTTP 500. `/csv/v2` truncates the
-  reserve like the proxy (19.9 → 19).
+  reserve like the proxy (19.9 → 19). `/battery` and `/pw/power` no longer
+  return HTTP 500 when a meter block is missing, and the `/pw/<meter>` routes
+  return `{}` for it.
 
 ### [0.11.1] - 2026-10-18
 
