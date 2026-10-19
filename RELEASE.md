@@ -35,6 +35,14 @@
   reports the setting under `config`.
 
 **Fixed:**
+- **A proxy `pypowerwall.env` no longer stops the server from starting** —
+  boolean and integer settings that the proxy took now parse instead of
+  failing startup with a validation error: an empty value (`PW_DEBUG=`,
+  `PW_CACHE_EXPIRE=`) means the default, surrounding spaces and an inline
+  ` # comment` are ignored (plain `docker run --env-file` passes comments
+  through), `PW_HTTPS=http` is accepted, and an unrecognized value logs a
+  warning and uses the default. String settings such as passwords are used
+  exactly as given.
 - **`PW_NEG_SOLAR=no` no longer crashes on a missing reading** — a solar or
   load meter reporting `instant_power: null` raised a `TypeError` on every
   poll and marked the gateway offline. (#72) The multi-gateway totals

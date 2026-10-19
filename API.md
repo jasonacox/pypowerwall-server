@@ -19,7 +19,11 @@ and `/redoc`.
 Settings come from environment variables. Names are case-insensitive, except
 `PW_CONFIG` and `PW_GATEWAYS`, which must be uppercase. Command
 line flags (`pypowerwall-server --help`) override the matching variables.
-Booleans accept `yes`/`no`, `true`/`false`, `1`/`0` or `on`/`off`.
+Booleans accept `yes`/`no`, `true`/`false`, `1`/`0` or `on`/`off`. For boolean
+and integer settings, surrounding spaces and an inline ` # comment` are ignored,
+an empty value means the default, and an unrecognized value logs a warning and
+uses the default, so a proxy `pypowerwall.env` can't stop the server from
+starting. String settings, such as passwords, are used exactly as given.
 
 `/stats` echoes many of the effective settings under `config`, with passwords,
 the control secret, the email, the site id and paths masked.
@@ -208,7 +212,7 @@ clients share the proxy's IP.
 
 These proxy variables are accepted (and some echoed in `/stats`) so an existing
 proxy environment starts cleanly, but they change nothing in the server:
-`PW_BROWSER_CACHE` (default `0`), `PW_HTTPS` (`no`), `PW_AUTH_MODE` (`cookie`),
+`PW_BROWSER_CACHE` (default `0`), `PW_HTTPS` (`no`; the proxy's `http` is accepted), `PW_AUTH_MODE` (`cookie`),
 `PW_SUPPRESS_NETWORK_ERRORS` (`no`), `PW_NETWORK_ERROR_RATE_LIMIT` (`5`),
 `PW_FAIL_FAST` (`no`) and `PW_HEALTH_CHECK` (`yes`).
 

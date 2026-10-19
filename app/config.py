@@ -215,11 +215,29 @@ Accessing Configuration:
 import json
 import logging
 import os
-from typing import List, Optional
+import re
+from typing import List, Optional, Union, get_args, get_origin
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 logger = logging.getLogger(__name__)
+
+_TRUE_WORDS = {"yes", "y", "true", "on", "1"}
+_FALSE_WORDS = {"no", "n", "false", "off", "0"}
+_INLINE_COMMENT = re.compile(r"\s+#.*$")
+
+
+def _scalar_kind(annotation):
+    """bool or int for a bool/int (or Optional of one) annotation, else None."""
+    if get_origin(annotation) is Union:
+        args = [a for a in get_args(annotation) if a is not type(None)]
+        annotation = args[0] if len(args) == 1 else None
+    if annotation is bool:
+        return bool
+    if annotation is int:
+        return int
+    return None
+
 
 # Server version
 SERVER_VERSION = "0.11.1"
@@ -425,6 +443,43 @@ class Settings(BaseSettings):
     )  # Bitmask opt-in for MQTT controls (0 = monitoring only; 1 reserve,
     # 2 mode, 4 grid_charging, 8 grid_export, 16 islanding; e.g. 15 = all
     # but islanding, 31 = all). Islanding needs its own explicit bit.
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _lenient_bool_and_int(cls, v, info):
+        """Take bool and int values the proxy took instead of failing startup.
+
+        Surrounding spaces and an inline " # comment" are ignored (plain
+        `docker run --env-file` passes comments through), an empty value
+        means the default, and an unrecognized value logs a warning and uses
+        the default. PW_HTTPS also takes the proxy's "http". String settings
+        (passwords, hosts) are left as given; MQTT_CONTROLS has its own
+        fail-closed parsing below.
+        """
+        if not isinstance(v, str) or info.field_name == "mqtt_controls":
+            return v
+        field = cls.model_fields[info.field_name]
+        kind = _scalar_kind(field.annotation)
+        if kind is None:
+            return v
+        text = _INLINE_COMMENT.sub("", v.strip())
+        if text == "":
+            return field.default
+        if kind is bool:
+            word = text.lower()
+            if word in _TRUE_WORDS or (info.field_name == "https_mode" and word == "http"):
+                return True
+            if word in _FALSE_WORDS:
+                return False
+        else:
+            try:
+                return int(text)
+            except ValueError:
+                pass
+        logger.warning(
+            f"Invalid {field.alias or info.field_name}={v!r}; using the default ({field.default!r})"
+        )
+        return field.default
 
     @field_validator("mqtt_controls", mode="before")
     @classmethod
