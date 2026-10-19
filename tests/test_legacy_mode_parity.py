@@ -6,6 +6,7 @@ PW_HOST + PW_PASSWORD (no gateway password or RSA key) it uses the local API,
 which a Powerwall 2 serves in full.
 """
 import json
+import time
 from unittest.mock import Mock
 
 import pytest
@@ -241,7 +242,9 @@ async def test_basic_lan_recheck_keeps_a_real_pw3_on_basic_lan(mock_gateway_mana
     gw = Gateway(id="pw3", name="PW3", host="10.42.1.44", basic_lan=True)
     gateway_manager.gateways["pw3"] = gw
     gateway_manager.connections["pw3"] = mock_pypowerwall
-    gateway_manager._basic_lan_checked["pw3"] = 0  # re-check due
+    # Re-check due. Relative to now: monotonic time can be under the interval
+    # on a freshly booted machine (a CI runner), so 0 isn't "long ago"
+    gateway_manager._basic_lan_checked["pw3"] = time.monotonic() - gateway_manager._BASIC_LAN_RECHECK - 1
     await gateway_manager._fetch_gateway_data("pw3", mock_pypowerwall)
     assert gw.basic_lan is True
     mock_pypowerwall.is_connected.assert_called()
