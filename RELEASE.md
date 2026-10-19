@@ -15,7 +15,6 @@
     should use `/api/system_status/soe`.
   - `/freq` `grid_status` is `-1` while the grid is syncing and `null` when
     unknown (it was `0`, which reads as a grid outage).
-
 **Fixed:**
 - **`PW_NEG_SOLAR=no` no longer crashes on a missing reading** — a solar or
   load meter reporting `instant_power: null` raised a `TypeError` on every
@@ -25,7 +24,7 @@
   the proxy does, instead of returning HTTP 500. `/csv/v2` truncates the
   reserve like the proxy (19.9 → 19).
 
-### [0.11.1] - Upcoming
+### [0.11.1] - 2026-10-18
 
 **Fixed:**
 - **`/version` matches the proxy** — `vint` now uses pypowerwall's
