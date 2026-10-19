@@ -706,7 +706,9 @@ async def get_soe():
     """Get state of energy (legacy proxy endpoint).
 
     Uses graceful degradation: returns cached data even if gateway is temporarily offline.
-    Returns Tesla-scaled percentage plus the preserved raw percentage if available.
+    Returns the raw gateway level in percentage, like the proxy (the Tesla app
+    scaled level is at /api/system_status/soe). raw_percentage carries the same
+    value for clients written against earlier server releases.
     """
     gateway_id = get_default_gateway()
     status = gateway_manager.get_gateway(gateway_id)
@@ -715,7 +717,7 @@ async def get_soe():
         return {"percentage": None, "raw_percentage": None}
 
     return {
-        "percentage": status.data.soe,
+        "percentage": status.data.soe_raw,
         "raw_percentage": status.data.soe_raw,
     }
 
@@ -824,15 +826,21 @@ async def get_freq():
     if status.data.freq is not None and not any(k.startswith("PW") for k in fcv.keys()):
         fcv["freq"] = status.data.freq
 
-    # Add grid status (numeric: 1 = UP, 0 = DOWN)
-    if status.data.grid_status == "UP":
-        fcv["grid_status"] = 1
-    elif status.data.grid_status == "DOWN":
-        fcv["grid_status"] = 0
-    else:
-        fcv["grid_status"] = 0
+    # Add grid status like the proxy's pw.grid_status("numeric"):
+    # 1 = UP, 0 = DOWN, -1 = SYNCING, null when unknown
+    fcv["grid_status"] = {"UP": 1, "DOWN": 0, "SYNCING": -1}.get(status.data.grid_status)
 
     return fcv
+
+
+def _power_values(aggregates: dict):
+    """Grid, home, solar and battery instant power; a missing meter or a None
+    reading counts as 0, as in the proxy's /csv and /json."""
+
+    def power(meter: str) -> float:
+        return (aggregates.get(meter) or {}).get("instant_power") or 0
+
+    return power("site"), power("load"), power("solar"), power("battery")
 
 
 @router.get("/csv")
@@ -856,10 +864,7 @@ async def get_csv(headers: Optional[str] = None):
 
     # Extract power values from aggregates (neg_solar correction applied at fetch time)
     aggregates = status.data.aggregates or {}
-    grid = aggregates.get("site", {}).get("instant_power", 0)
-    solar = aggregates.get("solar", {}).get("instant_power", 0)
-    battery = aggregates.get("battery", {}).get("instant_power", 0)
-    home = aggregates.get("load", {}).get("instant_power", 0)
+    grid, home, solar, battery = _power_values(aggregates)
     level = status.data.soe_raw or 0
 
     # Build CSV response
@@ -895,10 +900,7 @@ async def get_csv_v2(headers: Optional[str] = None):
 
     # Extract power values from aggregates (neg_solar correction applied at fetch time)
     aggregates = status.data.aggregates or {}
-    grid = aggregates.get("site", {}).get("instant_power", 0)
-    solar = aggregates.get("solar", {}).get("instant_power", 0)
-    battery = aggregates.get("battery", {}).get("instant_power", 0)
-    home = aggregates.get("load", {}).get("instant_power", 0)
+    grid, home, solar, battery = _power_values(aggregates)
     level = status.data.soe_raw or 0
 
     # Get grid status from cache (1=UP, 0=DOWN)
@@ -912,7 +914,7 @@ async def get_csv_v2(headers: Optional[str] = None):
     csv_data = ""
     if headers is not None:
         csv_data += "Grid,Home,Solar,Battery,BatteryLevel,GridStatus,Reserve\n"
-    csv_data += f"{grid:.2f},{home:.2f},{solar:.2f},{battery:.2f},{level:.2f},{gridstatus},{reserve:.0f}\n"
+    csv_data += f"{grid:.2f},{home:.2f},{solar:.2f},{battery:.2f},{level:.2f},{gridstatus},{int(reserve)}\n"
 
     return Response(content=csv_data, media_type="text/plain; charset=utf-8")
 
@@ -1319,14 +1321,11 @@ async def get_json():
 
     # Extract power values from aggregates (neg_solar correction applied at fetch time)
     aggregates = status.data.aggregates or {}
-    grid = aggregates.get("site", {}).get("instant_power", 0)
-    solar = aggregates.get("solar", {}).get("instant_power", 0)
-    battery = aggregates.get("battery", {}).get("instant_power", 0)
-    home = aggregates.get("load", {}).get("instant_power", 0)
+    grid, home, solar, battery = _power_values(aggregates)
 
-    # Get battery level (SOE)
-    soe = status.data.soe if status.data.soe is not None else 0
+    # Battery level: the raw gateway level, like the proxy's pw.level()
     soe_raw = status.data.soe_raw if status.data.soe_raw is not None else 0
+    soe = soe_raw
 
     # Convert grid_status to numeric (1=UP, 0=DOWN)
     grid_status_str = status.data.grid_status or "DOWN"
@@ -1375,7 +1374,7 @@ async def get_battery_power():
         return {"power": None}
 
     aggregates = status.data.aggregates or {}
-    battery_power = aggregates.get("battery", {}).get("instant_power", 0)
+    battery_power = (aggregates.get("battery") or {}).get("instant_power", 0)
 
     return {"power": battery_power}
 
@@ -1806,7 +1805,7 @@ async def get_api_meters_solar():
     if not status or not status.data or not status.data.aggregates:
         return []
 
-    solar = status.data.aggregates.get("solar", {})
+    solar = status.data.aggregates.get("solar") or {}
     return [solar] if solar else []
 
 
@@ -2015,10 +2014,10 @@ async def pw_power():
 
     aggregates = status.data.aggregates
     return {
-        "site": aggregates.get("site", {}).get("instant_power", 0),
-        "solar": aggregates.get("solar", {}).get("instant_power", 0),
-        "battery": aggregates.get("battery", {}).get("instant_power", 0),
-        "load": aggregates.get("load", {}).get("instant_power", 0),
+        "site": (aggregates.get("site") or {}).get("instant_power", 0),
+        "solar": (aggregates.get("solar") or {}).get("instant_power", 0),
+        "battery": (aggregates.get("battery") or {}).get("instant_power", 0),
+        "load": (aggregates.get("load") or {}).get("instant_power", 0),
     }
 
 
@@ -2031,7 +2030,7 @@ async def pw_site():
     if not status or not status.data or not status.data.aggregates:
         return {}
 
-    return status.data.aggregates.get("site", {})
+    return status.data.aggregates.get("site") or {}
 
 
 @router.get("/pw/solar")
@@ -2043,7 +2042,7 @@ async def pw_solar():
     if not status or not status.data or not status.data.aggregates:
         return {}
 
-    return status.data.aggregates.get("solar", {})
+    return status.data.aggregates.get("solar") or {}
 
 
 @router.get("/pw/battery")
@@ -2059,7 +2058,7 @@ async def pw_battery():
     if not status or not status.data or not status.data.aggregates:
         return {}
 
-    return status.data.aggregates.get("battery", {})
+    return status.data.aggregates.get("battery") or {}
 
 
 # The /pw/battery_blocks endpoint provides block-level detail.
@@ -2113,7 +2112,7 @@ async def pw_load():
     if not status or not status.data or not status.data.aggregates:
         return {}
 
-    return status.data.aggregates.get("load", {})
+    return status.data.aggregates.get("load") or {}
 
 
 @router.get("/pw/grid")
@@ -2125,7 +2124,7 @@ async def pw_grid():
     if not status or not status.data or not status.data.aggregates:
         return {}
 
-    return status.data.aggregates.get("site", {})
+    return status.data.aggregates.get("site") or {}
 
 
 @router.get("/pw/home")
@@ -2137,7 +2136,7 @@ async def pw_home():
     if not status or not status.data or not status.data.aggregates:
         return {}
 
-    return status.data.aggregates.get("load", {})
+    return status.data.aggregates.get("load") or {}
 
 
 @router.get("/pw/vitals")

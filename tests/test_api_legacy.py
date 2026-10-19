@@ -21,9 +21,7 @@ def test_soe_endpoint(client, connected_gateway):
     response = client.get("/soe")
     assert response.status_code == 200
     data = response.json()
-    assert data["percentage"] == pytest.approx(
-        raw_to_tesla_battery_percent(85.5)
-    )
+    assert data["percentage"] == 85.5  # raw gateway level, like the proxy
     assert data["raw_percentage"] == 85.5
 
 

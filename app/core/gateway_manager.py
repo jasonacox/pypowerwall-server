@@ -914,19 +914,21 @@ class GatewayManager:
         ):
             raise Exception(f"No aggregates data from {gateway_id}")
 
-        # Apply negative solar correction if configured (PW_NEG_SOLAR=no)
+        # Apply negative solar correction if configured (PW_NEG_SOLAR=no; default yes)
         # This is done at fetch time so all endpoints get consistent data
         from app.config import settings
 
         if aggregates and not settings.neg_solar:
-            solar_power = aggregates.get("solar", {}).get("instant_power", 0)
-            if solar_power < 0:
+            # A meter can report instant_power as None (data gap); leave it alone
+            solar = aggregates.get("solar") or {}
+            solar_power = solar.get("instant_power")
+            if solar_power is not None and solar_power < 0:
                 # Shift negative solar energy to load
-                if "load" in aggregates and "instant_power" in aggregates["load"]:
-                    aggregates["load"]["instant_power"] -= solar_power
+                load = aggregates.get("load") or {}
+                if load.get("instant_power") is not None:
+                    load["instant_power"] -= solar_power
                 # Clamp solar to 0
-                if "solar" in aggregates:
-                    aggregates["solar"]["instant_power"] = 0
+                solar["instant_power"] = 0
                 logger.debug(
                     f"Applied neg_solar correction for {gateway_id}: solar clamped to 0"
                 )
@@ -2752,15 +2754,15 @@ class GatewayManager:
 
             # Aggregate power flows (simple sum - works well for separate systems)
             if data.aggregates:
-                site = data.aggregates.get("site", {})
-                battery = data.aggregates.get("battery", {})
-                load = data.aggregates.get("load", {})
-                solar = data.aggregates.get("solar", {})
+                # A meter block or its instant_power can be None (data gap);
+                # count it as 0 in the totals and leave the snapshot as is
+                def power(meter: str) -> float:
+                    return (data.aggregates.get(meter) or {}).get("instant_power") or 0
 
-                site_power = site.get("instant_power", 0)
-                battery_power = battery.get("instant_power", 0)
-                load_power = load.get("instant_power", 0)
-                solar_power = solar.get("instant_power", 0)
+                site_power = power("site")
+                battery_power = power("battery")
+                load_power = power("load")
+                solar_power = power("solar")
 
                 logger.debug(
                     f"Gateway {gateway_id} power: site={site_power}, battery={battery_power}, load={load_power}, solar={solar_power}"

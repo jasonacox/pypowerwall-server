@@ -85,7 +85,7 @@ Environment Variables (Proxy Compatible):
         PW_CLOUD_HYBRID      - Start the hybrid cloud connection for a local gateway
                                with PW_EMAIL even without PW_CONTROL_SECRET, for its
                                read-only values "yes"/"no" (default: "no")
-        PW_NEG_SOLAR         - Allow negative solar values "yes"/"no" (default: "no")
+        PW_NEG_SOLAR         - Allow negative solar values "yes"/"no" (default: "yes")
         PW_RSA_KEY_PATH      - Path to RSA-4096 private key PEM for TEDAPI v1r LAN access (default: none)
         PW_WIFI_HOST         - WiFi host IP for TEDAPI v1r WiFi fallback (default: none)
         PW_FAILOVER          - Transport/mode failover "yes"/"no" (default: "yes")
@@ -222,7 +222,7 @@ from pydantic_settings import BaseSettings
 logger = logging.getLogger(__name__)
 
 # Server version
-SERVER_VERSION = "0.11.0"
+SERVER_VERSION = "0.11.1"
 
 # MQTT control bitmask values for MQTT_CONTROLS (bits only, no names).
 # Default 0 keeps MQTT monitoring-only, exactly as before controls existed.
@@ -381,8 +381,8 @@ class Settings(BaseSettings):
         default=True, alias="PW_FAILOVER"
     )  # pypowerwall failover; false pins the configured transports
     neg_solar: bool = Field(
-        default=False, alias="PW_NEG_SOLAR"
-    )  # Allow negative solar values (default: no)
+        default=True, alias="PW_NEG_SOLAR"
+    )  # Allow negative solar values (default: yes, as in the proxy)
 
     # CORS configuration
     cors_origins: List[str] = Field(default=["*"], alias="CORS_ORIGINS")
