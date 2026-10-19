@@ -37,12 +37,13 @@ The mode is chosen per gateway from the settings it has:
 |------|----------|-------|
 | TEDAPI | `PW_HOST` + `PW_GW_PWD` | Local data over the gateway WiFi (normally `192.168.91.1`). Read-only unless hybrid. |
 | TEDAPI v1r | `PW_HOST` + `PW_GW_PWD` + `PW_RSA_KEY_PATH` | Local data over the wired LAN with a registered RSA key. Can write settings and island locally. |
-| Basic LAN | `PW_HOST` + `PW_PASSWORD`, no gateway password or RSA key | Powerwall 3 wired LAN (or PW2 local mode). Core metrics only: aggregates, battery level, grid status. |
-| Cloud | `PW_EMAIL` without `PW_HOST` | Tesla cloud. Run `pypowerwall-server --setup` once to create the auth files. |
-| FleetAPI | `email` + `fleetapi: true` on a gateway in `PW_GATEWAYS` or the config file | Tesla Fleet API. |
+| Local | `PW_HOST` + `PW_PASSWORD`, no gateway password or RSA key | Powerwall 2 local API, like the proxy's local mode. Detected on connect: the gateway answers `/api/status`. |
+| Basic LAN | `PW_HOST` + `PW_PASSWORD`, no gateway password or RSA key | Powerwall 3 wired LAN, detected on connect when `/api/status` isn't served. Core metrics only: aggregates, battery level, grid status. |
+| Cloud | `PW_EMAIL` without `PW_HOST`, or `.pypowerwall.auth` in `PW_AUTH_PATH` (its account fills a missing `PW_EMAIL`) | Tesla cloud. Run `pypowerwall-server --setup` once to create the auth files. |
+| FleetAPI | `.pypowerwall.fleetapi` in `PW_AUTH_PATH` without `PW_HOST` (picked before Cloud, as the proxy does), or `fleetapi: true` on a gateway in `PW_GATEWAYS` or the config file | Tesla Fleet API. |
 | Hybrid | Any local mode plus `PW_EMAIL` | Reads stay local; control writes use a Tesla cloud connection. |
 
-In the tables, **Local** means TEDAPI, TEDAPI v1r and Basic LAN.
+In the tables, **Local** means TEDAPI, TEDAPI v1r, the Powerwall 2 local API and Basic LAN.
 
 ### Gateway configuration sources
 

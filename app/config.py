@@ -215,8 +215,20 @@ import os
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
+from pypowerwall.cloud.pypowerwall_cloud import AUTHFILE as CLOUD_AUTH_FILE
+from pypowerwall.fleetapi.fleetapi import CONFIGFILE as FLEETAPI_FILE
 
 logger = logging.getLogger(__name__)
+
+def _first_auth_email(path: str) -> Optional[str]:
+    """First account email in a pypowerwall cloud auth file, or None."""
+    try:
+        with open(path, "r") as file:
+            accounts = json.load(file)
+        return next(iter(accounts), None) if isinstance(accounts, dict) else None
+    except (OSError, ValueError):
+        return None
+
 
 # Server version
 SERVER_VERSION = "0.11.1"
@@ -633,8 +645,19 @@ class Settings(BaseSettings):
                 )
             return
 
-        # Fall back to single gateway mode (legacy compatibility)
-        if self.pw_host or self.pw_email:
+        # Fall back to single gateway mode (legacy compatibility). With no
+        # PW_HOST, pick FleetAPI or Cloud from the auth files the way the
+        # proxy's pypowerwall auto_select does: .pypowerwall.fleetapi first,
+        # then .pypowerwall.auth, whose first account fills a missing PW_EMAIL.
+        email = self.pw_email
+        fleetapi = False
+        if not self.pw_host:
+            authpath = self.pw_authpath or ""
+            if os.path.exists(os.path.join(authpath, FLEETAPI_FILE)):
+                fleetapi = True
+            elif not email:
+                email = _first_auth_email(os.path.join(authpath, CLOUD_AUTH_FILE))
+        if self.pw_host or email or fleetapi:
             self.gateways = [
                 GatewayConfig(
                     id="default",
@@ -644,10 +667,11 @@ class Settings(BaseSettings):
                     password=self.pw_password,
                     rsa_key_path=self.pw_rsa_key_path,
                     wifi_host=self.pw_wifi_host,
-                    email=self.pw_email,
+                    email=email,
                     authpath=self.pw_authpath,
                     timezone=self.pw_timezone,
-                    cloud_mode=bool(self.pw_email and not self.pw_host),
+                    cloud_mode=bool((email or fleetapi) and not self.pw_host),
+                    fleetapi=fleetapi,
                 )
             ]
 

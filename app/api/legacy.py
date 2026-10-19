@@ -2415,7 +2415,7 @@ async def get_stats():
             fleetapi = True
         if gw.cloud_mode:
             cloudmode = True
-        if gw.host and not gw.basic_lan:
+        if gw.host and (gw.gw_pwd or gw.rsa_key_configured):
             tedapi = True
         if gw.basic_lan:
             basiclan = True
