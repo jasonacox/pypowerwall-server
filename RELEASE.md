@@ -15,8 +15,9 @@
   unchanged. The JSON API is unchanged. (jasonacox/Powerwall-Dashboard#878)
 - **Max backup (storm watch) control** — `POST /control/max_backup` with a
   duration in seconds or `cancel` schedules or cancels a manual backup event,
-  and `GET /control/max_backup` lists backup events, as in the proxy. Needs
-  the TEDAPI v1r transport.
+  and `GET /control/max_backup` lists backup events (cached 30 seconds), as
+  in the proxy. Needs the TEDAPI v1r transport. All max_backup operations are
+  serialized, and the writes share the gateway write lock.
 
 **Changed:**
 - **Legacy endpoints return what the proxy returns**, so proxy clients such

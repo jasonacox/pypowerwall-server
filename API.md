@@ -338,7 +338,7 @@ for the request format and write path.
 | GET | `/control/mode` | | `{"mode"}` (`"unknown"` when not known), as in the proxy. |
 | GET | `/control/grid_charging` | | `{"grid_charging": true \| false}`, as in the proxy. |
 | GET | `/control/grid_export` | | `{"grid_export"}` (`"unknown"` when not known), as in the proxy. |
-| GET | `/control/max_backup` | | Current backup events (TEDAPI v1r), as in the proxy. With a valid `?token=`, an expired manual backup event is cancelled. |
+| GET | `/control/max_backup` | | Current backup events (TEDAPI v1r), as in the proxy, cached 30 seconds. With a valid `?token=`, an expired manual backup event is cancelled (decided on fresh data). |
 | POST | `/control/{path}` | token | Set `reserve`, `mode`, `grid_charging`, `grid_export`, `reserve_hold` or `max_backup`; returns the library result. Also takes the proxy's form-encoded requests (below). |
 | POST | `/control/islanding` | token | Go off grid or reconnect (TEDAPI v1r only). |
 | GET | `/api/tesla/tariff_rate` | | The site's Tesla tariff from the cloud. Cached 5 minutes; the last good value is served if a refresh fails. |

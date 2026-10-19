@@ -89,7 +89,9 @@ All API endpoints read from the in-memory cache populated by background polling.
 > (`/api/tesla/tariff_rate`, `/api/tesla/time_of_use_settings`) call the Tesla
 > cloud on demand, always through the executor with a timeout. The tariff GET is
 > unauthenticated, so it keeps its own 5-minute server-side cache
-> (`app/api/legacy.py`) and runs one refresh at a time.
+> (`app/api/legacy.py`) and runs one refresh at a time. `GET /control/max_backup`
+> (TEDAPI v1r backup events) is unauthenticated too: it caches the list for 30
+> seconds, and one lock serializes every max_backup read and write.
 
 ```python
 # ✅ Correct - read from cache

@@ -25,6 +25,15 @@ def no_cloud():
     gateway_manager._cloud_control = None
 
 
+@pytest.fixture(autouse=True)
+def fresh_backup_cache():
+    from app.api import legacy
+
+    legacy._forget_backup_events()
+    yield
+    legacy._forget_backup_events()
+
+
 def form(client, path, **fields):
     return client.post(f"/control/{path}", data=fields)
 
@@ -169,6 +178,8 @@ def test_max_backup_get_cancels_an_expired_event_only_with_a_token(client, conne
     mock_pypowerwall.cancel_max_backup.assert_not_called()
     assert client.get(f"/control/max_backup?token={TOKEN}").json() == {"manual_backup": None}
     mock_pypowerwall.cancel_max_backup.assert_called_once()
+    # The token GET decided on fresh data, not the cached list
+    assert mock_pypowerwall.get_backup_events.call_count == 2
 
 
 # ---- JSON API unchanged --------------------------------------------------------
@@ -180,3 +191,73 @@ def test_json_body_must_be_an_object(client, connected_gateway, body):
         headers={"Authorization": TOKEN, "Content-Type": "application/json"},
     )
     assert r.status_code == 422
+
+
+def test_max_backup_list_is_cached_and_writes_drop_the_cache(client, connected_gateway, mock_pypowerwall):
+    """The unauthenticated GET must not turn every request into a gateway call."""
+    mock_pypowerwall.tedapi_mode = "v1r"
+    mock_pypowerwall.get_backup_events.return_value = {"manual_backup": None}
+    mock_pypowerwall.schedule_max_backup.return_value = True
+    client.get("/control/max_backup")
+    client.get("/control/max_backup")
+    assert mock_pypowerwall.get_backup_events.call_count == 1
+    form(client, "max_backup", value="600", token=TOKEN)
+    client.get("/control/max_backup")
+    assert mock_pypowerwall.get_backup_events.call_count == 2
+
+
+def test_max_backup_failed_cancel_keeps_the_event(client, connected_gateway, mock_pypowerwall):
+    mock_pypowerwall.tedapi_mode = "v1r"
+    mock_pypowerwall.get_backup_events.return_value = {"manual_backup": {"active": False}}
+    mock_pypowerwall.cancel_max_backup.return_value = None  # timeout/error
+    r = client.get(f"/control/max_backup?token={TOKEN}")
+    assert (r.status_code, r.json()) == (400, {"error": "Failed to cancel max backup"})
+
+
+def test_every_max_backup_gateway_call_holds_the_lock(client, connected_gateway, mock_pypowerwall, monkeypatch):
+    """List, cleanup cancel and schedule run under one lock, so the GET's
+    read/check/cancel can't interleave with a POST that schedules."""
+    from app.api import legacy
+    from app.core.gateway_manager import gateway_manager
+
+    mock_pypowerwall.tedapi_mode = "v1r"
+    seen = []
+
+    async def fake_local_control(gateway_id, method, *args, timeout=10.0, **kwargs):
+        seen.append((method, legacy._max_backup_lock.locked()))
+        return {"manual_backup": {"active": False}} if method == "get_backup_events" else True
+
+    monkeypatch.setattr(gateway_manager, "local_control", fake_local_control)
+    client.get(f"/control/max_backup?token={TOKEN}")
+    form(client, "max_backup", value="600", token=TOKEN)
+    client.post("/control/max_backup", json={"value": "cancel"}, headers={"Authorization": TOKEN})
+    assert [m for m, _ in seen] == ["get_backup_events", "cancel_max_backup", "schedule_max_backup", "cancel_max_backup"]
+    assert all(locked for _, locked in seen)
+
+
+def test_max_backup_writes_share_the_gateway_write_lock():
+    from app.core.gateway_manager import _WRITE_METHODS
+
+    assert {"schedule_max_backup", "cancel_max_backup"} <= _WRITE_METHODS
+
+
+@pytest.mark.parametrize("path, value, library_result, error", [
+    ("grid_charging", "true", {"ERROR": "site offline"}, "site offline"),
+    ("grid_charging", "true", False, "Control command failed for grid_charging"),
+    ("grid_export", "never", {"error": "nope"}, "nope"),
+    ("reserve", "20", {"ERROR": "Tesla said no"}, "Tesla said no"),
+])
+def test_form_reports_failures_the_dispatch_returns(
+    client, connected_gateway, mock_pypowerwall, no_cloud, path, value, library_result, error
+):
+    """A failure result must never come back as "Set Successfully"."""
+    getattr(mock_pypowerwall, f"set_{path}").return_value = library_result
+    r = form(client, path, value=value, token=TOKEN)
+    assert (r.status_code, r.json()) == (400, {"error": error})
+
+
+def test_openapi_declares_json_and_form_bodies():
+    from app.main import app
+
+    content = app.openapi()["paths"]["/control/{path}"]["post"]["requestBody"]["content"]
+    assert {"application/json", "application/x-www-form-urlencoded"} <= set(content)
