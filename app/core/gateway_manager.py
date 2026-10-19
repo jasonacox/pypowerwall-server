@@ -106,6 +106,13 @@ _WRITE_METHODS = frozenset(
 
 
 _ISLANDING_METHODS = frozenset({"go_off_grid", "reconnect_grid"})
+# Writes whose library call keeps running after our timeout and must not
+# overlap the next write: the write lock is held until the call finishes.
+# (max_backup scheduling is a cancel plus a schedule, two v1r round trips.)
+_HOLD_LOCK_UNTIL_DONE = _ISLANDING_METHODS | {
+    "schedule_max_backup",
+    "cancel_max_backup",
+}
 
 
 # pypowerwall client modes whose top-level get_grid_charging()/get_grid_export()
@@ -2579,7 +2586,7 @@ class GatewayManager:
                             asyncio.shield(future), timeout=timeout
                         )
                     except asyncio.TimeoutError:
-                        if method in _ISLANDING_METHODS:
+                        if method in _HOLD_LOCK_UNTIL_DONE:
                             release_lock = False
 
                             def release_after_completion(_completed_future):

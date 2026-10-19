@@ -338,6 +338,9 @@ async def get_aggregates():
 on demand (executor + timeout). The unauthenticated tariff GET has its own
 5-minute server-side cache with a single-flight lock, and serves the last good
 tariff when a refresh fails, so clients can't turn requests into Tesla API calls.
+The unauthenticated `GET /control/max_backup` (TEDAPI v1r backup events) caches
+its result, or its failure, for 30 seconds, and one lock serializes every
+max_backup read and write.
 
 ### 3. Exponential Backoff
 

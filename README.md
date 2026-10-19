@@ -728,10 +728,13 @@ PW_CONTROL_SECRET=your-secure-random-token
 
 When control is enabled:
 - All control operations require authentication via token
-- Token must be sent in the `Authorization` header (plain or `Bearer <token>`)
+- Send the token in the `Authorization` header (plain or `Bearer <token>`), or,
+  for proxy-style form requests (`curl -d "value=20&token=..."`), as the
+  `token` field
 - Applies to `/control/*` and the per-gateway POST proxy
   (`POST /api/gateways/{id}/api/*`)
-- When `PW_CONTROL_SECRET` is not set, all write endpoints return 403
+- When `PW_CONTROL_SECRET` is not set, write endpoints return 403 (proxy-style
+  form requests get the proxy's `{"error": ...}` reply instead)
 
 **Calling the control API:**
 
