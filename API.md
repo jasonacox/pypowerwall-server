@@ -261,7 +261,7 @@ dashboards, Telegraf and Home Assistant configurations keep working.
 | GET | `/api/meters` | | Meter list; `[]` where the mode doesn't provide it. |
 | GET | `/api/meters/readings` | | Always `{}`. |
 | GET | `/api/system_status` | | Full system status (battery blocks, capacity). |
-| GET | `/api/system_status/soe` | | Same as `/soe`. |
+| GET | `/api/system_status/soe` | | `{"percentage", "raw_percentage"}`: the Tesla app scaled battery level in `percentage`, as in the proxy (the Power Flow animation reads it), and the raw level in `raw_percentage`. `/soe` is the raw level. |
 | GET | `/api/system_status/grid_status` | | `{"grid_status", "grid_services_active"}`. |
 | GET | `/api/system_status/grid_faults` | | Always `[]`. |
 | GET | `/api/status` | | Gateway din, firmware, uptime and device type. |
