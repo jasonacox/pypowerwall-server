@@ -113,6 +113,10 @@ _HOLD_LOCK_UNTIL_DONE = _ISLANDING_METHODS | {
     "schedule_max_backup",
     "cancel_max_backup",
 }
+# Reads that take the write lock: the backup-events read must wait for a
+# timed-out schedule or cancel that is still running, or a cleanup could
+# decide on stale events and cancel the event that just got scheduled.
+_LOCKED_READS = frozenset({"get_backup_events"})
 
 
 # pypowerwall client modes whose top-level get_grid_charging()/get_grid_export()
@@ -2558,7 +2562,7 @@ class GatewayManager:
         try:
             method_func = getattr(pw, method)
             loop = asyncio.get_running_loop()
-            if method in _WRITE_METHODS:
+            if method in _WRITE_METHODS or method in _LOCKED_READS:
                 lock = self._write_lock
                 await lock.acquire()
                 release_lock = True

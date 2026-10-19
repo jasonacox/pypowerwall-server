@@ -511,3 +511,46 @@ def test_oversized_form_body_is_refused_before_reading(client, connected_gateway
         400,
         {"error": "Control Command Error: Invalid Request"},
     )
+
+
+@pytest.mark.asyncio
+async def test_cleanup_waits_for_a_timed_out_schedule_before_reading(
+    monkeypatch, mock_gateway_manager, connected_gateway, mock_pypowerwall
+):
+    """A schedule that timed out but is still running must finish before the
+    GET cleanup reads the events, so the cleanup sees the new event and
+    doesn't cancel it."""
+    import asyncio
+    import threading
+    from app.api import legacy
+    from app.config import settings
+    from app.core.gateway_manager import gateway_manager
+
+    monkeypatch.setattr(settings, "control_secret", TOKEN)
+    mock_pypowerwall.tedapi_mode = "v1r"
+    state = {"manual_backup": {"active": False}}  # an expired event
+    release = threading.Event()
+
+    def slow_schedule(seconds):
+        release.wait(5)
+        state["manual_backup"] = {"active": True}  # the new event lands
+        return True
+
+    mock_pypowerwall.schedule_max_backup.side_effect = slow_schedule
+    mock_pypowerwall.get_backup_events.side_effect = lambda: dict(state)
+    mock_pypowerwall.cancel_max_backup.return_value = True
+
+    result = await gateway_manager.local_control(
+        "test-gateway", "schedule_max_backup", 600, timeout=0.05
+    )
+    assert result is None  # timed out; the worker is still running
+    cleanup = asyncio.create_task(
+        legacy.control_read_max_backup(token=TOKEN, authorization=None)
+    )
+    await asyncio.sleep(0.1)
+    assert not cleanup.done()  # waiting for the running schedule
+    mock_pypowerwall.get_backup_events.assert_not_called()
+    release.set()
+    response = await asyncio.wait_for(cleanup, 5)
+    assert response.status_code == 200
+    mock_pypowerwall.cancel_max_backup.assert_not_called()  # saw the new event
