@@ -98,3 +98,52 @@ async def test_neg_solar_correction_moves_negative_solar_to_load(mock_gateway_ma
     data = await gateway_manager._fetch_gateway_data("gw", mock_pypowerwall)
     assert data.aggregates["solar"]["instant_power"] == 0
     assert data.aggregates["load"]["instant_power"] == 520
+
+
+@pytest.mark.asyncio
+async def test_neg_solar_correction_with_null_load(mock_gateway_manager, mock_pypowerwall, monkeypatch):
+    """Negative solar with a None load reading: solar is clamped, load stays None."""
+    monkeypatch.setattr(settings, "neg_solar", False)
+    gateway_manager.gateways["gw"] = Gateway(id="gw", name="GW", host="192.168.91.1", gw_pwd="secret")
+    gateway_manager.connections["gw"] = mock_pypowerwall
+    aggregates = {
+        "site": {"instant_power": 100},
+        "solar": {"instant_power": -20},
+        "battery": {"instant_power": 0},
+        "load": {"instant_power": None},
+    }
+    _poll_returns(mock_pypowerwall, aggregates)
+    data = await gateway_manager._fetch_gateway_data("gw", mock_pypowerwall)
+    assert data.aggregates["solar"]["instant_power"] == 0
+    assert data.aggregates["load"]["instant_power"] is None
+
+
+@pytest.mark.asyncio
+async def test_null_readings_from_poll_reach_aggregate_routes(
+    client, mock_gateway_manager, mock_pypowerwall, monkeypatch
+):
+    """A polled data gap (None reading, None meter block) doesn't break the
+    multi-gateway totals: they count the gap as 0, /api/aggregate/power answers
+    200, and the cached snapshot keeps the None."""
+    from app.models.gateway import GatewayStatus
+
+    monkeypatch.setattr(settings, "neg_solar", False)
+    gateway = Gateway(id="gw", name="GW", host="192.168.91.1", gw_pwd="secret", online=True)
+    gateway_manager.gateways["gw"] = gateway
+    gateway_manager.connections["gw"] = mock_pypowerwall
+    aggregates = {
+        "site": {"instant_power": 100},
+        "solar": {"instant_power": None},
+        "battery": None,
+        "load": {"instant_power": 400},
+    }
+    _poll_returns(mock_pypowerwall, aggregates)
+    data = await gateway_manager._fetch_gateway_data("gw", mock_pypowerwall)
+    gateway_manager.cache["gw"] = GatewayStatus(gateway=gateway, data=data, online=True, last_updated=data.timestamp)
+
+    totals = gateway_manager.get_aggregate_data()
+    assert totals.total_solar_power == 0
+    assert totals.total_battery_power == 0
+    assert totals.total_load_power == 400
+    assert client.get("/api/aggregate/power").status_code == 200
+    assert gateway_manager.cache["gw"].data.aggregates["solar"]["instant_power"] is None

@@ -2740,15 +2740,15 @@ class GatewayManager:
 
             # Aggregate power flows (simple sum - works well for separate systems)
             if data.aggregates:
-                site = data.aggregates.get("site", {})
-                battery = data.aggregates.get("battery", {})
-                load = data.aggregates.get("load", {})
-                solar = data.aggregates.get("solar", {})
+                # A meter block or its instant_power can be None (data gap);
+                # count it as 0 in the totals and leave the snapshot as is
+                def power(meter: str) -> float:
+                    return (data.aggregates.get(meter) or {}).get("instant_power") or 0
 
-                site_power = site.get("instant_power", 0)
-                battery_power = battery.get("instant_power", 0)
-                load_power = load.get("instant_power", 0)
-                solar_power = solar.get("instant_power", 0)
+                site_power = power("site")
+                battery_power = power("battery")
+                load_power = power("load")
+                solar_power = power("solar")
 
                 logger.debug(
                     f"Gateway {gateway_id} power: site={site_power}, battery={battery_power}, load={load_power}, solar={solar_power}"
