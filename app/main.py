@@ -126,6 +126,8 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info(f"Starting PyPowerwall Server v{SERVER_VERSION}...")
     logger.info(f"Configured for {len(settings.gateways)} gateway(s)")
+    if settings._mode_source:
+        logger.info(f"Single-gateway mode: {settings._mode_source}")
     logger.info(f"Polling interval (PW_CACHE_EXPIRE): {settings.cache_expire}s")
     logger.info(f"Timeout (PW_TIMEOUT): {settings.timeout}s")
     logger.info(f"Server listening on {settings.server_host}:{settings.server_port}")

@@ -61,6 +61,9 @@ class Gateway(BaseModel):
     site_id: Optional[str] = None  # Tesla Site ID (populated after connection)
     timezone: str = "America/Los_Angeles"
     basic_lan: bool = False  # PW3 Basic LAN mode (host + password, no gw_pwd/RSA)
+    # pypowerwall will run TEDAPI for this configuration (v1r, full, or hybrid
+    # at the gateway's WiFi address): gates the TEDAPI probe and /stats tedapi
+    tedapi_expected: bool = False
     cloud_mode: bool = False
     fleetapi: bool = False
     type: str = "powerwall"  # "powerwall" | "inverter" (solar-only, no batteries)

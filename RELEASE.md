@@ -5,6 +5,13 @@
 ### [0.12.0] - Upcoming
 
 **Changed:**
+- **Behavior change: with no `PW_HOST`, a `.pypowerwall.fleetapi` file in
+  `PW_AUTH_PATH` selects FleetAPI**, as the proxy does, even when `PW_EMAIL`
+  is set and `.pypowerwall.auth` is also there. Those setups used to run Cloud
+  mode (the owner API); FleetAPI is a different API with its own rate limits.
+  The startup log says which file chose the mode. To stay on Cloud, remove the
+  FleetAPI file or configure the gateway in `PW_GATEWAYS` with
+  `"fleetapi": false`.
 - **Legacy endpoints return what the proxy returns**, so proxy clients such
   as Powerwall-Dashboard's Telegraf can switch to the server unchanged
   (jasonacox/Powerwall-Dashboard#878):
@@ -35,6 +42,22 @@
   reports the setting under `config`.
 
 **Fixed:**
+- **Powerwall 2 with both passwords on a LAN address no longer falls into
+  SolarOnly fallback** — `PW_HOST` (not `192.168.91.1`) + `PW_PASSWORD` +
+  `PW_GW_PWD` has no TEDAPI client (pypowerwall's local client only starts
+  TEDAPI at the gateway's WiFi address), but the TEDAPI probe counted that as
+  a lost connection: the gateway showed fallback mode and was rebuilt every
+  1–5 minutes, opening a new login each time. The probe now runs only for
+  gateways that get TEDAPI (an RSA key, a gateway password without a customer
+  password, or both at `192.168.91.1`), and `/stats` reports `tedapi` the same
+  way before the first poll.
+- **`PW_SITEID` works for local gateways that fail over to the cloud** — it
+  was passed as a string on the local path, so the cloud client couldn't find
+  the site; it's an integer on all three connection paths now.
+- `/stats` reports `PW_LOCAL_FIRST` under `config`; `/pw/version` reports
+  `vint` 0 (not null) for an unparseable firmware version; the connect log
+  names the live connection when failover lands elsewhere; the cloud-control
+  retry logs once per round.
 - **The Console and `/stats` show the connection in use** — pypowerwall's
   failover can move a connection off its configured mode (FleetAPI to Cloud,
   local to Cloud), but the Console and `/stats` (`mode`, `fleetapi`,
@@ -53,8 +76,9 @@
   mode, reserve and system status (so `/pod` lost pack energy and reserve).
   The server now tells them apart on connect: a gateway that answers
   `/api/status` is polled in full, like the proxy's local mode; one that
-  doesn't is Basic LAN as before, re-checked every 5 minutes so a Powerwall 2
-  whose status request failed once still gets full polling. The TEDAPI probe runs only for gateways
+  doesn't is Basic LAN as before. That decision is re-checked (after 5
+  minutes, then doubling up to every 6 hours) so a Powerwall 2 whose status
+  request failed once still gets full polling. The TEDAPI probe runs only for gateways
   configured for TEDAPI, and `/stats` reports `tedapi: false` for local and
   Basic LAN gateways.
 - **A proxy `pypowerwall.env` no longer stops the server from starting** —
@@ -62,8 +86,9 @@
   failing startup with a validation error: an empty value (`PW_DEBUG=`,
   `PW_CACHE_EXPIRE=`) means the default, surrounding spaces and an inline
   ` # comment` are ignored (plain `docker run --env-file` passes comments
-  through), `PW_HTTPS=http` is accepted, and an unrecognized value logs a
-  warning and uses the default. String settings such as passwords are used
+  through), `t`/`f` and whole-number decimals (`8675.0`) parse as before,
+  `PW_HTTPS=http` is accepted (and reads as `no`: this server serves plain
+  HTTP), and an unrecognized value logs a warning and uses the default. String settings such as passwords are used
   exactly as given.
 - **`PW_NEG_SOLAR=no` no longer crashes on a missing reading** — a solar or
   load meter reporting `instant_power: null` raised a `TypeError` on every

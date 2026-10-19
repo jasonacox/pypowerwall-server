@@ -19,7 +19,7 @@ and `/redoc`.
 Settings come from environment variables. Names are case-insensitive, except
 `PW_CONFIG` and `PW_GATEWAYS`, which must be uppercase. Command
 line flags (`pypowerwall-server --help`) override the matching variables.
-Booleans accept `yes`/`no`, `true`/`false`, `1`/`0` or `on`/`off`. For boolean
+Booleans accept `yes`/`no`, `true`/`false`, `t`/`f`, `1`/`0` or `on`/`off`, and integers also take a whole-number decimal such as `8675.0`. For boolean
 and integer settings, surrounding spaces and an inline ` # comment` are ignored,
 an empty value means the default, and an unrecognized value logs a warning and
 uses the default, so a proxy `pypowerwall.env` can't stop the server from
@@ -42,7 +42,7 @@ The mode is chosen per gateway from the settings it has:
 | TEDAPI | `PW_HOST` + `PW_GW_PWD` | Local data over the gateway WiFi (normally `192.168.91.1`). Read-only unless hybrid. |
 | TEDAPI v1r | `PW_HOST` + `PW_GW_PWD` + `PW_RSA_KEY_PATH` | Local data over the wired LAN with a registered RSA key. Can write settings and island locally. |
 | Local | `PW_HOST` + `PW_PASSWORD`, no gateway password or RSA key | Powerwall 2 local API, like the proxy's local mode. Detected on connect: the gateway answers `/api/status`. |
-| Basic LAN | `PW_HOST` + `PW_PASSWORD`, no gateway password or RSA key | Powerwall 3 wired LAN, detected on connect when `/api/status` isn't served. Core metrics only: aggregates, battery level, grid status. |
+| Basic LAN | `PW_HOST` + `PW_PASSWORD`, no gateway password or RSA key | Powerwall 3 wired LAN, detected on connect when `/api/status` isn't served (re-checked after 5 minutes, then doubling up to 6 hours). Core metrics only: aggregates, battery level, grid status. |
 | Cloud | `PW_EMAIL` without `PW_HOST`, or `.pypowerwall.auth` in `PW_AUTH_PATH` (its account fills a missing `PW_EMAIL`) | Tesla cloud. Run `pypowerwall-server --setup` once to create the auth files. |
 | FleetAPI | `.pypowerwall.fleetapi` in `PW_AUTH_PATH` without `PW_HOST` (picked before Cloud, as the proxy does), or `fleetapi: true` on a gateway in `PW_GATEWAYS` or the config file | Tesla Fleet API. |
 | Hybrid | Any local mode plus `PW_EMAIL`, and `PW_CONTROL_SECRET` or `PW_CLOUD_HYBRID=yes` | Reads stay local; control writes use a Tesla cloud connection, which also fills values the local API lacks (Basic LAN mode and reserve, grid charging/export settings). |
@@ -213,7 +213,7 @@ clients share the proxy's IP.
 
 These proxy variables are accepted (and some echoed in `/stats`) so an existing
 proxy environment starts cleanly, but they change nothing in the server:
-`PW_BROWSER_CACHE` (default `0`), `PW_HTTPS` (`no`; the proxy's `http` is accepted), `PW_AUTH_MODE` (`cookie`),
+`PW_BROWSER_CACHE` (default `0`), `PW_HTTPS` (`no`; the proxy's `http` is accepted and reads as `no`, since the server always serves plain HTTP), `PW_AUTH_MODE` (`cookie`),
 `PW_SUPPRESS_NETWORK_ERRORS` (`no`), `PW_NETWORK_ERROR_RATE_LIMIT` (`5`),
 `PW_FAIL_FAST` (`no`) and `PW_HEALTH_CHECK` (`yes`).
 

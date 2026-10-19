@@ -2244,7 +2244,8 @@ async def pw_version():
     if version is None:
         return {"version": "Unknown", "vint": 0}
 
-    return {"version": version, "vint": parse_version(version)}
+    # Server-only route documented as an integer: 0 when unparseable
+    return {"version": version, "vint": parse_version(version) or 0}
 
 
 @router.get("/pw/status")
@@ -2424,7 +2425,7 @@ async def get_stats():
                 fleetapi = True
             if gw.cloud_mode:
                 cloudmode = True
-            if gw.host and (gw.gw_pwd or gw.rsa_key_configured):
+            if gw.tedapi_expected:
                 tedapi = True
             if gw.basic_lan:
                 basiclan = True
@@ -2522,6 +2523,7 @@ async def get_stats():
         "PW_TEDAPI_PROBE_INTERVAL": settings.tedapi_probe_interval,
         "PW_FAILOVER": settings.failover,
         "PW_CLOUD_HYBRID": settings.cloud_hybrid,
+        "PW_LOCAL_FIRST": settings.local_first,
     }
 
     # Build connection health section
