@@ -15,6 +15,16 @@
     should use `/api/system_status/soe`.
   - `/freq` `grid_status` is `-1` while the grid is syncing and `null` when
     unknown (it was `0`, which reads as a grid outage).
+- **Behavior change: `PW_NEG_SOLAR` now defaults to `yes`**, the proxy's
+  default, so `/aggregates`, `/csv`, `/json`, MQTT and the Console report the
+  meter's solar and home values as the proxy does. With the old default
+  (`no`), negative solar (a few tens of watts overnight while the inverters
+  idle) was set to 0 and added to home load. If you didn't set
+  `PW_NEG_SOLAR`, you may now see small negative solar readings at night and
+  slightly lower home load. Daily solar totals in the history are unchanged
+  (they already ignore negative solar). Set `PW_NEG_SOLAR=no` to keep the old
+  behavior.
+
 **Fixed:**
 - **`PW_NEG_SOLAR=no` no longer crashes on a missing reading** — a solar or
   load meter reporting `instant_power: null` raised a `TypeError` on every

@@ -900,7 +900,7 @@ class GatewayManager:
         ):
             raise Exception(f"No aggregates data from {gateway_id}")
 
-        # Apply negative solar correction if configured (PW_NEG_SOLAR=no)
+        # Apply negative solar correction if configured (PW_NEG_SOLAR=no; default yes)
         # This is done at fetch time so all endpoints get consistent data
         from app.config import settings
 

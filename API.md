@@ -201,7 +201,7 @@ clients share the proxy's IP.
 | `PW_CACHE_TTL` | `30` | All | ✓ | Maximum age in seconds of the last good data served while offline; after that, data routes return their empty defaults. |
 | `PW_TEDAPI_RECOVERY` | `yes` | Local | ✓ | Probe local gateways and reconnect when the connection drops to SolarOnly fallback. State shows in `/health` and `/stats`. |
 | `PW_TEDAPI_PROBE_INTERVAL` | `30` | Local | ✓ | Seconds between those probes. |
-| `PW_NEG_SOLAR` | `no` | All | ✓ | Allow negative solar power. With `no`, negative solar is set to 0 and added to home load. The proxy defaults to `yes`. |
+| `PW_NEG_SOLAR` | `yes` | All | ✓ | Allow negative solar power, as in the proxy. With `no`, negative solar is set to 0 and added to home load. |
 
 ### Accepted but not used
 

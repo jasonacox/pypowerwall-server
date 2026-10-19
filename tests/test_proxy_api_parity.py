@@ -147,3 +147,13 @@ async def test_null_readings_from_poll_reach_aggregate_routes(
     assert totals.total_load_power == 400
     assert client.get("/api/aggregate/power").status_code == 200
     assert gateway_manager.cache["gw"].data.aggregates["solar"]["instant_power"] is None
+
+
+def test_neg_solar_defaults_to_yes_like_the_proxy(monkeypatch):
+    """PW_NEG_SOLAR defaults to yes (proxy default); "no" still turns the correction on."""
+    from app.config import Settings
+
+    monkeypatch.delenv("PW_NEG_SOLAR", raising=False)
+    assert Settings().neg_solar is True
+    monkeypatch.setenv("PW_NEG_SOLAR", "no")
+    assert Settings().neg_solar is False
