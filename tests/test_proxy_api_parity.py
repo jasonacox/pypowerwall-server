@@ -123,8 +123,8 @@ async def test_null_readings_from_poll_reach_aggregate_routes(
     client, mock_gateway_manager, mock_pypowerwall, monkeypatch
 ):
     """A polled data gap (None reading, None meter block) doesn't break the
-    multi-gateway totals: they count the gap as 0, /api/aggregate/power answers
-    200, and the cached snapshot keeps the None."""
+    multi-gateway totals (they count the gap as 0) or the routes that read a
+    single meter, and the cached snapshot keeps the None."""
     from app.models.gateway import GatewayStatus
 
     monkeypatch.setattr(settings, "neg_solar", False)
@@ -147,6 +147,15 @@ async def test_null_readings_from_poll_reach_aggregate_routes(
     assert totals.total_load_power == 400
     assert client.get("/api/aggregate/power").status_code == 200
     assert gateway_manager.cache["gw"].data.aggregates["solar"]["instant_power"] is None
+
+    # Routes that read one meter: a None block answers like a missing one (200)
+    monkeypatch.setattr("app.api.legacy.get_default_gateway", lambda: "gw")
+    assert client.get("/battery").json() == {"power": 0}
+    assert client.get("/pw/power").json() == {"site": 100, "solar": None, "battery": 0, "load": 400}
+    assert client.get("/pw/battery").json() == {}
+    assert client.get("/pw/solar").json() == {"instant_power": None}
+    for path in ("/csv", "/csv/v2", "/json", "/aggregates", "/api/meters/solar"):
+        assert client.get(path).status_code == 200, path
 
 
 def test_neg_solar_defaults_to_yes_like_the_proxy(monkeypatch):

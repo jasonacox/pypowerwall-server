@@ -1374,7 +1374,7 @@ async def get_battery_power():
         return {"power": None}
 
     aggregates = status.data.aggregates or {}
-    battery_power = aggregates.get("battery", {}).get("instant_power", 0)
+    battery_power = (aggregates.get("battery") or {}).get("instant_power", 0)
 
     return {"power": battery_power}
 
@@ -1805,7 +1805,7 @@ async def get_api_meters_solar():
     if not status or not status.data or not status.data.aggregates:
         return []
 
-    solar = status.data.aggregates.get("solar", {})
+    solar = status.data.aggregates.get("solar") or {}
     return [solar] if solar else []
 
 
@@ -2014,10 +2014,10 @@ async def pw_power():
 
     aggregates = status.data.aggregates
     return {
-        "site": aggregates.get("site", {}).get("instant_power", 0),
-        "solar": aggregates.get("solar", {}).get("instant_power", 0),
-        "battery": aggregates.get("battery", {}).get("instant_power", 0),
-        "load": aggregates.get("load", {}).get("instant_power", 0),
+        "site": (aggregates.get("site") or {}).get("instant_power", 0),
+        "solar": (aggregates.get("solar") or {}).get("instant_power", 0),
+        "battery": (aggregates.get("battery") or {}).get("instant_power", 0),
+        "load": (aggregates.get("load") or {}).get("instant_power", 0),
     }
 
 
@@ -2030,7 +2030,7 @@ async def pw_site():
     if not status or not status.data or not status.data.aggregates:
         return {}
 
-    return status.data.aggregates.get("site", {})
+    return status.data.aggregates.get("site") or {}
 
 
 @router.get("/pw/solar")
@@ -2042,7 +2042,7 @@ async def pw_solar():
     if not status or not status.data or not status.data.aggregates:
         return {}
 
-    return status.data.aggregates.get("solar", {})
+    return status.data.aggregates.get("solar") or {}
 
 
 @router.get("/pw/battery")
@@ -2058,7 +2058,7 @@ async def pw_battery():
     if not status or not status.data or not status.data.aggregates:
         return {}
 
-    return status.data.aggregates.get("battery", {})
+    return status.data.aggregates.get("battery") or {}
 
 
 # The /pw/battery_blocks endpoint provides block-level detail.
@@ -2112,7 +2112,7 @@ async def pw_load():
     if not status or not status.data or not status.data.aggregates:
         return {}
 
-    return status.data.aggregates.get("load", {})
+    return status.data.aggregates.get("load") or {}
 
 
 @router.get("/pw/grid")
@@ -2124,7 +2124,7 @@ async def pw_grid():
     if not status or not status.data or not status.data.aggregates:
         return {}
 
-    return status.data.aggregates.get("site", {})
+    return status.data.aggregates.get("site") or {}
 
 
 @router.get("/pw/home")
@@ -2136,7 +2136,7 @@ async def pw_home():
     if not status or not status.data or not status.data.aggregates:
         return {}
 
-    return status.data.aggregates.get("load", {})
+    return status.data.aggregates.get("load") or {}
 
 
 @router.get("/pw/vitals")
