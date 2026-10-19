@@ -2410,15 +2410,24 @@ async def get_stats():
         if status and status.online:
             online_count += 1
 
-        # Detect connection modes
-        if gw.fleetapi:
-            fleetapi = True
-        if gw.cloud_mode:
-            cloudmode = True
-        if gw.host and (gw.gw_pwd or gw.rsa_key_configured):
-            tedapi = True
-        if gw.basic_lan:
-            basiclan = True
+        # Connection modes: the live connection once polled (failover can
+        # move it off the configured mode, e.g. FleetAPI -> Cloud), else the
+        # configuration
+        live = status.data.connection_mode if status and status.data else None
+        if live:
+            fleetapi = fleetapi or live == "FleetAPI"
+            cloudmode = cloudmode or live in ("Cloud", "FleetAPI")
+            tedapi = tedapi or live.startswith("TEDAPI")
+            basiclan = basiclan or live == "Basic LAN"
+        else:
+            if gw.fleetapi:
+                fleetapi = True
+            if gw.cloud_mode:
+                cloudmode = True
+            if gw.host and (gw.gw_pwd or gw.rsa_key_configured):
+                tedapi = True
+            if gw.basic_lan:
+                basiclan = True
 
         # Get site ID if available
         if gw.site_id:

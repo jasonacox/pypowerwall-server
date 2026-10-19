@@ -186,6 +186,24 @@ class IslandingCooldownError(RuntimeError):
         self.retry_after = retry_after
 
 
+def _connection_mode_label(pw, basic_lan: bool) -> Optional[str]:
+    """The connection pypowerwall is using now, which failover can change
+    (FleetAPI -> Cloud, local -> Cloud); None when the client doesn't say."""
+    mode = getattr(pw, "mode", None)
+    if mode == "fleetapi":
+        return "FleetAPI"
+    if mode == "cloud":
+        return "Cloud"
+    if mode == "local":
+        tedapi_mode = getattr(pw, "tedapi_mode", None)
+        if tedapi_mode == "v1r":
+            return "TEDAPI v1r"
+        if tedapi_mode in ("full", "hybrid"):
+            return "TEDAPI"
+        return "Basic LAN" if basic_lan else "Local"
+    return None
+
+
 class GatewayManager:
     """Manages multiple Powerwall gateway connections."""
 
@@ -1051,6 +1069,8 @@ class GatewayManager:
                     logger.debug(f"Site info not available for {gateway_id}: {e}")
                 self._site_info_attempt[gateway_id] = (time.monotonic(), ok)
             data.site_info = self._site_info.get(gateway_id)
+
+        data.connection_mode = _connection_mode_label(pw, basic_lan)
 
         # Cache tedapi_mode and the transport pw3 flag; pw3 itself is
         # resolved from the hardware after tedapi_config is fetched below.

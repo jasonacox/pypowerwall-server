@@ -135,3 +135,62 @@ def test_stats_tedapi_false_for_password_only_local(client, mock_gateway_manager
     gateway_manager.gateways["pw2"] = Gateway(id="pw2", name="PW2", host="10.0.1.2", basic_lan=False)
     stats = client.get("/stats").json()
     assert stats["tedapi"] is False
+
+
+# The live connection mode: pypowerwall's failover can move a connection off
+# its configured mode (FleetAPI -> Cloud, local -> Cloud); report what it uses.
+from types import SimpleNamespace
+
+from app.core.gateway_manager import _connection_mode_label
+
+
+@pytest.mark.parametrize("mode, tedapi_mode, basic_lan, expected", [
+    ("fleetapi", "off", False, "FleetAPI"),
+    ("cloud", "off", False, "Cloud"),
+    ("local", "v1r", False, "TEDAPI v1r"),
+    ("local", "full", False, "TEDAPI"),
+    ("local", "hybrid", False, "TEDAPI"),
+    ("local", "off", False, "Local"),
+    ("local", "off", True, "Basic LAN"),
+    ("unknown", "off", False, None),
+])
+def test_connection_mode_label(mode, tedapi_mode, basic_lan, expected):
+    pw = SimpleNamespace(mode=mode, tedapi_mode=tedapi_mode)
+    assert _connection_mode_label(pw, basic_lan) == expected
+
+
+def test_connection_mode_label_ignores_clients_without_a_mode():
+    assert _connection_mode_label(Mock(), False) is None  # Mock attributes aren't strings
+
+
+@pytest.mark.asyncio
+async def test_poll_records_live_connection_mode(mock_gateway_manager, mock_pypowerwall):
+    """A FleetAPI gateway whose connection failed over to Cloud reports Cloud."""
+    mock_pypowerwall.mode = "cloud"
+    mock_pypowerwall.tedapi_mode = "off"
+    mock_pypowerwall.tedapi = None
+    gateway_manager.gateways["fa"] = Gateway(id="fa", name="FA", cloud_mode=True, fleetapi=True)
+    gateway_manager.connections["fa"] = mock_pypowerwall
+    data = await gateway_manager._fetch_gateway_data("fa", mock_pypowerwall)
+    assert data.connection_mode == "Cloud"
+
+
+def test_stats_reports_the_live_connection_over_the_configuration(client, mock_gateway_manager):
+    from app.models.gateway import PowerwallData
+
+    gw = Gateway(id="fa", name="FA", cloud_mode=True, fleetapi=True)
+    gateway_manager.gateways["fa"] = gw
+    gateway_manager.cache["fa"] = GatewayStatus(
+        gateway=gw, online=True,
+        data=PowerwallData(aggregates={}, connection_mode="Cloud", timestamp=1.0),
+    )
+    stats = client.get("/stats").json()
+    assert (stats["mode"], stats["fleetapi"], stats["cloudmode"]) == ("Cloud", False, True)
+
+
+def test_stats_uses_the_configuration_before_the_first_poll(client, mock_gateway_manager):
+    gw = Gateway(id="fa", name="FA", cloud_mode=True, fleetapi=True)
+    gateway_manager.gateways["fa"] = gw
+    gateway_manager.cache["fa"] = GatewayStatus(gateway=gw, online=False)
+    stats = client.get("/stats").json()
+    assert (stats["mode"], stats["fleetapi"]) == ("FleetAPI", True)

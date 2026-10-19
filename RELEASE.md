@@ -35,6 +35,13 @@
   reports the setting under `config`.
 
 **Fixed:**
+- **The Console and `/stats` show the connection in use** — pypowerwall's
+  failover can move a connection off its configured mode (FleetAPI to Cloud,
+  local to Cloud), but the Console and `/stats` (`mode`, `fleetapi`,
+  `cloudmode`, `tedapi`, `basiclan`) kept reporting the configuration. They
+  now report the live connection, recorded on every poll; `/api/gateways/`
+  has it as `data.connection_mode`. Before the first poll they show the
+  configuration.
 - **FleetAPI works with the single-gateway settings**, as in the proxy: with
   no `PW_HOST`, `.pypowerwall.fleetapi` in `PW_AUTH_PATH` selects FleetAPI
   (before Cloud), and `.pypowerwall.auth` selects Cloud, supplying the email

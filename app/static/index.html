@@ -3642,7 +3642,9 @@
                     // Handle both nested and flat response formats
                     const gw = status.gateway || status;
                     const isOnline = status.online ?? false;
-                    const mode = gw.fleetapi ? 'FleetAPI' : gw.cloud_mode ? 'Cloud' : gw.basic_lan ? 'Basic LAN' : gw.rsa_key_configured ? 'TEDAPI v1r' : 'TEDAPI';
+                    // The live connection once polled (failover can change it), else the configuration
+                    const mode = status.data?.connection_mode
+                        || (gw.fleetapi ? 'FleetAPI' : gw.cloud_mode ? 'Cloud' : gw.basic_lan ? 'Basic LAN' : gw.rsa_key_configured ? 'TEDAPI v1r' : 'TEDAPI');
                     const hostInfo = (gw.cloud_mode || gw.fleetapi)
                         ? (gw.site_id || gw.email || id)
                         : (gw.host || id);
