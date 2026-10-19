@@ -573,7 +573,11 @@ class GatewayManager:
         # local reads + cloud control writes.
         # Runs as a background task so a slow/flaky Tesla cloud connection (up
         # to 15s) doesn't block server startup and container health checks.
-        hybrid_configs = [
+        # Like the proxy, the cloud login starts only when it is wanted:
+        # PW_CONTROL_SECRET (writes need it) or PW_CLOUD_HYBRID=yes (read-only
+        # values such as Basic LAN mode/reserve). PW_EMAIL alone isn't enough:
+        # PW2 local logins need an email and never asked for a cloud session.
+        local_with_email = [
             config
             for config in gateway_configs
             if config.host
@@ -586,6 +590,16 @@ class GatewayManager:
             and config.email
             and not config.cloud_mode
         ]
+        hybrid_configs = (
+            local_with_email
+            if settings.control_enabled or settings.cloud_hybrid
+            else []
+        )
+        if local_with_email and not hybrid_configs:
+            logger.info(
+                "Hybrid cloud connection off: PW_EMAIL is set for a local gateway, "
+                "but neither PW_CONTROL_SECRET nor PW_CLOUD_HYBRID=yes is"
+            )
         # Hybrid configured => the cloud link exists as a tracked link even
         # while the connection itself is down (issue #87 per-link health).
         self._cloud_control_configured = bool(hybrid_configs)

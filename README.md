@@ -56,9 +56,9 @@ Not sure which mode to run? Pick the row that matches your setup — then follow
 
 | Mode | Use when | Required settings | Data | Control |
 |------|----------|-------------------|------|---------|
-| **TEDAPI** *(default)* | You can reach the gateway from your local network (`192.168.91.1`) | `PW_HOST` + `PW_GW_PWD` | Full local metrics — power flows, vitals, strings, per-Powerwall detail | Add `PW_EMAIL` + `PW_AUTH_PATH` for hybrid cloud control |
+| **TEDAPI** *(default)* | You can reach the gateway from your local network (`192.168.91.1`) | `PW_HOST` + `PW_GW_PWD` | Full local metrics — power flows, vitals, strings, per-Powerwall detail | Add `PW_EMAIL` + `PW_AUTH_PATH` + `PW_CONTROL_SECRET` for hybrid cloud control |
 | **TEDAPI v1r** | Same, but connecting over wired LAN with a registered RSA key | `PW_HOST` + `PW_GW_PWD` + `PW_RSA_KEY_PATH` (add `PW_WIFI_HOST` for follower Powerwall data) | Full local metrics | Authenticated local islanding with `PW_CONTROL_SECRET`; add `PW_EMAIL` + `PW_AUTH_PATH` for other hybrid cloud control |
-| **Basic LAN** *(Powerwall 3)* | PW3 reachable on its wired vendor subnet — no gateway password or RSA key needed | `PW_HOST` + `PW_PASSWORD` (customer password = last 5 chars of the gateway password) | Core metrics only — power flows, battery SoC, grid status | Add `PW_EMAIL` + `PW_AUTH_PATH` for hybrid cloud control (local reads + cloud writes) |
+| **Basic LAN** *(Powerwall 3)* | PW3 reachable on its wired vendor subnet — no gateway password or RSA key needed | `PW_HOST` + `PW_PASSWORD` (customer password = last 5 chars of the gateway password) | Core metrics only — power flows, battery SoC, grid status | Add `PW_EMAIL` + `PW_AUTH_PATH` + `PW_CONTROL_SECRET` for hybrid cloud control (local reads + cloud writes) |
 | **Cloud** | No local network access to the system | `PW_EMAIL` + `PW_AUTH_PATH` (one-time `python -m pypowerwall setup`) | Standard cloud metrics | Yes |
 | **FleetAPI** | Remote access via Tesla's official Fleet API | `PW_GATEWAYS` (or `gateways.yaml`) entry with `email` + `authpath` + `fleetapi: true` | Standard cloud metrics | Yes |
 
@@ -132,6 +132,7 @@ docker run -d \
   -e PW_PASSWORD=your_customer_password \
   -e PW_EMAIL="your@email.com" \
   -e PW_AUTH_PATH=/auth \
+  -e PW_CONTROL_SECRET=choose_a_long_secret \
   -v ~/.pypowerwall:/auth \
   -v pws-data:/data \
   jasonacox/pypowerwall-server
@@ -139,6 +140,8 @@ docker run -d \
 # One-time setup (runs the Tesla auth flow to generate the token files)
 docker exec -it pypowerwall-server python -m pypowerwall setup
 ```
+
+The cloud connection starts when `PW_CONTROL_SECRET` is set. To show the cloud-sourced mode and reserve without enabling control, set `PW_CLOUD_HYBRID=yes` instead.
 
 Both pieces are required for control: `PW_EMAIL` identifies the Tesla account, and `PW_AUTH_PATH` points at the directory holding the `.pypowerwall.auth` / `.pypowerwall.site` token files created by the one-time setup (email alone is not enough — the cloud connection has no password to log in with). With both set, `/control/reserve`, `/control/mode` and `/control/grid_charging` route through the cloud connection while all monitoring data keeps coming from the local Basic LAN endpoints (no internet needed for reads). The Console shows **Hybrid** as the connect mode and tracks both links separately (`Local` / `Cloud` sub-rows): if the internet drops, the Connection card reads **Degraded** with `Local: Healthy / Cloud: Unavailable` instead of reporting plain health from the local link alone. If the cloud connection can't be established at all, monitoring is unaffected, control requests return an error, and the Console's Powerwall Mode shows `--` (unavailable) rather than a made-up value; when the cloud link drops *after* having been up, the last known mode/reserve are shown marked `(stale)` with their fetch time exposed via `/api/operation`.
 

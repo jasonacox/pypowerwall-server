@@ -82,6 +82,9 @@ Environment Variables (Proxy Compatible):
         PW_ISLANDING_COOLDOWN - Seconds between islanding commands per gateway
                                (default: 30; 0 disables)
         PW_LOCAL_FIRST       - Prefer local v1r writes "yes"/"no" (default: "no")
+        PW_CLOUD_HYBRID      - Start the hybrid cloud connection for a local gateway
+                               with PW_EMAIL even without PW_CONTROL_SECRET, for its
+                               read-only values "yes"/"no" (default: "no")
         PW_NEG_SOLAR         - Allow negative solar values "yes"/"no" (default: "no")
         PW_RSA_KEY_PATH      - Path to RSA-4096 private key PEM for TEDAPI v1r LAN access (default: none)
         PW_WIFI_HOST         - WiFi host IP for TEDAPI v1r WiFi fallback (default: none)
@@ -358,6 +361,9 @@ class Settings(BaseSettings):
     cache_file: Optional[str] = Field(default=None, alias="PW_CACHE_FILE")
     siteid: Optional[str] = Field(default=None, alias="PW_SITEID")
     control_secret: Optional[str] = Field(default=None, alias="PW_CONTROL_SECRET")
+    cloud_hybrid: bool = Field(
+        default=False, alias="PW_CLOUD_HYBRID"
+    )  # Hybrid cloud connection without PW_CONTROL_SECRET (read-only values)
     local_first: bool = Field(
         default=False, alias="PW_LOCAL_FIRST"
     )  # Try local v1r writes before cloud (default: no = cloud first)
