@@ -346,7 +346,7 @@ be posted back unchanged. Current settings are read with
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
-| GET | `/api/gateways/` | | Status of every gateway, keyed by id: `gateway` (config without secrets), `data`, `online`, `last_updated`, `error`. |
+| GET | `/api/gateways/` | | Status of every gateway, keyed by id: `gateway` (config without secrets), `data`, `online`, `last_updated`, `error`. `data.connection_mode` is the connection in use (`TEDAPI v1r`, `TEDAPI`, `Local`, `Basic LAN`, `Cloud`, `FleetAPI`), which failover can move off the configured mode. |
 | GET | `/api/gateways/{gateway_id}` | | That gateway's status. |
 | GET | `/api/gateways/{gateway_id}/vitals` | | That gateway's vitals. |
 | GET | `/api/gateways/{gateway_id}/strings` | | That gateway's strings. |
@@ -405,7 +405,7 @@ Each pushes one JSON message per second.
 |--------|------|------|----------|
 | GET | `/health` | | `status` (`healthy`, `degraded`, `unhealthy` or `no_gateways`), server version, online/offline counts, per-gateway errors and SolarOnly fallback state. Also `HEAD`. |
 | POST | `/health/reset` | token | Clears the SolarOnly fallback state for all gateways. |
-| GET | `/stats` | | Proxy-style server stats: versions, mode, request counters, uptime, memory, connection flags, masked `config`, connection health, hybrid cloud link, per-gateway status. |
+| GET | `/stats` | | Proxy-style server stats: versions, mode (the live connection once polled), request counters, uptime, memory, connection flags, masked `config`, connection health, hybrid cloud link, per-gateway status. |
 | GET | `/api/mqtt/status` | | MQTT enabled/connected state and broker settings (no credentials). |
 
 ### UI pages and static files
