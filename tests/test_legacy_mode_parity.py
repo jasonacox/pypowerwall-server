@@ -389,3 +389,21 @@ async def test_connect_log_names_the_live_connection_after_failover(
     with caplog.at_level("INFO"):
         await gateway_manager._poll_gateway("t")
     assert "Cloud (configured TEDAPI WiFi) mode" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "host, port, expected",
+    [
+        ("192.168.91.1", None, True),
+        ("192.168.91.1", 443, True),
+        ("192.168.91.1", 8443, False),  # local client starts TEDAPI only on 443
+        ("10.0.1.2", None, False),
+    ],
+)
+def test_hybrid_tedapi_expectation_uses_the_effective_host(host, port, expected):
+    from app.core.gateway_manager import _expects_tedapi
+
+    config = GatewayConfig(
+        id="h", name="H", host=host, port=port, password="pw", gw_pwd="g"
+    )
+    assert _expects_tedapi(config, None) is expected

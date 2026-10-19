@@ -238,6 +238,7 @@ def _first_auth_email(path: str) -> Optional[str]:
 _TRUE_WORDS = {"yes", "y", "true", "t", "on", "1"}
 _FALSE_WORDS = {"no", "n", "false", "f", "off", "0"}
 _INLINE_COMMENT = re.compile(r"\s+#.*$")
+_WHOLE_DECIMAL = re.compile(r"[+-]?\d+\.0+")
 
 
 def _scalar_kind(annotation):
@@ -491,12 +492,10 @@ class Settings(BaseSettings):
             try:
                 return int(text)
             except ValueError:
-                try:
-                    number = float(text)  # pydantic took "8675.0"
-                    if number.is_integer():
-                        return int(number)
-                except ValueError:
-                    pass
+                # pydantic took a whole-number decimal ("8675.0"); match the
+                # text exactly so "1e-400" or "6.0000000000000001" can't round
+                if _WHOLE_DECIMAL.fullmatch(text):
+                    return int(text.split(".")[0])
         logger.warning(
             f"Invalid {field.alias or info.field_name}={v!r}; using the default ({field.default!r})"
         )

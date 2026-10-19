@@ -75,8 +75,9 @@ def test_mqtt_controls_keeps_its_fail_closed_parsing(make_settings):
     assert make_settings(MQTT_CONTROLS="15 # all but islanding").mqtt_controls == 0
 
 
-def test_non_integral_float_still_warns_and_uses_default(make_settings, caplog):
+@pytest.mark.parametrize("value", ["5.5", "1e-400", "6.0000000000000001", "1e3"])
+def test_non_integral_float_still_warns_and_uses_default(make_settings, caplog, value):
     with caplog.at_level(logging.WARNING, logger="app.config"):
-        settings = make_settings(PW_CACHE_EXPIRE="5.5")
-    assert settings.cache_expire == 5
+        settings = make_settings(PW_CACHE_EXPIRE=value)
+    assert settings.cache_expire == 5  # the default, never a rounded value
     assert "Invalid PW_CACHE_EXPIRE=" in caplog.text

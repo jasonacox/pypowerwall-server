@@ -187,6 +187,12 @@ class IslandingCooldownError(RuntimeError):
         self.retry_after = retry_after
 
 
+def _effective_host(config: GatewayConfig) -> Optional[str]:
+    """The host pypowerwall connects to: with a non-standard port appended
+    (e.g. host="192.168.1.50", port=8443 -> "192.168.1.50:8443")."""
+    return f"{config.host}:{config.port}" if config.port else config.host
+
+
 def _expects_tedapi(config: GatewayConfig, default_password: Optional[str]) -> bool:
     """Whether pypowerwall will run TEDAPI for a local configuration: an RSA key
     (v1r) or a gateway password without a customer password (full TEDAPI) at
@@ -200,7 +206,7 @@ def _expects_tedapi(config: GatewayConfig, default_password: Optional[str]) -> b
         return False
     if not (config.password or default_password):
         return True
-    return config.host in (TEDAPI_GW_IP, f"{TEDAPI_GW_IP}:443")
+    return _effective_host(config) in (TEDAPI_GW_IP, f"{TEDAPI_GW_IP}:443")
 
 
 def _siteid_kwarg(siteid) -> Any:
@@ -1971,11 +1977,7 @@ class GatewayManager:
         # with the library default of 5s, a cycle that takes longer
         # re-fetches mid-cycle data it already has.
         pwcacheexpire = max(5, int(self._poll_interval))
-        # Build host string with optional non-standard port
-        # e.g. host="192.168.1.50", port=8443 -> "192.168.1.50:8443"
-        effective_host = (
-            f"{config.host}:{config.port}" if config.port else config.host
-        )
+        effective_host = _effective_host(config)
         tedapi_kwargs = {
             "host": effective_host,
             "gw_pwd": config.gw_pwd,
