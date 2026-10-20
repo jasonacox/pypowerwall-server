@@ -97,6 +97,24 @@ async def test_helper_declines_for_non_v1r_when_flag_on(gm, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cached", ["offline", "missing"])
+async def test_local_first_declines_when_last_poll_failed(gm, monkeypatch, cached):
+    """A dead LAN without a WiFi host never trips lan_failed: a failed last
+    poll (or no poll yet) declines too, so the historical dispatch runs."""
+    monkeypatch.setattr(settings, "local_first", True)
+    if cached == "offline":
+        gateway_manager.cache["v1r"].online = False
+    else:
+        del gateway_manager.cache["v1r"]
+    monkeypatch.setattr(gateway_manager, "_is_confirmed_v1r", lambda gid: True)
+    label, result = await gateway_manager.control_write(
+        "v1r", "set_reserve", 20, timeout=10.0
+    )
+    assert (label, result) == (None, None)
+    gateway_manager.local_control.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_local_first_no_connection_declines(gm, monkeypatch):
     """No local connection: nothing could have dispatched, the helper
     declines and the historical dispatch runs unchanged."""

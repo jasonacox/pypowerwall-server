@@ -397,8 +397,9 @@ simple, history features follow these rules:
    (Grafana/InfluxDB) and Home Assistant, which consume the server's APIs and
    MQTT topics.
 4. **Recording never adds gateway calls or blocks polling.** Samples come from data
-   each poll already fetches. Database writes and queries run off the event
-   loop, and a recording failure never fails a poll. Queries use their own
+   each poll already fetches. The poll queues writes without waiting for them
+   (FIFO, bounded backlog); writes and queries run off the event loop, and a
+   recording failure never fails a poll. Queries use their own
    read-only SQLite connection and worker thread (WAL mode), so a long history
    query never makes the next poll's writes wait.
 5. **Setting and API names are permanent once released.** Environment variables,
@@ -502,30 +503,40 @@ default `yes`).
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Probing: TEDAPI gateway registered
+    [*] --> Probing: gateway with TEDAPI registered
     Probing --> Probing: pw.version() OK (every PW_TEDAPI_PROBE_INTERVAL s)
-    Probing --> SolarOnly: 3 consecutive probe failures
+    Probing --> SolarOnly: 3 failed probes (no version, or connection left TEDAPI mode)
     SolarOnly --> Recovering: backoff elapsed (60s → max 300s)
-    Recovering --> Probing: pw.connect() + verify OK
+    Recovering --> Probing: fresh connection in TEDAPI mode with a version → swapped in
     Recovering --> SolarOnly: recovery failed (double backoff)
     SolarOnly --> Probing: POST /health/reset
 ```
 
 **Key implementation points** (`gateway_manager._tedapi_probe_loop`):
 
-- One asyncio task per TEDAPI gateway (`tedapi-probe-{id}`), started in
-  `initialize()`, cancelled in `shutdown()` alongside poll tasks.
-- All pypowerwall calls (`pw.version()`, `pw.connect(retry=False)`) go through
-  the shared `ThreadPoolExecutor` with `asyncio.wait_for` timeouts — the probe
-  never blocks the event loop.
+- One asyncio task per gateway pypowerwall gives TEDAPI
+  (`Gateway.tedapi_expected`: an RSA key, a gateway password without a
+  customer password, or both at `192.168.91.1`), started in `initialize()`,
+  cancelled in `shutdown()` alongside poll tasks.
+- The probe goes by configuration: a connection that is no longer in TEDAPI
+  mode (failover to cloud) counts as a failed probe.
+- Recovery builds a fresh connection with `_create_local_connection()`, the
+  same way startup does, checks it is in TEDAPI mode and reports a
+  `version()`, and only then swaps it in, so the existing connection keeps
+  serving until a verified replacement exists. The replaced connection is
+  closed after a grace period (local/TEDAPI clients only: a cloud
+  `close_session()` would log the Tesla account out).
+- All pypowerwall calls (constructor, `version()`, `close_session()`) go
+  through the shared `ThreadPoolExecutor` with `asyncio.wait_for` timeouts,
+  so the probe never blocks the event loop.
 - State is exposed via `get_fallback_state(id)` / `get_all_fallback_states()`
   (snapshot copies, never live references) and surfaced in `/health` and
   `/stats` under `fallback_mode`.  `POST /health/reset` (control-token
   authenticated) clears state; the loop re-checks state after each backoff
   sleep so a reset takes effect without waiting out the backoff.
-- Hybrid-mode caveat: in v1r + WiFi topologies `pw.version()` may be served by
-  the local API, so WiFi TEDAPI outage detection is best-effort there; pure
-  TEDAPI mode gets full coverage.
+- v1r + WiFi caveat: there `pw.version()` is served over the wired LAN, so
+  WiFi TEDAPI outage detection is best-effort; TEDAPI over WiFi alone gets
+  full coverage.
 
 ---
 

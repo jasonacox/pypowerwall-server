@@ -116,6 +116,28 @@
   reserve like the proxy (19.9 → 19). `/battery` and `/pw/power` no longer
   return HTTP 500 when a meter block is missing, and the `/pw/<meter>` routes
   return `{}` for it.
+- **Control writes never overlap** — a write that timed out, or whose request
+  was cancelled, kept running in its worker thread but released the write
+  lock, so the next write could reach the site while it was still in flight.
+  Every write (local, cloud, MQTT) now holds the lock until the library call
+  finishes; only islanding and max backup did after a timeout. A write sent
+  while a timed-out one is still running waits for it, within its own
+  timeout.
+- **`PW_LOCAL_FIRST` skips the local write when the gateway's last poll
+  failed** (or before the first poll): the write takes the usual path (cloud
+  first when configured) instead of a LAN write that would time out. Before,
+  only a tripped WiFi failover did this.
+- **TEDAPI recovery closes the connections it stops using** — the replaced
+  local connection (after 30 seconds, so calls still running on it finish)
+  and a fresh one it discards, instead of leaving their sessions open.
+  Cloud and FleetAPI connections are never closed: closing logs the Tesla
+  account out.
+- **History writes no longer hold up polling** — the poll queues each sample
+  and moves on; it used to wait up to 5 seconds per sample for the database
+  write.
+- **MQTT discovery keeps each battery on its own Home Assistant device** when
+  a snapshot omits the battery's serial, using the serial last reported for
+  it (#153).
 
 ### [0.11.1] - 2026-10-18
 

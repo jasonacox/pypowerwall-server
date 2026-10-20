@@ -7,16 +7,15 @@ connection silently, so a gateway stayed on cloud reads for hours.
 
 The loop now:
 
-- probes by configuration (only PW3 Basic LAN is exempt — its connection
-  has no TEDAPI client at all),
+- probes by configuration: every gateway pypowerwall gives TEDAPI
+  (``Gateway.tedapi_expected``) is probed, and nothing else is,
 - counts a mode drift as a failed probe and enters fallback after
   ``_TEDAPI_FALLBACK_THRESHOLD``,
 - recovers by building a fresh connection (``_create_local_connection``)
-  instead of calling ``connect()`` on the drifted object, which cannot
-  recover (pypowerwall restores the configured mode only when every mode
-  fails — pypowerwall #366),
-- swaps the fresh connection in only when it comes up in TEDAPI mode and
-  reports a version; otherwise the existing connection keeps serving.
+  and swapping it in only when it comes up in TEDAPI mode and reports a
+  version, so the existing connection keeps serving until a verified
+  replacement exists (reconnecting the drifted object in place would leave
+  nothing serving while it runs).
 """
 import asyncio
 import logging
@@ -197,6 +196,8 @@ class TestRecoveryBuildsFreshConnection:
         fresh = _conn(tedapi=Mock(), mode="tedapi", version="24.4.0")
         create = AsyncMock(return_value=fresh)
         monkeypatch.setattr(gm, "_create_local_connection", create)
+        close_later = Mock()
+        monkeypatch.setattr(gm, "_close_connection_later", close_later)
 
         caplog.set_level(logging.INFO)
         # One fallback cycle: probe-interval tick, then the backoff tick.
@@ -205,6 +206,11 @@ class TestRecoveryBuildsFreshConnection:
             gm, "gw1", lambda: gm.connections.get("gw1") is fresh,
             probe_sleep,
         )
+        # The replaced connection is closed after a grace period for
+        # calls still running on it
+        close_later.assert_called_once()
+        replaced, delay = close_later.call_args.args
+        assert replaced is old and delay >= 30
 
         create.assert_awaited_once_with(gm._gateway_configs["gw1"])
         assert gm._fallback_state["gw1"]["is_fallback_mode"] is False
@@ -226,8 +232,11 @@ class TestRecoveryBuildsFreshConnection:
         gm = _make_gm(fallback=True)
         old = _conn(tedapi=False, mode="cloud")
         gm.connections["gw1"] = old
-        create = AsyncMock(return_value=_conn(tedapi=False, mode="cloud"))
+        fresh = _conn(tedapi=False, mode="cloud")
+        create = AsyncMock(return_value=fresh)
         monkeypatch.setattr(gm, "_create_local_connection", create)
+        close_later = Mock()
+        monkeypatch.setattr(gm, "_close_connection_later", close_later)
 
         caplog.set_level(logging.WARNING)
         probe_sleep["release"](2)
@@ -238,6 +247,7 @@ class TestRecoveryBuildsFreshConnection:
         assert gm.connections["gw1"] is old
         assert gm._fallback_state["gw1"]["is_fallback_mode"] is True
         assert "not in TEDAPI mode" in caplog.text
+        close_later.assert_called_once_with(fresh, 0)
         # The drifted object must never be re-connected (it would stay on
         # cloud reads — this is the variant that must not count as recovered).
         old.connect.assert_not_called()
@@ -249,10 +259,11 @@ class TestRecoveryBuildsFreshConnection:
         gm = _make_gm(fallback=True)
         old = _conn(tedapi=False, mode="cloud")
         gm.connections["gw1"] = old
-        create = AsyncMock(
-            return_value=_conn(tedapi=Mock(), mode="tedapi", version=None)
-        )
+        fresh = _conn(tedapi=Mock(), mode="tedapi", version=None)
+        create = AsyncMock(return_value=fresh)
         monkeypatch.setattr(gm, "_create_local_connection", create)
+        close_later = Mock()
+        monkeypatch.setattr(gm, "_close_connection_later", close_later)
 
         caplog.set_level(logging.WARNING)
         probe_sleep["release"](2)
@@ -263,6 +274,7 @@ class TestRecoveryBuildsFreshConnection:
         assert gm.connections["gw1"] is old
         assert gm._fallback_state["gw1"]["is_fallback_mode"] is True
         assert "reported no version" in caplog.text
+        close_later.assert_called_once_with(fresh, 0)
         old.connect.assert_not_called()
 
     async def test_recovery_exception_keeps_existing_connection(

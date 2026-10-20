@@ -70,7 +70,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.api.auth import bearer_token, token_matches, verify_control_token
-from app.mqtt.publisher import is_error_result
+from app.utils.control import is_error_result
 from app.core.gateway_manager import (
     IslandingCommandInProgressError,
     IslandingCooldownError,

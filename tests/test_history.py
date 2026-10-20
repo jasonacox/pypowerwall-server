@@ -71,6 +71,15 @@ async def make_store(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+
+async def _drain(store):
+    """Wait for the writes the poll queued (it doesn't wait for them)."""
+    import asyncio
+
+    pending = list(store._pending_writes)
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
 class TestExtract:
     def test_pw3_signals(self):
         m = extract_device_metrics(PW3_VITALS, PW3_FANS)
@@ -1025,6 +1034,7 @@ class TestPollWiring:
         mock_gateway_manager.cache["gw1"] = GatewayStatus(gateway=gw, online=False)
 
         await mock_gateway_manager._poll_gateway("gw1")
+        await _drain(ts_mod.get_timeseries_store())
         status = await ts_mod.get_timeseries_store().status()
         assert status["signal_samples"] == 0
         assert status["samples"] == 1  # power samples unaffected
@@ -1198,7 +1208,7 @@ class TestFailurePaths:
         await store.stop()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("error", [RuntimeError("store broke"), "timeout"])
+    @pytest.mark.parametrize("error", [RuntimeError("store broke"), "never finishes"])
     async def test_poll_continues_when_store_fails(
         self, tmp_path, monkeypatch, mock_gateway_manager, mock_pypowerwall, error
     ):
@@ -1212,20 +1222,24 @@ class TestFailurePaths:
         ts_mod.reset_timeseries_store()
         store = ts_mod.get_timeseries_store()
 
-        async def failing(*args, **kwargs):
-            if error == "timeout":
-                raise asyncio.TimeoutError()
+        def failing(*args, **kwargs):
+            if error == "never finishes":
+                # A stalled disk: the queued write never completes. The poll
+                # must not wait for it (DESIGN.md §6).
+                return asyncio.get_running_loop().create_future()
             raise error
 
-        monkeypatch.setattr(store, "record_signal_sample", failing)
+        monkeypatch.setattr(store, "submit_signal_sample", failing)
         mock_pypowerwall.vitals.return_value = PW3_VITALS
         gw = Gateway(id="gw1", name="G1", host="1.2.3.4", gw_pwd="x", timezone="UTC")
         mock_gateway_manager.gateways["gw1"] = gw
         mock_gateway_manager.connections["gw1"] = mock_pypowerwall
         mock_gateway_manager.cache["gw1"] = GatewayStatus(gateway=gw, online=False)
 
-        await mock_gateway_manager._poll_gateway("gw1")  # must not raise
+        # must not raise, and must not wait for the stalled write
+        await asyncio.wait_for(mock_gateway_manager._poll_gateway("gw1"), 5)
         assert mock_gateway_manager.cache["gw1"].online is True
+        await _drain(store)
         assert (await store.status())["samples"] == 1  # power still recorded
         ts_mod.reset_timeseries_store()
 
@@ -1245,7 +1259,8 @@ class TestFailurePaths:
         )
         # The multi-PW guard copied last poll's vitals forward
         mock_gateway_manager._vitals_preserved.add("gw1")
-        await mock_gateway_manager._record_signal_sample("gw1", gw, data)
+        mock_gateway_manager._record_signal_sample("gw1", gw, data)
+        await _drain(ts_mod.get_timeseries_store())
         info = await ts_mod.get_timeseries_store().get_signal_series(gateway="gw1")
         groups = {s["metric"] for s in info["series"]}
         assert groups and all("fan" in m for m in groups)  # fans only
@@ -1301,16 +1316,16 @@ class TestReviewCoverage:
         store = ts_mod.get_timeseries_store()
         seen = {}
 
-        async def capture(gateway_id, ts, metrics, timezone=None):
+        def capture(gateway_id, ts, metrics, timezone=None):
             seen["timezone"] = timezone
-            return True
+            return None
 
-        monkeypatch.setattr(store, "record_signal_sample", capture)
+        monkeypatch.setattr(store, "submit_signal_sample", capture)
         gw = Gateway(
             id="gw1", name="G", host="1.2.3.4", gw_pwd="x", timezone="Asia/Tokyo"
         )
         data = PowerwallData(vitals=PW3_VITALS, timestamp=time.time())
-        await mock_gateway_manager._record_signal_sample("gw1", gw, data)
+        mock_gateway_manager._record_signal_sample("gw1", gw, data)
         assert seen["timezone"] == "Asia/Tokyo"
         ts_mod.reset_timeseries_store()
 

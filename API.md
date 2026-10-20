@@ -502,7 +502,7 @@ With `PW_LOCAL_FIRST=yes`, a gateway confirmed on TEDAPI v1r, with its wired LAN
 up and a local connection, writes over that local connection first, even when
 a hybrid cloud connection exists. A write that was sent is final: there's no
 second attempt through the cloud, even after a timeout, since it may already
-have been applied. When the LAN is down or there's no local connection, the
+have been applied. When the LAN is down (the library's LAN failover tripped, or the last poll failed) or there's no local connection, the
 path above applies. Islanding is unaffected.
 
 ### Islanding: `POST /control/islanding`

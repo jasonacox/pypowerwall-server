@@ -703,7 +703,33 @@ class TimeSeriesStore:
         soe: Optional[float] = None,
         timezone: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Record one power sample and integrate it into daily totals.
+        """Record one power sample and wait for it (see submit_sample).
+
+        Returns:
+            The updated daily-energy row for the gateway's current local day
+            (or None when the store is disabled or stopped / sample skipped).
+        """
+        future = self.submit_sample(
+            gateway_id, ts, solar_w, home_w, battery_w, site_w, soe, timezone
+        )
+        if future is None:
+            return None
+        return await asyncio.shield(future)
+
+    def submit_sample(
+        self,
+        gateway_id: str,
+        ts: float,
+        solar_w: float,
+        home_w: float,
+        battery_w: float,
+        site_w: float,
+        soe: Optional[float] = None,
+        timezone: Optional[str] = None,
+    ) -> Optional[asyncio.Future]:
+        """Queue one power sample and integrate it into daily totals, without
+        waiting for the write (call on the event loop). Writes run in FIFO
+        order, so samples stay ordered; the writer logs failures.
 
         Battery and grid power are split into directional components using
         the PowerwallData sign conventions (battery positive = discharging,
@@ -721,8 +747,8 @@ class TimeSeriesStore:
             timezone:   Gateway timezone name for local-midnight aggregation.
 
         Returns:
-            The updated daily-energy row for the gateway's current local day
-            (or None when the store is disabled or stopped / sample skipped).
+            The queued write's future (its result is the updated daily-energy
+            row), or None when the store is disabled, stopping or full.
         """
         if not self.enabled or self._closed or self._stopping:
             return None
@@ -734,15 +760,12 @@ class TimeSeriesStore:
             "grid_import": max(0.0, float(site_w or 0.0)),
             "grid_export": max(0.0, -float(site_w or 0.0)),
         }
-        future = self._submit_write(
+        return self._submit_write(
             partial(
                 self._record_sample_sync, gateway_id, float(ts), values, soe, timezone
             ),
             "power",
         )
-        if future is None:
-            return None
-        return await asyncio.shield(future)
 
     def _record_sample_sync(
         self,
@@ -949,7 +972,22 @@ class TimeSeriesStore:
         metrics: Dict[Tuple[str, str], float],
         timezone: Optional[str] = None,
     ) -> bool:
-        """Record one snapshot of device signals for a gateway.
+        """Record one snapshot of device signals and wait for it (see
+        submit_signal_sample). Returns True when the snapshot was stored."""
+        future = self.submit_signal_sample(gateway_id, ts, metrics, timezone)
+        if future is None:
+            return False
+        return await asyncio.shield(future)
+
+    def submit_signal_sample(
+        self,
+        gateway_id: str,
+        ts: float,
+        metrics: Dict[Tuple[str, str], float],
+        timezone: Optional[str] = None,
+    ) -> Optional[asyncio.Future]:
+        """Queue one snapshot of device signals for a gateway, without
+        waiting for the write (call on the event loop).
 
         Called every poll cycle. Each series is gated on its own: a value
         closer than the signal interval to that series' last sample is
@@ -966,10 +1004,11 @@ class TimeSeriesStore:
             timezone:   Gateway timezone name, for the daily rollup's day.
 
         Returns:
-            True when the snapshot was stored.
+            The queued write's future (True when stored), or None when nothing
+            was due or the store is disabled, stopping or full.
         """
         if not self.signals_enabled or not metrics or self._closed or self._stopping:
-            return False
+            return None
         # Poll timing jitters by a second or two; don't let a gap just short
         # of the interval (e.g. 59.9s at 60s) push the sample to the next poll.
         slack = min(2.5, self._signal_interval / 2.0)
@@ -981,7 +1020,7 @@ class TimeSeriesStore:
                 continue
             due[(device, metric)] = value
         if not due:
-            return False
+            return None
         metrics = due
         future = self._submit_write(
             partial(
@@ -994,11 +1033,11 @@ class TimeSeriesStore:
             "signal",
         )
         if future is None:
-            return False
+            return None
         # Accepted writes own this interval even when storage later fails.
         for device, metric in metrics:
             self._signal_last[(gateway_id, device, metric)] = float(ts)
-        return await asyncio.shield(future)
+        return future
 
     def _series_id(
         self,
