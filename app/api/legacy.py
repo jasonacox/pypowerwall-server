@@ -229,6 +229,9 @@ _PROXY_FORM_MAX_BYTES = 4096  # value/token/mode/level only
 # GET's read/check/cancel can't cancel an event a concurrent POST scheduled.
 _MAX_BACKUP_CACHE_TTL = 30.0  # seconds
 _MAX_BACKUP_MIN_SECONDS = 60  # pypowerwall clamps shorter durations to 60
+# The gateway field is a uint32. Checked before dispatch: scheduling cancels
+# the current event first, so an out-of-range value would clear it and fail.
+_MAX_BACKUP_MAX_SECONDS = 2**32 - 1
 _max_backup_cache: Dict[str, Any] = {"value": None, "time": 0.0}
 _max_backup_lock = asyncio.Lock()
 
@@ -533,7 +536,10 @@ async def control_api(
     A form-encoded body (the proxy's `value=...&token=...`) is handled by
     _proxy_form_control with the proxy's responses.
     """
-    content_type = request.headers.get("content-type", "").split(";")[0].strip()
+    # Media types are case-insensitive
+    content_type = (
+        request.headers.get("content-type", "").split(";")[0].strip().lower()
+    )
     if content_type == "application/x-www-form-urlencoded" or not content_type:
         declared = request.headers.get("content-length", "")
         if declared.isdigit() and int(declared) > _PROXY_FORM_MAX_BYTES:
@@ -726,11 +732,14 @@ async def _control_json(path: str, data: dict):
         value = data.get("value")
         cancel = isinstance(value, str) and value.lower() == "cancel"
         seconds = isinstance(value, int) and not isinstance(value, bool)
-        if not cancel and not (seconds and value >= _MAX_BACKUP_MIN_SECONDS):
+        in_range = seconds and (
+            _MAX_BACKUP_MIN_SECONDS <= value <= _MAX_BACKUP_MAX_SECONDS
+        )
+        if not cancel and not in_range:
             raise HTTPException(
                 status_code=400,
-                detail="'value' must be 'cancel' or a duration of at least "
-                f"{_MAX_BACKUP_MIN_SECONDS} seconds",
+                detail="'value' must be 'cancel' or a duration of "
+                f"{_MAX_BACKUP_MIN_SECONDS} to {_MAX_BACKUP_MAX_SECONDS} seconds",
             )
         gateway_id = get_default_gateway()
         if not _is_v1r(gateway_id):

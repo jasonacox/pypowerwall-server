@@ -15,7 +15,7 @@
   unchanged. The JSON API takes the same bodies as before; a body that isn't a
   JSON object still gets FastAPI's `422`. (jasonacox/Powerwall-Dashboard#878)
 - **Max backup (storm watch) control** — `POST /control/max_backup` with a
-  duration (at least 60 seconds) or `cancel` schedules or cancels a manual
+  duration (60 to 4294967295 seconds) or `cancel` schedules or cancels a manual
   backup event,
   and `GET /control/max_backup` lists backup events (cached 30 seconds), as
   in the proxy. Needs the TEDAPI v1r transport. All max_backup operations are

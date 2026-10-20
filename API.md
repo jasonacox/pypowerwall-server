@@ -487,7 +487,7 @@ sent without a `Content-Type` is read as a form unless it's JSON.
 | `grid_charging` | `{"value": true \| false}` | Must be a JSON boolean. |
 | `grid_export` | `{"value": "battery_ok" \| "pv_only" \| "never"}` | |
 | `reserve_hold` | `{}` | Sets the reserve to the current battery level (rounded down). `503` if the level is unknown. |
-| `max_backup` | `{"value": seconds \| "cancel"}` | Schedules (at least 60 seconds) or cancels a manual backup event (storm watch). Needs the TEDAPI v1r transport, else `503`. |
+| `max_backup` | `{"value": seconds \| "cancel"}` | Schedules (60 to 4294967295 seconds, the gateway's range) or cancels a manual backup event (storm watch). Needs the TEDAPI v1r transport, else `503`. |
 
 Any other `path` is sent as a raw POST of the body to the default gateway's
 `/api/{path}`.

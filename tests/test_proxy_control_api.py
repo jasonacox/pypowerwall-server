@@ -425,7 +425,7 @@ def test_max_backup_under_60_seconds_is_refused(
     """pypowerwall clamps shorter durations to 60 s; don't report 30 as scheduled."""
     mock_pypowerwall.tedapi_mode = "v1r"
     r = form(client, "max_backup", value="30", token=TOKEN)
-    assert r.status_code == 400 and "at least 60" in r.json()["error"]
+    assert r.status_code == 400 and "60 to 4294967295" in r.json()["error"]
     r = client.post(
         "/control/max_backup", json={"value": 30}, headers={"Authorization": TOKEN}
     )
@@ -554,3 +554,57 @@ async def test_cleanup_waits_for_a_timed_out_schedule_before_reading(
     response = await asyncio.wait_for(cleanup, 5)
     assert response.status_code == 200
     mock_pypowerwall.cancel_max_backup.assert_not_called()  # saw the new event
+
+
+@pytest.mark.parametrize("seconds", [2**32, 10**12])
+def test_max_backup_duration_over_uint32_never_dispatches(
+    client, connected_gateway, mock_pypowerwall, seconds
+):
+    """Scheduling cancels the current event first: an out-of-range duration
+    must be refused before any write reaches the library."""
+    mock_pypowerwall.tedapi_mode = "v1r"
+    r = form(client, "max_backup", value=str(seconds), token=TOKEN)
+    assert r.status_code == 400 and "error" in r.json()
+    r = client.post(
+        "/control/max_backup", json={"value": seconds}, headers={"Authorization": TOKEN}
+    )
+    assert r.status_code == 400
+    mock_pypowerwall.schedule_max_backup.assert_not_called()
+    mock_pypowerwall.cancel_max_backup.assert_not_called()
+
+
+def test_max_backup_accepts_the_uint32_maximum(
+    client, connected_gateway, mock_pypowerwall
+):
+    mock_pypowerwall.tedapi_mode = "v1r"
+    mock_pypowerwall.schedule_max_backup.return_value = True
+    r = form(client, "max_backup", value=str(2**32 - 1), token=TOKEN)
+    assert r.status_code == 200
+    mock_pypowerwall.schedule_max_backup.assert_called_once_with(2**32 - 1)
+
+
+@pytest.mark.parametrize(
+    "media_type", ["Application/JSON", "APPLICATION/JSON; charset=utf-8"]
+)
+def test_json_media_type_is_case_insensitive(
+    client, connected_gateway, mock_pypowerwall, no_cloud, media_type
+):
+    mock_pypowerwall.set_reserve.return_value = {"ok": True}
+    r = client.post(
+        "/control/reserve",
+        content='{"value": 20}',
+        headers={"Authorization": TOKEN, "Content-Type": media_type},
+    )
+    assert r.status_code == 200
+
+
+def test_form_media_type_is_case_insensitive(
+    client, connected_gateway, mock_pypowerwall, no_cloud
+):
+    mock_pypowerwall.set_reserve.return_value = {"ok": True}
+    r = client.post(
+        "/control/reserve",
+        content=f"value=20&token={TOKEN}",
+        headers={"Content-Type": "Application/X-Www-Form-Urlencoded"},
+    )
+    assert r.status_code == 200
