@@ -595,6 +595,8 @@ class TestPollLoopWiring:
         await mock_gateway_manager._poll_gateway("gw1")
 
         store = ts_mod.get_timeseries_store()
+        # The poll queues the write without waiting for it
+        await asyncio.gather(*store._pending_writes)
         samples = await store.get_samples(gateway="gw1")
         assert samples["count"] == 1
         s = samples["samples"][0]

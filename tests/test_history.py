@@ -1008,6 +1008,7 @@ class TestPollWiring:
         await mock_gateway_manager._poll_gateway("gw1")  # gated: same minute
 
         store = ts_mod.get_timeseries_store()
+        await _drain(store)
         info = await store.get_signal_series(gateway="gw1")
         assert {(s["device"], s["metric"]) for s in info["series"]} == set(
             extract_device_metrics(PW3_VITALS, PW3_FANS)
