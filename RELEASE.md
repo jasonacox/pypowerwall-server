@@ -2,7 +2,14 @@
 
 ## Version History
 
-### [0.12.0] - Upcoming
+### [0.12.0] - 2026-10-19
+
+The server now answers the legacy proxy's API the way the proxy does, so a
+proxy client such as Powerwall-Dashboard can switch to it unchanged
+(jasonacox/Powerwall-Dashboard#878). Four changes are visible to existing
+server users; read **Changed** before upgrading: FleetAPI selection from the
+auth files, the `/soe` level and `/freq` syncing value, the `PW_NEG_SOLAR`
+default, and when the hybrid cloud login starts.
 
 **Added:**
 - **The proxy's control API** — `GET /control/reserve`, `/control/mode`,
@@ -13,13 +20,13 @@
   `{"error": ...}` / `{"unauthorized": ...}` responses. Clients written for
   the proxy, such as Powerwall-Dashboard's `tools/switch-mode`, work
   unchanged. The JSON API takes the same bodies as before; a body that isn't a
-  JSON object still gets FastAPI's `422`. (jasonacox/Powerwall-Dashboard#878)
+  JSON object still gets FastAPI's `422`. (#172)
 - **Max backup (storm watch) control** — `POST /control/max_backup` with a
   duration (60 to 4294967295 seconds) or `cancel` schedules or cancels a manual
-  backup event,
-  and `GET /control/max_backup` lists backup events (cached 30 seconds), as
+  backup event, and `GET /control/max_backup` lists backup events (cached 30
+  seconds), as
   in the proxy. Needs the TEDAPI v1r transport. All max_backup operations are
-  serialized, and the writes share the gateway write lock.
+  serialized, and the writes share the gateway write lock. (#172)
 
 **Changed:**
 - **Behavior change: with no `PW_HOST`, a `.pypowerwall.fleetapi` file in
@@ -28,10 +35,10 @@
   mode (the owner API); FleetAPI is a different API with its own rate limits.
   The startup log says which file chose the mode. To stay on Cloud, remove the
   FleetAPI file or configure the gateway in `PW_GATEWAYS` with
-  `"fleetapi": false`.
-- **Legacy endpoints return what the proxy returns**, so proxy clients such
-  as Powerwall-Dashboard's Telegraf can switch to the server unchanged
-  (jasonacox/Powerwall-Dashboard#878):
+  `"fleetapi": false`. (#170)
+- **Behavior change: legacy endpoints return what the proxy returns**, so
+  proxy clients such as Powerwall-Dashboard's Telegraf can switch to the
+  server unchanged (#167):
   - `/soe` `percentage` and `/json` `soe` are the raw gateway battery level,
     as in the proxy. They were the Tesla app scaled level. `raw_percentage`
     and `soe_raw` are unchanged, and the scaled level stays at
@@ -47,16 +54,16 @@
   `PW_NEG_SOLAR`, you may now see small negative solar readings at night and
   slightly lower home load. Daily solar totals in the history are unchanged
   (they already ignore negative solar). Set `PW_NEG_SOLAR=no` to keep the old
-  behavior.
-- **The hybrid cloud connection starts only when it is wanted**, like the
-  proxy: with `PW_CONTROL_SECRET` (writes need it) or the new
+  behavior. (#167)
+- **Behavior change: the hybrid cloud connection starts only when it is
+  wanted**, like the proxy: with `PW_CONTROL_SECRET` (writes need it) or the new
   `PW_CLOUD_HYBRID=yes`. It used to start for any local gateway with
   `PW_EMAIL`, so Powerwall 2 local setups, whose login needs an email, opened
   a Tesla cloud session and logged retry warnings they never asked for. If you
   run Basic LAN with `PW_EMAIL` and no control secret to see the
   cloud-sourced mode and reserve, set `PW_CLOUD_HYBRID=yes`. Control setups
   (`PW_CONTROL_SECRET` set), Cloud and FleetAPI are unchanged. `/stats`
-  reports the setting under `config`.
+  reports the setting under `config`. (#169)
 
 **Fixed:**
 - **Powerwall 2 with both passwords on a LAN address no longer falls into
@@ -67,26 +74,27 @@
   1–5 minutes, opening a new login each time. The probe now runs only for
   gateways that get TEDAPI (an RSA key, a gateway password without a customer
   password, or both at `192.168.91.1`), and `/stats` reports `tedapi` the same
-  way before the first poll.
+  way before the first poll. (#173)
 - **`PW_SITEID` works for local gateways that fail over to the cloud** — it
   was passed as a string on the local path, so the cloud client couldn't find
-  the site; it's an integer on all three connection paths now.
+  the site; it's an integer on all three connection paths now. (#173)
 - `/stats` reports `PW_LOCAL_FIRST` under `config`; `/pw/version` reports
   `vint` 0 (not null) for an unparseable firmware version; the connect log
   names the live connection when failover lands elsewhere; the cloud-control
-  retry logs once per round.
+  retry logs once per round. (#173)
 - **The Console and `/stats` show the connection in use** — pypowerwall's
   failover can move a connection off its configured mode (FleetAPI to Cloud,
   local to Cloud), but the Console and `/stats` (`mode`, `fleetapi`,
   `cloudmode`, `tedapi`, `basiclan`) kept reporting the configuration. They
   now report the live connection, recorded on every poll; `/api/gateways/`
   has it as `data.connection_mode`. Before the first poll they show the
-  configuration.
+  configuration. (#170)
 - **FleetAPI works with the single-gateway settings**, as in the proxy: with
   no `PW_HOST`, `.pypowerwall.fleetapi` in `PW_AUTH_PATH` selects FleetAPI
   (before Cloud), and `.pypowerwall.auth` selects Cloud, supplying the email
   when `PW_EMAIL` is empty. FleetAPI used to need a `PW_GATEWAYS` entry; a
   proxy-style FleetAPI setup tried the owner Cloud API and never connected.
+  (#170)
 - **Powerwall 2 local mode gets the full local API** — `PW_HOST` +
   `PW_PASSWORD` without a gateway password was always treated as Powerwall 3
   Basic LAN, which skipped vitals, alerts, status, firmware, site name,
@@ -95,9 +103,9 @@
   `/api/status` is polled in full, like the proxy's local mode; one that
   doesn't is Basic LAN as before. That decision is re-checked (after 5
   minutes, then doubling up to every 6 hours) so a Powerwall 2 whose status
-  request failed once still gets full polling. The TEDAPI probe runs only for gateways
-  configured for TEDAPI, and `/stats` reports `tedapi: false` for local and
-  Basic LAN gateways.
+  request failed once still gets full polling. The TEDAPI probe runs only for
+  gateways configured for TEDAPI, and `/stats` reports `tedapi: false` for
+  local and Basic LAN gateways. (#170, #173)
 - **A proxy `pypowerwall.env` no longer stops the server from starting** —
   boolean and integer settings that the proxy took now parse instead of
   failing startup with a validation error: an empty value (`PW_DEBUG=`,
@@ -105,34 +113,35 @@
   ` # comment` are ignored (plain `docker run --env-file` passes comments
   through), `t`/`f` and whole-number decimals (`8675.0`) parse as before,
   `PW_HTTPS=http` is accepted (and reads as `no`: this server serves plain
-  HTTP), and an unrecognized value logs a warning and uses the default. String settings such as passwords are used
-  exactly as given.
+  HTTP), and an unrecognized value logs a warning and uses the default.
+  String settings such as passwords are used exactly as given. (#171, #173)
 - **`PW_NEG_SOLAR=no` no longer crashes on a missing reading** — a solar or
   load meter reporting `instant_power: null` raised a `TypeError` on every
-  poll and marked the gateway offline. (#72) The multi-gateway totals
+  poll and marked the gateway offline. The multi-gateway totals
   (`/api/aggregate/*`, the Console's live stream) count a missing reading as 0.
+  Reported by @Stephen2615 (#72, #167)
 - **`/csv`, `/csv/v2` and `/json` treat missing power readings as 0**, as
   the proxy does, instead of returning HTTP 500. `/csv/v2` truncates the
   reserve like the proxy (19.9 → 19). `/battery` and `/pw/power` no longer
   return HTTP 500 when a meter block is missing, and the `/pw/<meter>` routes
-  return `{}` for it.
+  return `{}` for it. (#167)
 - **Control writes never overlap** — a write that timed out, or whose request
   was cancelled, kept running in its worker thread but released the write
   lock, so the next write could reach the site while it was still in flight.
   Every write (local, cloud, MQTT) now holds the lock until the library call
   finishes; only islanding and max backup did after a timeout. A write sent
   while a timed-out one is still running waits for it within its own
-  timeout, and is not sent if that runs out first.
+  timeout, and is not sent if that runs out first. (#174)
 - **`PW_LOCAL_FIRST` skips the local write when the gateway's last poll
   failed** (or before the first poll): the write takes the usual path (cloud
   first when configured) instead of a LAN write that would time out. Before,
-  only a tripped WiFi failover did this.
+  only a tripped WiFi failover did this. (#174)
 - **History writes no longer hold up polling** — the poll queues each sample
   and moves on; it used to wait up to 5 seconds per sample for the database
-  write.
+  write. (#174)
 - **MQTT discovery keeps each battery on its own Home Assistant device** when
   a snapshot omits the battery's serial, using the serial last reported for
-  it (#153).
+  it. (#153, #174)
 
 ### [0.11.1] - 2026-10-18
 

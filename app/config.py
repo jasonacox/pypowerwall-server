@@ -254,7 +254,7 @@ def _scalar_kind(annotation):
 
 
 # Server version
-SERVER_VERSION = "0.11.1"
+SERVER_VERSION = "0.12.0"
 
 # MQTT control bitmask values for MQTT_CONTROLS (bits only, no names).
 # Default 0 keeps MQTT monitoring-only, exactly as before controls existed.
