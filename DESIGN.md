@@ -365,8 +365,9 @@ result = await asyncio.wait_for(
 
 Control writes go through `_locked_call`: one gateway write lock, released when
 the library call finishes (a timed-out call keeps running in its worker thread,
-and the next write must not overlap it). The caller's timeout covers waiting for
-the lock too, so a write whose time runs out while queued is never sent.
+and the next write must not overlap it). The caller's timeout also covers waiting
+for the lock and for a free worker (reads share the executor); a write whose time
+runs out before a worker starts it is never sent.
 
 ### 5. Pydantic Settings
 

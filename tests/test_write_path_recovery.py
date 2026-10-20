@@ -131,16 +131,52 @@ async def test_write_that_expires_while_queued_never_runs(path):
 @pytest.mark.asyncio
 async def test_lock_acquired_too_late_is_not_dispatched(monkeypatch):
     """Acquired with no time left (the wait used it all): released, not run."""
+    import sys
+    from types import SimpleNamespace
+
+    gm_module = sys.modules["app.core.gateway_manager"]
     gm = GatewayManager()
-    loop = asyncio.get_running_loop()
     # The clock jumps past the deadline once the deadline is set
     clock = itertools.chain([0.0], itertools.repeat(10.0))
-    monkeypatch.setattr(loop, "time", lambda: next(clock))
+    monkeypatch.setattr(
+        gm_module, "time", SimpleNamespace(monotonic=lambda: next(clock))
+    )
     func = Mock()
     with pytest.raises(asyncio.TimeoutError):
         await gm._locked_call(func, timeout=1)
+    for _ in range(100):  # released when the worker gives the call up
+        if not gm._write_lock.locked():
+            break
+        await asyncio.sleep(0.01)
     func.assert_not_called()
     assert not gm._write_lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_write_queued_behind_busy_executor_never_runs():
+    """Reads can fill the shared executor: a write whose deadline passes
+    before a worker starts it is dropped, not sent late."""
+    gm = GatewayManager()
+    gm._executor = ThreadPoolExecutor(max_workers=1)
+    started, release = threading.Event(), threading.Event()
+    blocker = gm._executor.submit(_blocking_call(started, release))
+    try:
+        await _wait_for(started)
+        write = Mock(return_value={"result": "late"})
+        with pytest.raises(asyncio.TimeoutError):
+            await gm._locked_call(write, timeout=0.05)
+
+        release.set()
+        blocker.result(timeout=5)
+        for _ in range(100):
+            if not gm._write_lock.locked():
+                break
+            await asyncio.sleep(0.01)
+        write.assert_not_called()
+        assert not gm._write_lock.locked()
+    finally:
+        release.set()
+        gm._executor.shutdown(wait=True)
 
 
 @pytest.mark.asyncio
@@ -268,3 +304,19 @@ def test_discovery_battery_serial_follows_reorder():
     # B stays known at its new position only
     later = publisher._battery_blocks("gw", _system_status(None, None))
     assert [b["serial"] for b in later] == ["SN-B", None]
+
+
+def test_discovery_battery_serial_follows_serial_only_block():
+    """A block with a serial but no energy values isn't announced, but its
+    serial still moves: [A, B] then [B (serial only), unlabeled] must not
+    put B's identity on the second battery."""
+    publisher = MqttPublisher()
+    publisher._battery_blocks("gw", _system_status("SN-A", "SN-B"))
+    status = {
+        "battery_blocks": [
+            {"PackageSerialNumber": "SN-B"},
+            {"nominal_full_pack_energy": 13500, "nominal_energy_remaining": 6000},
+        ]
+    }
+    batteries = publisher._battery_blocks("gw", status)
+    assert [(b["index"], b["serial"]) for b in batteries] == [(2, None)]

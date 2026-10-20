@@ -214,22 +214,21 @@ class MqttPublisher:
 
         Serials are remembered by position. A serial this snapshot reports
         at another position is forgotten at its old one first, so two
-        batteries never share a device after a reorder.
+        batteries never share a device after a reorder. Every block's serial
+        counts, including blocks without energy values (not announced).
         """
         batteries = _extract_battery_blocks(system_status)
-        reported = {}
-        for batt in batteries:
-            if batt["serial"]:
-                reported[batt["serial"]] = batt["index"]
+        reported = _reported_battery_serials(system_status)
         for key, serial in list(self._battery_serials.items()):
             if key[0] == gateway_id and reported.get(serial, key[1]) != key[1]:
                 del self._battery_serials[key]
+        for serial, index in reported.items():
+            self._battery_serials[(gateway_id, index)] = serial
         for batt in batteries:
-            key = (gateway_id, batt["index"])
-            if batt["serial"]:
-                self._battery_serials[key] = batt["serial"]
-            else:
-                batt["serial"] = self._battery_serials.get(key)
+            if not batt["serial"]:
+                batt["serial"] = self._battery_serials.get(
+                    (gateway_id, batt["index"])
+                )
         return batteries
 
     def _control_announce_state(self, gateway_id: str) -> tuple:
@@ -1402,6 +1401,22 @@ def _extract_battery_blocks(system_status: Optional[dict]) -> list:
             "serial": serial if isinstance(serial, str) and serial else None,
         })
     return batteries
+
+
+def _reported_battery_serials(system_status: Optional[dict]) -> Dict[str, int]:
+    """Serial -> 1-based battery_blocks position for every block reporting a
+    PackageSerialNumber (the same positions _extract_battery_blocks uses)."""
+    if not isinstance(system_status, dict):
+        return {}
+    blocks = system_status.get("battery_blocks")
+    if not isinstance(blocks, list):
+        return {}
+    reported = {}
+    for index, block in enumerate(blocks, start=1):
+        serial = block.get("PackageSerialNumber") if isinstance(block, dict) else None
+        if isinstance(serial, str) and serial:
+            reported[serial] = index
+    return reported
 
 
 # Module-level singleton — imported by gateway_manager and main.py

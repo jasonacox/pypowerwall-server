@@ -2311,26 +2311,34 @@ class GatewayManager:
         waiting: after a timeout, or a cancelled request, the call keeps
         running in its worker thread, and the next write must not overlap it
         (two writes to the same site would race). ``timeout`` covers waiting
-        for the lock and the call: a write whose time runs out while queued
-        raises asyncio.TimeoutError without being dispatched, so it never
-        reaches the site after its caller gave up. ``on_dispatch`` sees the
-        future right after submission (islanding's cooldown bookkeeping).
+        for the lock, for a free worker and for the call: a write whose time
+        runs out before its worker starts it raises asyncio.TimeoutError and
+        never reaches the site after its caller gave up. ``on_dispatch`` sees
+        the future right after submission (islanding's cooldown bookkeeping).
         """
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
+        deadline = time.monotonic() + timeout
+
+        def run_if_in_time():
+            # The shared executor may be busy with reads: check again when
+            # a worker picks the call up
+            if time.monotonic() >= deadline:
+                raise asyncio.TimeoutError("expired before a worker started it")
+            return func()
+
         await asyncio.wait_for(self._write_lock.acquire(), timeout=timeout)
         try:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                raise asyncio.TimeoutError()
-            future = loop.run_in_executor(self._executor, func)
+            future = asyncio.get_running_loop().run_in_executor(
+                self._executor, run_if_in_time
+            )
         except BaseException:
             self._write_lock.release()
             raise
         future.add_done_callback(lambda _done: self._write_lock.release())
         if on_dispatch is not None:
             on_dispatch(future)
-        return await asyncio.wait_for(asyncio.shield(future), timeout=remaining)
+        return await asyncio.wait_for(
+            asyncio.shield(future), timeout=deadline - time.monotonic()
+        )
 
     async def call_api(
         self,
