@@ -127,11 +127,6 @@
   failed** (or before the first poll): the write takes the usual path (cloud
   first when configured) instead of a LAN write that would time out. Before,
   only a tripped WiFi failover did this.
-- **TEDAPI recovery closes the connections it stops using** — the replaced
-  local connection (after 30 seconds, so calls still running on it finish)
-  and a fresh one it discards, instead of leaving their sessions open.
-  Cloud and FleetAPI connections are never closed: closing logs the Tesla
-  account out.
 - **History writes no longer hold up polling** — the poll queues each sample
   and moves on; it used to wait up to 5 seconds per sample for the database
   write.

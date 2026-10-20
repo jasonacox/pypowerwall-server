@@ -529,9 +529,10 @@ stateDiagram-v2
   same way startup does, checks it is in TEDAPI mode and reports a
   `version()`, and only then swaps it in, so the existing connection keeps
   serving until a verified replacement exists. The replaced connection is
-  closed after a grace period (local/TEDAPI clients only: a cloud
-  `close_session()` would log the Tesla account out).
-- All pypowerwall calls (constructor, `version()`, `close_session()`) go
+  dropped, not closed: the local client's `close_session()` logs its token out
+  at the gateway, and the fresh connection reuses that token from the shared
+  auth cache file.
+- All pypowerwall calls (constructor, `version()`) go
   through the shared `ThreadPoolExecutor` with `asyncio.wait_for` timeouts,
   so the probe never blocks the event loop.
 - State is exposed via `get_fallback_state(id)` / `get_all_fallback_states()`

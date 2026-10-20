@@ -3,8 +3,6 @@
 - A timed-out or cancelled write keeps the write lock until its library call
   finishes, on every write path (local, cloud, call_api), so two writes never
   overlap.
-- TEDAPI recovery closes the connections it no longer uses, local ones only
-  (a Cloud/FleetAPI close_session() logs the Tesla account out).
 - initialize() keeps each gateway's configuration for recovery, and
   PW_FAILOVER reaches every pypowerwall connection the server builds.
 - MQTT discovery remembers each battery's serial across snapshots that
@@ -154,65 +152,6 @@ async def test_failed_dispatch_releases_lock():
     with pytest.raises(RuntimeError):
         await gm._locked_call(lambda: None, timeout=1)
     assert not gm._write_lock.locked()
-
-
-# ---------------------------------------------------------------------------
-# Closing connections the server no longer uses
-# ---------------------------------------------------------------------------
-
-
-def _pw(mode):
-    pw = Mock(mode=mode)
-    pw.client = Mock()
-    return pw
-
-
-@pytest.mark.asyncio
-async def test_close_connection_later_closes_local_connection():
-    gm = GatewayManager()
-    try:
-        pw = _pw("local")
-        gm._close_connection_later(pw, 0)
-        await asyncio.wait_for(asyncio.gather(*gm._close_tasks), timeout=5)
-        pw.client.close_session.assert_called_once_with()
-        assert not gm._close_tasks
-    finally:
-        await gm.shutdown()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["cloud", "fleetapi"])
-async def test_close_connection_later_never_closes_cloud_sessions(mode):
-    """Cloud/FleetAPI close_session() logs the shared Tesla account out."""
-    gm = GatewayManager()
-    try:
-        pw = _pw(mode)
-        gm._close_connection_later(pw, 0)
-        assert not gm._close_tasks
-        pw.client.close_session.assert_not_called()
-    finally:
-        await gm.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_close_connection_later_ignores_missing_connection():
-    gm = GatewayManager()
-    try:
-        gm._close_connection_later(None, 0)
-        assert not gm._close_tasks
-    finally:
-        await gm.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_shutdown_cancels_delayed_close():
-    gm = GatewayManager()
-    pw = _pw("local")
-    gm._close_connection_later(pw, 3600)
-    (task,) = gm._close_tasks
-    await gm.shutdown()
-    assert task.cancelled()
-    pw.client.close_session.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

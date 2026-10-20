@@ -320,8 +320,6 @@ class GatewayManager:
         self._fallback_state: Dict[str, Dict] = {}
         self._tedapi_probe_failures: Dict[str, int] = {}
         self._probe_tasks: Dict[str, asyncio.Task] = {}  # Per-gateway TEDAPI probe tasks
-        # Delayed closes of connections recovery replaced or discarded
-        self._close_tasks: Set[asyncio.Task] = set()
 
         # Dedicated thread pool for blocking pypowerwall operations
         # Will be sized during initialize() based on gateway count
@@ -882,7 +880,6 @@ class GatewayManager:
         )
         if self._cloud_control_task:
             named_tasks.append((self._cloud_control_task, "cloud-control-init"))
-        named_tasks.extend((t, "close-connection") for t in self._close_tasks)
         named_tasks.extend(
             (t, f"mqtt-{gid}") for gid, t in self._mqtt_tasks.items()
         )
@@ -2041,8 +2038,9 @@ class GatewayManager:
         in TEDAPI mode and reports a version, so the existing connection
         keeps serving until a verified replacement exists (reconnecting the
         drifted object in place would leave nothing serving meanwhile).  The
-        replaced connection is closed once in-flight calls have had time to
-        finish; a discarded fresh one is closed right away.
+        replaced connection is dropped, not closed: the local client's
+        close_session() logs its token out at the gateway, and the fresh
+        connection reuses that token from the shared auth cache file.
 
         v1r + WiFi note: that connection has pw.tedapi set, so its probes
         run against the wired LAN; a WiFi TEDAPI outage might not be
@@ -2138,7 +2136,6 @@ class GatewayManager:
                     )
 
                     recovered = False
-                    fresh_pw = None
                     try:
                         config = self._gateway_configs.get(gateway_id)
                         if config is None:
@@ -2158,14 +2155,8 @@ class GatewayManager:
                                 timeout=max(5.0, settings.timeout + 2.0),
                             )
                         if verify_version is not None:
-                            replaced = self.connections.get(gateway_id)
                             self.connections[gateway_id] = fresh_pw
                             recovered = True
-                            # Polls or writes may still be running on the
-                            # replaced connection: close it after they finish
-                            self._close_connection_later(
-                                replaced, max(30.0, 3 * settings.timeout)
-                            )
                             logger.info(
                                 "TEDAPI recovery attempt #%d for %s: fresh "
                                 "connection in TEDAPI mode (version=%s), "
@@ -2192,9 +2183,6 @@ class GatewayManager:
                             "TEDAPI recovery attempt #%d for %s exception: %r",
                             attempt_num, gateway_id, exc,
                         )
-                    if not recovered:
-                        # Nothing else ever used the discarded connection
-                        self._close_connection_later(fresh_pw, 0)
 
                     if recovered:
                         self._exit_fallback_mode(gateway_id)
@@ -2310,36 +2298,6 @@ class GatewayManager:
     def get_connection(self, gateway_id: str) -> Optional[pypowerwall.Powerwall]:
         """Get pypowerwall connection for a gateway."""
         return self.connections.get(gateway_id)
-
-    def _close_connection_later(self, pw, delay: float) -> None:
-        """Close a connection the server no longer uses, after ``delay``
-        seconds so calls still running on it can finish.
-
-        Only local and TEDAPI clients (mode "local"): a Cloud or FleetAPI
-        close_session() logs the Tesla account out, which would break the
-        auth files other connections share. Those are left to garbage
-        collection.
-        """
-        client = getattr(pw, "client", None)
-        if getattr(pw, "mode", None) != "local" or not hasattr(client, "close_session"):
-            return
-
-        async def close():
-            if delay > 0:
-                await asyncio.sleep(delay)
-            try:
-                await asyncio.wait_for(
-                    asyncio.get_running_loop().run_in_executor(
-                        self._executor, client.close_session
-                    ),
-                    timeout=10.0,
-                )
-            except Exception as e:
-                logger.debug(f"Closing a replaced connection failed: {e}")
-
-        task = asyncio.create_task(close(), name="close-connection")
-        self._close_tasks.add(task)
-        task.add_done_callback(self._close_tasks.discard)
 
     async def _locked_call(
         self,
