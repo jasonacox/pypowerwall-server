@@ -2352,20 +2352,27 @@ class GatewayManager:
         The lock is released when the library call finishes, not when we stop
         waiting: after a timeout, or a cancelled request, the call keeps
         running in its worker thread, and the next write must not overlap it
-        (two writes to the same site would race). Raises asyncio.TimeoutError
-        when the call outlasts ``timeout``. ``on_dispatch`` sees the future
-        right after submission (islanding's cooldown bookkeeping).
+        (two writes to the same site would race). ``timeout`` covers waiting
+        for the lock and the call: a write whose time runs out while queued
+        raises asyncio.TimeoutError without being dispatched, so it never
+        reaches the site after its caller gave up. ``on_dispatch`` sees the
+        future right after submission (islanding's cooldown bookkeeping).
         """
-        await self._write_lock.acquire()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        await asyncio.wait_for(self._write_lock.acquire(), timeout=timeout)
         try:
-            future = asyncio.get_running_loop().run_in_executor(self._executor, func)
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError()
+            future = loop.run_in_executor(self._executor, func)
         except BaseException:
             self._write_lock.release()
             raise
         future.add_done_callback(lambda _done: self._write_lock.release())
         if on_dispatch is not None:
             on_dispatch(future)
-        return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+        return await asyncio.wait_for(asyncio.shield(future), timeout=remaining)
 
     async def call_api(
         self,

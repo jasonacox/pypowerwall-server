@@ -210,8 +210,20 @@ class MqttPublisher:
         """Battery blocks for discovery, with each battery's last known serial
         filled in when this snapshot omits it, so its entities stay on their
         own Home Assistant device (#153) across broker reconnects and
-        control-state republishes."""
+        control-state republishes.
+
+        Serials are remembered by position. A serial this snapshot reports
+        at another position is forgotten at its old one first, so two
+        batteries never share a device after a reorder.
+        """
         batteries = _extract_battery_blocks(system_status)
+        reported = {}
+        for batt in batteries:
+            if batt["serial"]:
+                reported[batt["serial"]] = batt["index"]
+        for key, serial in list(self._battery_serials.items()):
+            if key[0] == gateway_id and reported.get(serial, key[1]) != key[1]:
+                del self._battery_serials[key]
         for batt in batteries:
             key = (gateway_id, batt["index"])
             if batt["serial"]:

@@ -10,7 +10,9 @@
 - MQTT discovery remembers each battery's serial across snapshots that
   omit it, so its entities stay on their own Home Assistant device.
 """
+
 import asyncio
+import itertools
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, Mock
@@ -105,6 +107,42 @@ async def test_cancelled_write_holds_lock_until_worker_finishes(path):
     finally:
         release.set()
         await gm.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["cloud", "call_api"])
+async def test_write_that_expires_while_queued_never_runs(path):
+    """The timeout covers waiting for the lock: a write still queued at its
+    deadline is not dispatched later, after its caller gave up."""
+    gm, pw, started, release, write = _gm_with_slow_write(path)
+    try:
+        first = asyncio.create_task(write("set_reserve", 20, timeout=5))
+        await _wait_for(started)
+        assert await write("set_mode", "backup", timeout=0.05) is None
+
+        release.set()
+        assert await asyncio.wait_for(first, timeout=5) == {"result": "done"}
+        await asyncio.sleep(0.05)
+        pw.set_mode.assert_not_called()
+        assert not gm._write_lock.locked()
+    finally:
+        release.set()
+        await gm.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_lock_acquired_too_late_is_not_dispatched(monkeypatch):
+    """Acquired with no time left (the wait used it all): released, not run."""
+    gm = GatewayManager()
+    loop = asyncio.get_running_loop()
+    # The clock jumps past the deadline once the deadline is set
+    clock = itertools.chain([0.0], itertools.repeat(10.0))
+    monkeypatch.setattr(loop, "time", lambda: next(clock))
+    func = Mock()
+    with pytest.raises(asyncio.TimeoutError):
+        await gm._locked_call(func, timeout=1)
+    func.assert_not_called()
+    assert not gm._write_lock.locked()
 
 
 @pytest.mark.asyncio
@@ -279,3 +317,15 @@ def test_discovery_battery_serial_memory_is_per_gateway_and_updates():
     assert (
         publisher._battery_blocks("gw1", _system_status(None))[0]["serial"] == "SN-NEW"
     )
+
+
+def test_discovery_battery_serial_follows_reorder():
+    """[A, B] then [B, missing]: the second battery must not inherit B."""
+    publisher = MqttPublisher()
+    publisher._battery_blocks("gw", _system_status("SN-A", "SN-B"))
+    moved = publisher._battery_blocks("gw", _system_status("SN-B", None))
+    assert [b["serial"] for b in moved] == ["SN-B", None]
+
+    # B stays known at its new position only
+    later = publisher._battery_blocks("gw", _system_status(None, None))
+    assert [b["serial"] for b in later] == ["SN-B", None]

@@ -121,8 +121,8 @@
   lock, so the next write could reach the site while it was still in flight.
   Every write (local, cloud, MQTT) now holds the lock until the library call
   finishes; only islanding and max backup did after a timeout. A write sent
-  while a timed-out one is still running waits for it, within its own
-  timeout.
+  while a timed-out one is still running waits for it within its own
+  timeout, and is not sent if that runs out first.
 - **`PW_LOCAL_FIRST` skips the local write when the gateway's last poll
   failed** (or before the first poll): the write takes the usual path (cloud
   first when configured) instead of a LAN write that would time out. Before,
