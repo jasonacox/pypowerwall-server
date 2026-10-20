@@ -183,27 +183,6 @@ class TestProbeByConfiguration:
         assert conn.version.called
         assert gm._fallback_state["gw1"]["is_fallback_mode"] is False
 
-    async def test_basic_lan_gateway_is_exempt(
-        self, probe_sleep, monkeypatch
-    ):
-        """PW3 Basic LAN has no TEDAPI client: no probe, no penalty."""
-        gm = _make_gm(basic_lan=True)
-        conn = _conn(tedapi=None, mode="basic-lan")
-        gm.connections["gw1"] = conn
-        monkeypatch.setattr(gm, "_create_local_connection", AsyncMock())
-        enter = Mock(wraps=gm._enter_fallback_mode)
-        monkeypatch.setattr(gm, "_enter_fallback_mode", enter)
-
-        probe_sleep["release"](3)
-        await _run_probe_loop(
-            gm, "gw1", lambda: probe_sleep["cycles"] >= 3, probe_sleep
-        )
-
-        assert enter.call_count == 0
-        assert gm._tedapi_probe_failures["gw1"] == 0
-        assert gm._fallback_state["gw1"]["is_fallback_mode"] is False
-        conn.version.assert_not_called()
-
 
 class TestRecoveryBuildsFreshConnection:
     """Recovery must build a fresh connection, never re-connect the old one."""

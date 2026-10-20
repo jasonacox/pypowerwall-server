@@ -72,6 +72,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 import pypowerwall
+from pypowerwall.tedapi import GW_IP as TEDAPI_GW_IP
 from app.models.gateway import Gateway, GatewayStatus, PowerwallData, AggregateData
 from app.core.scaling import raw_to_tesla_battery_percent
 from app.config import GatewayConfig
@@ -199,6 +200,35 @@ class IslandingCooldownError(RuntimeError):
         self.retry_after = retry_after
 
 
+def _effective_host(config: GatewayConfig) -> Optional[str]:
+    """The host pypowerwall connects to: with a non-standard port appended
+    (e.g. host="192.168.1.50", port=8443 -> "192.168.1.50:8443")."""
+    return f"{config.host}:{config.port}" if config.port else config.host
+
+
+def _expects_tedapi(config: GatewayConfig, default_password: Optional[str]) -> bool:
+    """Whether pypowerwall will run TEDAPI for a local configuration: an RSA key
+    (v1r) or a gateway password without a customer password (full TEDAPI) at
+    any host; with both passwords (hybrid) only at the gateway's WiFi address,
+    the one place pypowerwall's local client starts TEDAPI."""
+    if not config.host or config.cloud_mode or config.fleetapi:
+        return False
+    if config.rsa_key_path:
+        return True
+    if not config.gw_pwd:
+        return False
+    if not (config.password or default_password):
+        return True
+    return _effective_host(config) in (TEDAPI_GW_IP, f"{TEDAPI_GW_IP}:443")
+
+
+def _siteid_kwarg(siteid) -> Any:
+    """PW_SITEID for pypowerwall: the cloud client compares it with integer
+    site ids, so a numeric value is passed as an int."""
+    text = str(siteid).strip()
+    return int(text) if text.isdigit() else text
+
+
 def _connection_mode_label(pw, basic_lan: bool) -> Optional[str]:
     """The connection pypowerwall is using now, which failover can change
     (FleetAPI -> Cloud, local -> Cloud); None when the client doesn't say."""
@@ -237,9 +267,12 @@ class GatewayManager:
     # this often, and retry a failed fetch no sooner than _SITE_INFO_RETRY
     _SITE_INFO_REFRESH = 300
     _SITE_INFO_RETRY = 60
-    # Basic LAN detected on connect is provisional: re-check /api/status this
-    # often so a Powerwall 2 whose status probe failed once gets full polling
+    # Basic LAN detected on connect is provisional: re-check /api/status so a
+    # Powerwall 2 whose status probe failed once gets full polling. A real PW3
+    # answers 404 (pypowerwall logs it), so the interval doubles after each
+    # failed check, from 5 minutes up to 6 hours.
     _BASIC_LAN_RECHECK = 300
+    _BASIC_LAN_RECHECK_MAX = 6 * 3600
 
     def __init__(self):
         self.gateways: Dict[str, Gateway] = {}
@@ -316,8 +349,8 @@ class GatewayManager:
         # Last good /api/site_info per gateway, and (monotonic time, succeeded) of the last fetch
         self._site_info: Dict[str, Dict[str, Any]] = {}
         self._site_info_attempt: Dict[str, Tuple[float, bool]] = {}
-        # Monotonic time of the last /api/status check per Basic LAN gateway
-        self._basic_lan_checked: Dict[str, float] = {}
+        # Basic LAN /api/status re-check per gateway: (monotonic due time, interval)
+        self._basic_lan_recheck: Dict[str, Tuple[float, float]] = {}
 
         # Cloud connection for control operations (set_reserve, set_mode).
         # TEDAPI doesn't support POST/write APIs, so a separate cloud-mode
@@ -569,6 +602,7 @@ class GatewayManager:
                     email=config.email,
                     timezone=config.timezone,
                     basic_lan=basic_lan,
+                    tedapi_expected=_expects_tedapi(config, settings.pw_password),
                     cloud_mode=config.cloud_mode,
                     fleetapi=config.fleetapi,
                     type=config.type,
@@ -665,7 +699,7 @@ class GatewayManager:
                     gw.host
                     and not gw.cloud_mode
                     and not gw.fleetapi
-                    and (gw.gw_pwd or gw.rsa_key_configured)
+                    and gw.tedapi_expected
                 ):
                     self._fallback_state[gateway_id] = self._new_fallback_state()
                     self._tedapi_probe_failures[gateway_id] = 0
@@ -722,10 +756,7 @@ class GatewayManager:
                     if settings.siteid:
                         # PW_SITEID picks the site on multi-site accounts. The
                         # cloud client compares it with integer site ids.
-                        siteid = str(settings.siteid).strip()
-                        cloud_kwargs["siteid"] = (
-                            int(siteid) if siteid.isdigit() else siteid
-                        )
+                        cloud_kwargs["siteid"] = _siteid_kwarg(settings.siteid)
                     pw = await asyncio.wait_for(
                         loop.run_in_executor(
                             self._executor,
@@ -756,11 +787,12 @@ class GatewayManager:
                     return  # Only need one cloud control connection
                 except Exception as e:
                     logger.warning(
-                        "Cloud control connection failed "
-                        "(will retry in %.0fs): %s",
-                        retry_interval,
-                        e,
+                        "Cloud control connection failed for %s: %s", config.id, e
                     )
+            logger.warning(
+                "Cloud control connection not established; retrying in %.0fs",
+                retry_interval,
+            )
             await asyncio.sleep(retry_interval)
             retry_interval = min(
                 retry_interval * 2, self._CLOUD_CONTROL_RETRY_MAX
@@ -937,9 +969,10 @@ class GatewayManager:
         # Powerwall 2 can also hit transiently. Re-check now and then: once
         # the gateway answers, it gets the full local API from then on.
         now = time.monotonic()
-        checked = self._basic_lan_checked.setdefault(gateway_id, now)  # clock starts at the first poll
-        if basic_lan and now - checked >= self._BASIC_LAN_RECHECK:
-            self._basic_lan_checked[gateway_id] = now
+        due, interval = self._basic_lan_recheck.setdefault(
+            gateway_id, (now + self._BASIC_LAN_RECHECK, self._BASIC_LAN_RECHECK)
+        )  # the clock starts at the first poll
+        if basic_lan and now >= due:
             try:
                 full_api = await asyncio.wait_for(
                     loop.run_in_executor(self._executor, pw.is_connected),
@@ -947,6 +980,8 @@ class GatewayManager:
                 )
             except (asyncio.TimeoutError, Exception):
                 full_api = False
+            interval = min(interval * 2, self._BASIC_LAN_RECHECK_MAX)
+            self._basic_lan_recheck[gateway_id] = (now + interval, interval)
             if full_api is True:
                 gateway.basic_lan = basic_lan = False
                 logger.info(
@@ -1470,10 +1505,7 @@ class GatewayManager:
                         if settings.siteid:
                             # PW_SITEID picks the site on multi-site accounts.
                             # The cloud client compares it with integer ids.
-                            siteid = str(settings.siteid).strip()
-                            cloud_kwargs["siteid"] = (
-                                int(siteid) if siteid.isdigit() else siteid
-                            )
+                            cloud_kwargs["siteid"] = _siteid_kwarg(settings.siteid)
                         pw = await asyncio.wait_for(
                             loop.run_in_executor(
                                 self._executor,
@@ -1545,6 +1577,10 @@ class GatewayManager:
                         mode_label = "Basic LAN"
                     else:
                         mode_label = "Local"
+                    # Failover can land elsewhere (e.g. local -> Cloud): say so
+                    live = _connection_mode_label(pw, gateway.basic_lan)
+                    if live and not mode_label.startswith(live):
+                        mode_label = f"{live} (configured {mode_label})"
 
                     if gateway.cloud_mode or gateway.fleetapi:
                         try:
@@ -1954,11 +1990,7 @@ class GatewayManager:
         # with the library default of 5s, a cycle that takes longer
         # re-fetches mid-cycle data it already has.
         pwcacheexpire = max(5, int(self._poll_interval))
-        # Build host string with optional non-standard port
-        # e.g. host="192.168.1.50", port=8443 -> "192.168.1.50:8443"
-        effective_host = (
-            f"{config.host}:{config.port}" if config.port else config.host
-        )
+        effective_host = _effective_host(config)
         tedapi_kwargs = {
             "host": effective_host,
             "gw_pwd": config.gw_pwd,
@@ -1982,7 +2014,7 @@ class GatewayManager:
         if settings.cache_file:
             tedapi_kwargs["cachefile"] = settings.cache_file
         if settings.siteid:
-            tedapi_kwargs["siteid"] = settings.siteid
+            tedapi_kwargs["siteid"] = _siteid_kwarg(settings.siteid)
         if config.rsa_key_path:
             tedapi_kwargs["rsa_key_path"] = config.rsa_key_path
         if config.wifi_host:
@@ -2057,13 +2089,6 @@ class GatewayManager:
                     continue
 
                 if not state["is_fallback_mode"]:
-                    # PW3 Basic LAN (host + password) has no TEDAPI client
-                    # at all, so there is nothing to probe.
-                    gateway = self.gateways.get(gateway_id)
-                    if gateway is not None and gateway.basic_lan:
-                        self._tedapi_probe_failures[gateway_id] = 0
-                        continue
-
                     # Probe based on configuration: a connection that is no
                     # longer in TEDAPI mode counts as a failed probe instead
                     # of skipping silently — skipping once held a gateway on

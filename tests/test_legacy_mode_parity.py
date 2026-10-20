@@ -5,6 +5,7 @@ PW_HOST it uses FleetAPI when .pypowerwall.fleetapi exists, else Cloud. With
 PW_HOST + PW_PASSWORD (no gateway password or RSA key) it uses the local API,
 which a Powerwall 2 serves in full.
 """
+
 import json
 import time
 from unittest.mock import Mock
@@ -17,7 +18,14 @@ from app.models.gateway import Gateway, GatewayStatus
 
 
 def _legacy_settings(monkeypatch, tmp_path, **env):
-    for name in ("PW_HOST", "PW_EMAIL", "PW_PASSWORD", "PW_GW_PWD", "PW_GATEWAYS", "PW_CONFIG"):
+    for name in (
+        "PW_HOST",
+        "PW_EMAIL",
+        "PW_PASSWORD",
+        "PW_GW_PWD",
+        "PW_GATEWAYS",
+        "PW_CONFIG",
+    ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("PW_AUTH_PATH", str(tmp_path))
     for name, value in env.items():
@@ -32,14 +40,18 @@ def test_no_host_with_fleetapi_file_selects_fleetapi(monkeypatch, tmp_path):
     assert gw.fleetapi is True and gw.cloud_mode is True
 
 
-def test_no_host_no_email_with_fleetapi_file_still_configures_a_gateway(monkeypatch, tmp_path):
+def test_no_host_no_email_with_fleetapi_file_still_configures_a_gateway(
+    monkeypatch, tmp_path
+):
     (tmp_path / ".pypowerwall.fleetapi").write_text("{}")
     [gw] = _legacy_settings(monkeypatch, tmp_path)
     assert gw.fleetapi is True and gw.cloud_mode is True and not gw.email
 
 
 def test_no_host_with_auth_file_selects_cloud_and_reads_email(monkeypatch, tmp_path):
-    (tmp_path / ".pypowerwall.auth").write_text(json.dumps({"me@example.com": {"token": "x"}}))
+    (tmp_path / ".pypowerwall.auth").write_text(
+        json.dumps({"me@example.com": {"token": "x"}})
+    )
     [gw] = _legacy_settings(monkeypatch, tmp_path)
     assert gw.cloud_mode is True and gw.fleetapi is False
     assert gw.email == "me@example.com"
@@ -52,7 +64,9 @@ def test_no_host_email_without_auth_files_is_cloud_as_before(monkeypatch, tmp_pa
 
 def test_host_wins_over_fleetapi_file(monkeypatch, tmp_path):
     (tmp_path / ".pypowerwall.fleetapi").write_text("{}")
-    [gw] = _legacy_settings(monkeypatch, tmp_path, PW_HOST="192.168.91.1", PW_GW_PWD="x")
+    [gw] = _legacy_settings(
+        monkeypatch, tmp_path, PW_HOST="192.168.91.1", PW_GW_PWD="x"
+    )
     assert gw.cloud_mode is False and gw.fleetapi is False
 
 
@@ -69,13 +83,21 @@ def _pending(gateway_id, gateway, config):
 
 
 @pytest.mark.asyncio
-async def test_fleetapi_without_email_connects_through_fleetapi(monkeypatch, mock_gateway_manager, mock_pypowerwall):
+async def test_fleetapi_without_email_connects_through_fleetapi(
+    monkeypatch, mock_gateway_manager, mock_pypowerwall
+):
     import pypowerwall
 
     spy = Mock(return_value=mock_pypowerwall)
     monkeypatch.setattr(pypowerwall, "Powerwall", spy)
-    kwargs = dict(id="fa", name="FleetAPI", cloud_mode=True, fleetapi=True, authpath="/app/.auth")
-    _pending("fa", Gateway(**{k: v for k, v in kwargs.items() if k != "authpath"}), GatewayConfig(**kwargs))
+    kwargs = dict(
+        id="fa", name="FleetAPI", cloud_mode=True, fleetapi=True, authpath="/app/.auth"
+    )
+    _pending(
+        "fa",
+        Gateway(**{k: v for k, v in kwargs.items() if k != "authpath"}),
+        GatewayConfig(**kwargs),
+    )
 
     await gateway_manager._poll_gateway("fa")
 
@@ -86,10 +108,13 @@ async def test_fleetapi_without_email_connects_through_fleetapi(monkeypatch, moc
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("answers_api_status, expected_basic_lan", [
-    (True, False),   # Powerwall 2: full local API
-    (False, True),   # Powerwall 3 wired LAN: Basic LAN
-])
+@pytest.mark.parametrize(
+    "answers_api_status, expected_basic_lan",
+    [
+        (True, False),  # Powerwall 2: full local API
+        (False, True),  # Powerwall 3 wired LAN: Basic LAN
+    ],
+)
 async def test_password_only_local_detects_basic_lan_on_connect(
     mock_gateway_manager, mock_pypowerwall, answers_api_status, expected_basic_lan
 ):
@@ -97,7 +122,13 @@ async def test_password_only_local_detects_basic_lan_on_connect(
     mock_pypowerwall.grid_status.return_value = "UP"
     mock_pypowerwall.tedapi = None
     gw = Gateway(id="pw", name="PW", host="10.0.1.2", basic_lan=True)  # candidate
-    _pending("pw", gw, GatewayConfig(id="pw", name="PW", host="10.0.1.2", password="pw", email="me@example.com"))
+    _pending(
+        "pw",
+        gw,
+        GatewayConfig(
+            id="pw", name="PW", host="10.0.1.2", password="pw", email="me@example.com"
+        ),
+    )
 
     await gateway_manager._poll_gateway("pw")
 
@@ -109,33 +140,71 @@ async def test_password_only_local_detects_basic_lan_on_connect(
 
 
 @pytest.mark.asyncio
-async def test_tedapi_probe_only_for_tedapi_gateways(monkeypatch):
-    """A password-only local gateway has no TEDAPI to probe or recover."""
+async def test_tedapi_probe_only_for_gateways_that_get_tedapi(monkeypatch):
+    """The probe runs only where pypowerwall starts TEDAPI. A Powerwall 2 with
+    both passwords on its LAN address never gets TEDAPI (the local client only
+    starts it at 192.168.91.1), so probing it meant permanent SolarOnly
+    fallback and a recovery loop."""
     import pypowerwall
     from tests.test_gateway_manager import _make_realistic_pw_mock
 
     monkeypatch.setattr(settings, "tedapi_recovery", True)
-    monkeypatch.setattr(pypowerwall, "Powerwall", lambda **kw: _make_realistic_pw_mock())
+    monkeypatch.setattr(settings, "pw_password", None)
+    monkeypatch.setattr(
+        pypowerwall, "Powerwall", lambda **kw: _make_realistic_pw_mock()
+    )
     gm = gateway_manager
     gm.gateways.clear()
     gm.connections.clear()
     gm.cache.clear()
     configs = [
-        GatewayConfig(id="pw2", name="PW2", host="10.0.1.2", password="pw"),
-        GatewayConfig(id="pw3", name="PW3", host="192.168.91.1", gw_pwd="secret"),
+        GatewayConfig(id="pw2", name="PW2 local", host="10.0.1.2", password="pw"),
+        GatewayConfig(
+            id="pw2h",
+            name="PW2 hybrid on LAN",
+            host="10.0.1.3",
+            password="pw",
+            gw_pwd="g",
+        ),
+        GatewayConfig(
+            id="hyb",
+            name="hybrid at gateway WiFi",
+            host="192.168.91.1",
+            password="pw",
+            gw_pwd="g",
+        ),
+        GatewayConfig(id="full", name="TEDAPI full", host="192.168.91.1", gw_pwd="g"),
+        GatewayConfig(
+            id="v1r", name="v1r", host="10.42.1.40", gw_pwd="g", rsa_key_path="/k.pem"
+        ),
     ]
     await gm.initialize(configs, poll_interval=5)
     try:
-        assert "pw2" not in gm._probe_tasks
-        assert "pw3" in gm._probe_tasks
+        assert set(gm._probe_tasks) == {"hyb", "full", "v1r"}
+        assert {gid for gid, gw in gm.gateways.items() if gw.tedapi_expected} == {
+            "hyb",
+            "full",
+            "v1r",
+        }
     finally:
         await gm.shutdown()
 
 
 def test_stats_tedapi_false_for_password_only_local(client, mock_gateway_manager):
-    gateway_manager.gateways["pw2"] = Gateway(id="pw2", name="PW2", host="10.0.1.2", basic_lan=False)
+    gateway_manager.gateways["pw2"] = Gateway(
+        id="pw2", name="PW2", host="10.0.1.2", basic_lan=False
+    )
     stats = client.get("/stats").json()
     assert stats["tedapi"] is False
+
+
+def test_stats_tedapi_true_before_the_first_poll_when_tedapi_is_expected(
+    client, mock_gateway_manager
+):
+    gateway_manager.gateways["pw3"] = Gateway(
+        id="pw3", name="PW3", host="192.168.91.1", tedapi_expected=True
+    )
+    assert client.get("/stats").json()["tedapi"] is True
 
 
 # The live connection mode: pypowerwall's failover can move a connection off
@@ -145,51 +214,69 @@ from types import SimpleNamespace
 from app.core.gateway_manager import _connection_mode_label
 
 
-@pytest.mark.parametrize("mode, tedapi_mode, basic_lan, expected", [
-    ("fleetapi", "off", False, "FleetAPI"),
-    ("cloud", "off", False, "Cloud"),
-    ("local", "v1r", False, "TEDAPI v1r"),
-    ("local", "full", False, "TEDAPI"),
-    ("local", "hybrid", False, "TEDAPI"),
-    ("local", "off", False, "Local"),
-    ("local", "off", True, "Basic LAN"),
-    ("unknown", "off", False, None),
-])
+@pytest.mark.parametrize(
+    "mode, tedapi_mode, basic_lan, expected",
+    [
+        ("fleetapi", "off", False, "FleetAPI"),
+        ("cloud", "off", False, "Cloud"),
+        ("local", "v1r", False, "TEDAPI v1r"),
+        ("local", "full", False, "TEDAPI"),
+        ("local", "hybrid", False, "TEDAPI"),
+        ("local", "off", False, "Local"),
+        ("local", "off", True, "Basic LAN"),
+        ("unknown", "off", False, None),
+    ],
+)
 def test_connection_mode_label(mode, tedapi_mode, basic_lan, expected):
     pw = SimpleNamespace(mode=mode, tedapi_mode=tedapi_mode)
     assert _connection_mode_label(pw, basic_lan) == expected
 
 
 def test_connection_mode_label_ignores_clients_without_a_mode():
-    assert _connection_mode_label(Mock(), False) is None  # Mock attributes aren't strings
+    assert (
+        _connection_mode_label(Mock(), False) is None
+    )  # Mock attributes aren't strings
 
 
 @pytest.mark.asyncio
-async def test_poll_records_live_connection_mode(mock_gateway_manager, mock_pypowerwall):
+async def test_poll_records_live_connection_mode(
+    mock_gateway_manager, mock_pypowerwall
+):
     """A FleetAPI gateway whose connection failed over to Cloud reports Cloud."""
     mock_pypowerwall.mode = "cloud"
     mock_pypowerwall.tedapi_mode = "off"
     mock_pypowerwall.tedapi = None
-    gateway_manager.gateways["fa"] = Gateway(id="fa", name="FA", cloud_mode=True, fleetapi=True)
+    gateway_manager.gateways["fa"] = Gateway(
+        id="fa", name="FA", cloud_mode=True, fleetapi=True
+    )
     gateway_manager.connections["fa"] = mock_pypowerwall
     data = await gateway_manager._fetch_gateway_data("fa", mock_pypowerwall)
     assert data.connection_mode == "Cloud"
 
 
-def test_stats_reports_the_live_connection_over_the_configuration(client, mock_gateway_manager):
+def test_stats_reports_the_live_connection_over_the_configuration(
+    client, mock_gateway_manager
+):
     from app.models.gateway import PowerwallData
 
     gw = Gateway(id="fa", name="FA", cloud_mode=True, fleetapi=True)
     gateway_manager.gateways["fa"] = gw
     gateway_manager.cache["fa"] = GatewayStatus(
-        gateway=gw, online=True,
+        gateway=gw,
+        online=True,
         data=PowerwallData(aggregates={}, connection_mode="Cloud", timestamp=1.0),
     )
     stats = client.get("/stats").json()
-    assert (stats["mode"], stats["fleetapi"], stats["cloudmode"]) == ("Cloud", False, True)
+    assert (stats["mode"], stats["fleetapi"], stats["cloudmode"]) == (
+        "Cloud",
+        False,
+        True,
+    )
 
 
-def test_stats_uses_the_configuration_before_the_first_poll(client, mock_gateway_manager):
+def test_stats_uses_the_configuration_before_the_first_poll(
+    client, mock_gateway_manager
+):
     gw = Gateway(id="fa", name="FA", cloud_mode=True, fleetapi=True)
     gateway_manager.gateways["fa"] = gw
     gateway_manager.cache["fa"] = GatewayStatus(gateway=gw, online=False)
@@ -218,7 +305,9 @@ async def test_basic_lan_is_rechecked_and_a_recovered_pw2_gets_full_polling(
     mock_pypowerwall.grid_status.return_value = "UP"
     mock_pypowerwall.is_connected.return_value = False  # transient failure at connect
     gw = Gateway(id="pw", name="PW", host="10.0.1.2", basic_lan=True)
-    _pending("pw", gw, GatewayConfig(id="pw", name="PW", host="10.0.1.2", password="pw"))
+    _pending(
+        "pw", gw, GatewayConfig(id="pw", name="PW", host="10.0.1.2", password="pw")
+    )
     await gateway_manager._poll_gateway("pw")
     assert gateway_manager.gateways["pw"].basic_lan is True
 
@@ -229,22 +318,92 @@ async def test_basic_lan_is_rechecked_and_a_recovered_pw2_gets_full_polling(
     assert gateway_manager.gateways["pw"].basic_lan is True
     assert not mock_pypowerwall.vitals.called
 
-    gateway_manager._basic_lan_checked["pw"] -= gateway_manager._BASIC_LAN_RECHECK + 1
+    due, interval = gateway_manager._basic_lan_recheck["pw"]
+    gateway_manager._basic_lan_recheck["pw"] = (time.monotonic() - 1, interval)
     await gateway_manager._fetch_gateway_data("pw", pw)
     assert gateway_manager.gateways["pw"].basic_lan is False
     assert mock_pypowerwall.vitals.called
 
 
 @pytest.mark.asyncio
-async def test_basic_lan_recheck_keeps_a_real_pw3_on_basic_lan(mock_gateway_manager, mock_pypowerwall):
+async def test_basic_lan_recheck_keeps_a_real_pw3_on_basic_lan(
+    mock_gateway_manager, mock_pypowerwall
+):
     mock_pypowerwall.tedapi = None
     mock_pypowerwall.is_connected.return_value = False  # PW3: /api/status never served
     gw = Gateway(id="pw3", name="PW3", host="10.42.1.44", basic_lan=True)
     gateway_manager.gateways["pw3"] = gw
     gateway_manager.connections["pw3"] = mock_pypowerwall
-    # Re-check due. Relative to now: monotonic time can be under the interval
-    # on a freshly booted machine (a CI runner), so 0 isn't "long ago"
-    gateway_manager._basic_lan_checked["pw3"] = time.monotonic() - gateway_manager._BASIC_LAN_RECHECK - 1
+    # Re-check due (relative to now: monotonic time can be small on a fresh CI runner)
+    gateway_manager._basic_lan_recheck["pw3"] = (time.monotonic() - 1, 300)
     await gateway_manager._fetch_gateway_data("pw3", mock_pypowerwall)
     assert gw.basic_lan is True
     mock_pypowerwall.is_connected.assert_called()
+    # A failed check backs off: next interval doubles (a real PW3 logs a 404)
+    due, interval = gateway_manager._basic_lan_recheck["pw3"]
+    assert interval == 600 and due > time.monotonic() + 500
+
+
+def test_siteid_is_an_int_on_the_local_path_too(monkeypatch):
+    """A local connection that fails over to cloud compares site ids as ints."""
+    monkeypatch.setattr(settings, "siteid", "12345")
+    kwargs = gateway_manager._local_connection_kwargs(
+        GatewayConfig(id="pw", name="PW", host="192.168.91.1", gw_pwd="g")
+    )
+    assert kwargs["siteid"] == 12345
+
+
+def test_stats_reports_local_first(client, mock_gateway_manager, monkeypatch):
+    monkeypatch.setattr(settings, "local_first", True)
+    assert client.get("/stats").json()["config"]["PW_LOCAL_FIRST"] is True
+
+
+def test_pw_version_vint_is_0_when_unparseable(client, connected_gateway):
+    connected_gateway.data.version = "unknown"
+    assert client.get("/pw/version").json() == {"version": "unknown", "vint": 0}
+
+
+def test_fleetapi_auth_file_choice_is_recorded_for_the_startup_log(
+    monkeypatch, tmp_path
+):
+    (tmp_path / ".pypowerwall.fleetapi").write_text("{}")
+    for name in ("PW_HOST", "PW_GATEWAYS", "PW_CONFIG"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PW_EMAIL", "me@example.com")
+    monkeypatch.setenv("PW_AUTH_PATH", str(tmp_path))
+    assert ".pypowerwall.fleetapi" in Settings()._mode_source
+
+
+@pytest.mark.asyncio
+async def test_connect_log_names_the_live_connection_after_failover(
+    mock_gateway_manager, mock_pypowerwall, caplog
+):
+    """A TEDAPI gateway whose connect failed over to Cloud logs Cloud."""
+    mock_pypowerwall.mode = "cloud"
+    mock_pypowerwall.tedapi_mode = "off"
+    mock_pypowerwall.is_connected.return_value = True
+    gw = Gateway(
+        id="t", name="T", host="192.168.91.1", gw_pwd="g", tedapi_expected=True
+    )
+    _pending("t", gw, GatewayConfig(id="t", name="T", host="192.168.91.1", gw_pwd="g"))
+    with caplog.at_level("INFO"):
+        await gateway_manager._poll_gateway("t")
+    assert "Cloud (configured TEDAPI WiFi) mode" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "host, port, expected",
+    [
+        ("192.168.91.1", None, True),
+        ("192.168.91.1", 443, True),
+        ("192.168.91.1", 8443, False),  # local client starts TEDAPI only on 443
+        ("10.0.1.2", None, False),
+    ],
+)
+def test_hybrid_tedapi_expectation_uses_the_effective_host(host, port, expected):
+    from app.core.gateway_manager import _expects_tedapi
+
+    config = GatewayConfig(
+        id="h", name="H", host=host, port=port, password="pw", gw_pwd="g"
+    )
+    assert _expects_tedapi(config, None) is expected

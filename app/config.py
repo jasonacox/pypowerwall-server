@@ -217,7 +217,7 @@ import logging
 import os
 import re
 from typing import List, Optional, Union, get_args, get_origin
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 from pydantic_settings import BaseSettings
 from pypowerwall.cloud.pypowerwall_cloud import AUTHFILE as CLOUD_AUTH_FILE
 from pypowerwall.fleetapi.fleetapi import CONFIGFILE as FLEETAPI_FILE
@@ -235,9 +235,10 @@ def _first_auth_email(path: str) -> Optional[str]:
         return None
 
 
-_TRUE_WORDS = {"yes", "y", "true", "on", "1"}
-_FALSE_WORDS = {"no", "n", "false", "off", "0"}
+_TRUE_WORDS = {"yes", "y", "true", "t", "on", "1"}
+_FALSE_WORDS = {"no", "n", "false", "f", "off", "0"}
 _INLINE_COMMENT = re.compile(r"\s+#.*$")
+_WHOLE_DECIMAL = re.compile(r"[+-]?\d+\.0+")
 
 
 def _scalar_kind(annotation):
@@ -480,15 +481,21 @@ class Settings(BaseSettings):
             return field.default
         if kind is bool:
             word = text.lower()
-            if word in _TRUE_WORDS or (info.field_name == "https_mode" and word == "http"):
+            if word in _TRUE_WORDS:
                 return True
-            if word in _FALSE_WORDS:
+            # PW_HTTPS=http is the proxy's Secure-cookie mode behind a TLS
+            # proxy; this server always serves plain HTTP
+            proxy_http = info.field_name == "https_mode" and word == "http"
+            if word in _FALSE_WORDS or proxy_http:
                 return False
         else:
             try:
                 return int(text)
             except ValueError:
-                pass
+                # pydantic took a whole-number decimal ("8675.0"); match the
+                # text exactly so "1e-400" or "6.0000000000000001" can't round
+                if _WHOLE_DECIMAL.fullmatch(text):
+                    return int(text.split(".")[0])
         logger.warning(
             f"Invalid {field.alias or info.field_name}={v!r}; using the default ({field.default!r})"
         )
@@ -550,6 +557,9 @@ class Settings(BaseSettings):
 
     # Gateway configuration
     gateways: List[GatewayConfig] = Field(default_factory=list)
+    # How the single-gateway settings picked FleetAPI/Cloud from auth files
+    # (logged at startup); None when PW_HOST or PW_EMAIL decided
+    _mode_source: Optional[str] = PrivateAttr(default=None)
 
     # Computed properties
     @property
@@ -718,8 +728,13 @@ class Settings(BaseSettings):
             authpath = os.path.expanduser(self.pw_authpath or "")
             if os.path.exists(os.path.join(authpath, FLEETAPI_FILE)):
                 fleetapi = True
+                self._mode_source = f"{FLEETAPI_FILE} in PW_AUTH_PATH selected FleetAPI"
             elif not email:
                 email = _first_auth_email(os.path.join(authpath, CLOUD_AUTH_FILE))
+                if email:
+                    self._mode_source = (
+                        f"{CLOUD_AUTH_FILE} in PW_AUTH_PATH selected Cloud"
+                    )
         if self.pw_host or email or fleetapi:
             self.gateways = [
                 GatewayConfig(

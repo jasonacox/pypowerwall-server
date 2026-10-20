@@ -1,5 +1,6 @@
 """Boolean and integer settings take the values a proxy pypowerwall.env holds
 instead of failing startup (pydantic would raise a ValidationError)."""
+
 import logging
 
 import pytest
@@ -13,30 +14,52 @@ def make_settings(monkeypatch):
         for name, value in env.items():
             monkeypatch.setenv(name, value)
         return Settings()
+
     return make
 
 
-@pytest.mark.parametrize("name, value, field, expected", [
-    ("PW_DEBUG", "", "debug", False),                       # empty: default
-    ("PW_NEG_SOLAR", "", "neg_solar", True),                # empty: default (yes)
-    ("PW_CACHE_EXPIRE", "", "cache_expire", 5),
-    ("PW_DEBUG", "no   # yes/no - Debug logging", "debug", False),   # inline comment
-    ("PW_NEG_SOLAR", "no        # Set to no", "neg_solar", False),
-    ("PW_TIMEOUT", "10 # seconds", "timeout", 10),
-    ("PW_FAIL_FAST", " Yes ", "fail_fast", True),           # spaces and case
-    ("PW_HTTPS", "http", "https_mode", True),               # proxy value
-    ("PW_HTTPS", "no", "https_mode", False),
-    ("PW_FAILOVER", "off", "failover", False),
-])
+@pytest.mark.parametrize(
+    "name, value, field, expected",
+    [
+        ("PW_DEBUG", "", "debug", False),  # empty: default
+        ("PW_NEG_SOLAR", "", "neg_solar", True),  # empty: default (yes)
+        ("PW_CACHE_EXPIRE", "", "cache_expire", 5),
+        ("PW_DEBUG", "no   # yes/no - Debug logging", "debug", False),  # inline comment
+        ("PW_NEG_SOLAR", "no        # Set to no", "neg_solar", False),
+        ("PW_TIMEOUT", "10 # seconds", "timeout", 10),
+        ("PW_FAIL_FAST", " Yes ", "fail_fast", True),  # spaces and case
+        (
+            "PW_HTTPS",
+            "http",
+            "https_mode",
+            False,
+        ),  # proxy Secure-cookie mode: plain HTTP here
+        ("PW_HTTPS", "no", "https_mode", False),
+        ("PW_FAILOVER", "off", "failover", False),
+        ("PW_NEG_SOLAR", "f", "neg_solar", False),  # pydantic took t/f
+        ("PW_FAIL_FAST", "T", "fail_fast", True),
+        (
+            "PW_CACHE_EXPIRE",
+            "8675.0",
+            "cache_expire",
+            8675,
+        ),  # pydantic took integral floats
+    ],
+)
 def test_proxy_style_values_parse(make_settings, name, value, field, expected):
     assert getattr(make_settings(**{name: value}), field) == expected
 
 
-@pytest.mark.parametrize("name, value, field, default", [
-    ("PW_HEALTH_CHECK", "maybe", "health_check", True),
-    ("PW_POOL_MAXSIZE", "abc", "pool_maxsize", 15),
-])
-def test_unrecognized_value_warns_and_uses_default(make_settings, caplog, name, value, field, default):
+@pytest.mark.parametrize(
+    "name, value, field, default",
+    [
+        ("PW_HEALTH_CHECK", "maybe", "health_check", True),
+        ("PW_POOL_MAXSIZE", "abc", "pool_maxsize", 15),
+    ],
+)
+def test_unrecognized_value_warns_and_uses_default(
+    make_settings, caplog, name, value, field, default
+):
     with caplog.at_level(logging.WARNING, logger="app.config"):
         settings = make_settings(**{name: value})
     assert getattr(settings, field) == default
@@ -50,3 +73,11 @@ def test_string_settings_are_used_as_given(make_settings):
 
 def test_mqtt_controls_keeps_its_fail_closed_parsing(make_settings):
     assert make_settings(MQTT_CONTROLS="15 # all but islanding").mqtt_controls == 0
+
+
+@pytest.mark.parametrize("value", ["5.5", "1e-400", "6.0000000000000001", "1e3"])
+def test_non_integral_float_still_warns_and_uses_default(make_settings, caplog, value):
+    with caplog.at_level(logging.WARNING, logger="app.config"):
+        settings = make_settings(PW_CACHE_EXPIRE=value)
+    assert settings.cache_expire == 5  # the default, never a rounded value
+    assert "Invalid PW_CACHE_EXPIRE=" in caplog.text
