@@ -98,6 +98,8 @@ _WRITE_METHODS = frozenset(
         "set_tariff",
         "schedule_max_backup",
         "cancel_max_backup",
+        "dispatch_battery_power",
+        "resume_battery_operation",
         # Raw POST is the control fallback for v1r/cloud-mode/FleetAPI
         # gateways (e.g. post("/api/operation", ...)). It targets the same
         # Tesla site as the set_* methods, so it must hold the same lock or

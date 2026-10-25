@@ -2,6 +2,17 @@
 
 ## Version History
 
+### [0.13.0] - Upcoming
+
+**Added:**
+- Authenticated `POST /control/dispatch` and `/control/resume`, accepting JSON
+  and proxy-compatible form fields, for timed local battery power control via
+  paired v1r RSA transport. Positive watts discharge, negative watts charge;
+  duration is 1-86400 seconds. Always uses the local connection and shares the
+  gateway write lock, including across timeouts. Requires pypowerwall with
+  [dispatch support](https://github.com/jasonacox/pypowerwall/issues/437);
+  the published dependency pin stays unchanged until that library release.
+
 ### [0.12.0] - 2026-10-19
 
 The server now answers the legacy proxy's API the way the proxy does, so a

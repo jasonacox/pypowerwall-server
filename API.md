@@ -341,6 +341,8 @@ for the request format and write path.
 | GET | `/control/max_backup` | | Current backup events (TEDAPI v1r), as in the proxy, cached 30 seconds. With a valid token (the `Authorization` header, preferred, or `?token=`, which can end up in access logs), an expired manual backup event is cancelled, decided on fresh data. |
 | POST | `/control/{path}` | token | Set `reserve`, `mode`, `grid_charging`, `grid_export`, `reserve_hold` or `max_backup`; returns the library result. Also takes the proxy's form-encoded requests (below). |
 | POST | `/control/islanding` | token | Go off grid or reconnect (TEDAPI v1r only). |
+| POST | `/control/dispatch` | token | Timed local battery power setpoint (TEDAPI v1r only). |
+| POST | `/control/resume` | token | Release a local battery dispatch. |
 | GET | `/api/tesla/tariff_rate` | | The site's Tesla tariff from the cloud. Cached 5 minutes; the last good value is served if a refresh fails. |
 | POST | `/api/tesla/time_of_use_settings` | token | Update the Time-of-Use tariff. Body `{"tou_settings": {..., "tariff_content_v2": {...}}}`; only `tou_settings` is sent to Tesla. |
 
@@ -504,6 +506,39 @@ a hybrid cloud connection exists. A write that was sent is final: there's no
 second attempt through the cloud, even after a timeout, since it may already
 have been applied. When the LAN is down (the library's LAN failover tripped, or the last poll failed) or there's no local connection, the
 path above applies. Islanding is unaffected.
+
+### Timed battery dispatch: `POST /control/dispatch` and `POST /control/resume`
+
+Dispatch takes `{"power_watts": -500, "duration_seconds": 30}` and an
+`Authorization: Bearer <PW_CONTROL_SECRET>` header. Resume takes `{}` with the
+same header. Both also accept the proxy's form encoding, using `token` plus
+`power_watts` and `duration_seconds` for dispatch. They require the local
+paired RSA v1r connection, even with hybrid cloud control configured, and
+share the gateway write lock so resume waits for an in-progress dispatch.
+
+```bash
+curl -X POST -H 'Authorization: Bearer <secret>' -H 'Content-Type: application/json' \
+  -d '{"power_watts":-500,"duration_seconds":30}' http://localhost:8675/control/dispatch
+curl -X POST -d 'token=<secret>' http://localhost:8675/control/resume
+```
+
+Positive watts discharge, negative watts charge; zero requests zero battery
+power. Power must be a finite number (not a boolean), and duration an integer
+from 1 to 86400 seconds. A new dispatch replaces power and timer. At expiry,
+or on resume, the gateway returns to its configured mode. Use short durations
+and renew as needed. These commands do not change reserve, tariff or gateway
+configuration, or cancel manual backup events. Firmware support and gateway
+limits apply.
+
+Success returns `{"power_watts": -500.0, "duration_seconds": 30}` or
+`{"resume_battery_operation": true}`. An acknowledgement confirms acceptance;
+observe the polled `/aggregates` to check battery power. Bad input returns
+400; an unsupported connection, gateway rejection or timeout returns 503.
+JSON errors use `{"detail": ...}`; forms use the proxy's `{"error": ...}`
+and status 400. Both require `PW_CONTROL_SECRET`; an invalid token returns 401.
+The installed pypowerwall must include
+[battery dispatch support](https://github.com/jasonacox/pypowerwall/issues/437).
+An older library returns a command failure without falling back to cloud.
 
 ### Islanding: `POST /control/islanding`
 
