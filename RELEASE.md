@@ -5,6 +5,10 @@
 ### [0.13.0] - Upcoming
 
 **Added:**
+- Console **Battery Dispatch** panel for local v1r gateways: choose charge or
+  discharge, power in watts and a duration, then start a timed dispatch or
+  resume normal operation. Uses the shared control token, validates input,
+  prevents duplicate submissions and reports command acknowledgements.
 - Authenticated `POST /control/dispatch` and `/control/resume`, accepting JSON
   and proxy-compatible form fields, for timed local battery power control via
   paired v1r RSA transport. Positive watts discharge, negative watts charge;

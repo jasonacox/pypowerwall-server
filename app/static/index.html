@@ -8,6 +8,7 @@
     <script src="{PROXY_BASE}/static/js/charts.js?v={SERVER_VERSION}"></script>
     <link rel="stylesheet" href="{PROXY_BASE}/static/css/charts.css?v={SERVER_VERSION}">
     <script src="{PROXY_BASE}/static/js/page.js?v={SERVER_VERSION}"></script>
+    <script src="{PROXY_BASE}/static/js/battery-dispatch.js?v={SERVER_VERSION}"></script>
     <link rel="stylesheet" href="{PROXY_BASE}/static/css/page.css?v={SERVER_VERSION}">
     <style>
         * {
@@ -630,6 +631,15 @@
            the columns→Grid gap already comes from .control-section-columns). */
         #control-token-section {
             margin-bottom: 16px;
+        }
+        #control-dispatch-section {
+            margin-bottom: 16px;
+        }
+        .control-dispatch-actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
         }
         .control-section-title {
             font-size: 0.75em;
@@ -1983,6 +1993,41 @@
                     </div>
                 </div>
 
+                <section class="control-section" id="control-dispatch-section" aria-labelledby="control-dispatch-title" style="display:none">
+                    <div class="control-section-title" id="control-dispatch-title">Battery Dispatch</div>
+                    <form class="control-section-body" id="control-dispatch-form" novalidate>
+                        <div class="control-section-row">
+                            <div class="control-field">
+                                <div class="control-label" id="control-dispatch-direction-label">Direction</div>
+                                <div class="control-radio-group" role="radiogroup" aria-labelledby="control-dispatch-direction-label">
+                                    <label class="control-radio-option">
+                                        <input type="radio" name="control-dispatch-direction" value="discharge" checked disabled>
+                                        <span>Discharge</span>
+                                    </label>
+                                    <label class="control-radio-option">
+                                        <input type="radio" name="control-dispatch-direction" value="charge" disabled>
+                                        <span>Charge</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="control-field">
+                                <label class="control-label" for="control-dispatch-power">Power (W)</label>
+                                <input type="number" id="control-dispatch-power" min="0" step="any" value="500" inputmode="decimal" required disabled>
+                            </div>
+                            <div class="control-field">
+                                <label class="control-label" for="control-dispatch-duration">Duration (seconds)</label>
+                                <input type="number" id="control-dispatch-duration" min="1" max="86400" step="1" value="30" inputmode="numeric" required disabled>
+                            </div>
+                        </div>
+                        <p class="control-hint">Returns to your configured mode when the duration ends. Set 0 W to request no battery power. Battery and gateway limits still apply; a full battery may not charge.</p>
+                        <div class="control-dispatch-actions">
+                            <button type="submit" class="control-btn primary" id="control-dispatch-start" disabled>Start dispatch</button>
+                            <button type="button" class="control-btn" id="control-dispatch-resume" disabled>Resume normal operation</button>
+                        </div>
+                        <div class="control-message" id="control-dispatch-message" role="status" aria-live="polite" style="display:none"></div>
+                    </form>
+                </section>
+
                 <div class="control-section">
                     <div class="control-section-title">Grid</div>
                     <div class="control-section-body">
@@ -2820,7 +2865,8 @@
                 controlIslandingAvailable = stats.tedapi === true
                     && stats.tedapi_mode === 'v1r';
                 updateIslandingControls();
-                
+                controlBatteryDispatch?.setAvailable(controlEnabled && controlIslandingAvailable);
+
                 // Site Name
                 const siteName = stats.site_name || 'My Powerwall';
                 document.getElementById('server-sitename').textContent = siteName;
@@ -2995,6 +3041,7 @@
             } catch (e) {
                 controlIslandingAvailable = false;
                 updateIslandingControls();
+                controlBatteryDispatch?.setAvailable(false);
                 console.log('Stats not available:', e.message);
             }
         }
@@ -3699,6 +3746,7 @@
         let controlIslandingAvailable = false;
         let controlGridState = 'unknown';
         let controlIslandingCooldownTimer = null;
+        let controlBatteryDispatch = null;
 
         // Radio-group helpers (Mode, Grid Export). A native <select> can
         // only ever report one of its listed options — even for a value the
@@ -3925,7 +3973,7 @@
         const GRID_CHARGE_INFO = 'Only enable grid charging if your utility rate plan and local rules allow it. If you claim the U.S. federal Investment Tax Credit, verify how grid charging affects it (see the README). Rules differ by country and utility — you are responsible for complying with them; pypowerwall-server does not determine or enforce regulatory compliance.';
         const MODE_INFO = 'Self-Consumption uses solar first, the battery next, and the grid only as a last resort. Backup keeps the battery topped up toward your reserve level to be ready for outages. Time-Based (autonomous) shifts battery usage automatically to your utility\'s rate schedule to reduce cost.';
         const RESERVE_INFO = 'Backup Reserve is the percentage of battery capacity held back for outages. Capacity above this level is available for daily self-consumption or export, depending on your Mode and Grid Export settings.';
-        const TOKEN_INFO = 'This is the PW_CONTROL_SECRET value set on the server. Paste it here to authorize changes to Mode, Backup Reserve, Grid Charging, Grid Export and Grid Islanding. Check "Remember" to store it in this browser for next time.';
+        const TOKEN_INFO = 'This is the PW_CONTROL_SECRET value set on the server. Paste it here to authorize changes to Mode, Backup Reserve, Battery Dispatch, Grid Charging, Grid Export and Grid Islanding. Check "Remember" to store it in this browser for next time.';
 
         // Styled confirmation modal (native <dialog>) replacing window.confirm.
         // Shared by islanding, grid charging and grid export. Resolves true
@@ -4116,6 +4164,7 @@
                 controlEnabled = false;
             }
             if (card) card.style.display = controlEnabled ? '' : 'none';
+            controlBatteryDispatch?.setAvailable(controlEnabled && controlIslandingAvailable);
             if (controlEnabled) {
                 await loadControlValues();
             }
@@ -4432,6 +4481,17 @@
 
         function initControl() {
             const tokenInput = document.getElementById('control-token');
+            controlBatteryDispatch = PWBatteryDispatch.create({
+                getToken: () => (tokenInput?.value || getControlToken() || '').trim(),
+                rememberToken: setControlToken,
+                onUnauthorized: () => {
+                    clearControlToken();
+                    if (tokenInput) tokenInput.value = '';
+                    tokenInput?.focus();
+                },
+                post: postControl,
+                errorText: controlErrorText,
+            });
             const rememberBox = document.getElementById('control-remember');
             const slider = document.getElementById('control-reserve-slider');
             const number = document.getElementById('control-reserve-number');

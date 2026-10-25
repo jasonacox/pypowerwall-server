@@ -509,6 +509,14 @@ path above applies. Islanding is unaffected.
 
 ### Timed battery dispatch: `POST /control/dispatch` and `POST /control/resume`
 
+The Console's **Powerwall Control → Battery Dispatch** panel provides charge /
+discharge selection, power in watts, duration in seconds, **Start dispatch**
+and **Resume normal operation**. It appears when control is enabled and the
+default gateway uses local v1r, and uses the shared authorization token. These
+actions are independent of Save. The UI validates power and duration, prevents
+duplicate requests while a command is pending, and reports acknowledgements;
+the power flow shows actual battery power.
+
 Dispatch takes `{"power_watts": -500, "duration_seconds": 30}` and an
 `Authorization: Bearer <PW_CONTROL_SECRET>` header. Resume takes `{}` with the
 same header. Both also accept the proxy's form encoding, using `token` plus

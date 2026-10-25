@@ -827,8 +827,8 @@ backup reserve slider + number, 0–100), and **Grid** (grid connection status, 
 grid charging toggle, a grid export radio group—Everything/Solar/Never, labeled
 to match the Tesla app; the API values remain `battery_ok`/`pv_only`/`never`—
 and the Go Off Grid/Reconnect Grid action in the same row, kept in its own
-highlighted panel since it is the one destructive control). Each control always
-reflects the live state — there is no separate "Now:" readout — and a control
+highlighted panel since it is the one destructive control). Mode, reserve and
+grid settings reflect the live state — there is no separate "Now:" readout — and a control
 the user just changed stays highlighted until the next poll confirms the
 gateway applied it.
 Availability is checked via unauthenticated `GET /control/status`
@@ -842,6 +842,17 @@ calls, see note above), otherwise a single `/control/reserve` or `/control/mode`
 call, plus separate `POST /control/grid_charging {"value": true/false}` and
 `POST /control/grid_export {"value": "battery_ok"|"pv_only"|"never"}` calls when
 grid charging or export changed. Controls the default gateway.
+
+**Battery Dispatch** appears in the Control card when the default gateway uses
+local v1r. Choose **Charge** or **Discharge**, enter power in watts and a duration
+from 1 to 86400 whole seconds, then select **Start dispatch**. Defaults are
+500 W for 30 seconds. **Resume normal operation** releases a dispatch early;
+these buttons act immediately and are independent of Save. Zero watts requests
+no battery power. Both actions use the same control token, disable while a
+request is pending, and report whether the request was acknowledged. Check the
+power flow for actual power: a full battery may not charge, and gateway limits
+still apply. The gateway returns to its configured mode when the duration ends.
+The installed pypowerwall must include the battery dispatch library methods.
 
 **Grid charging / export eligibility:** enabling grid charging, or moving grid
 export from *Never* to an exporting option, pops a confirmation dialog and has
