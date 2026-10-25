@@ -6,6 +6,103 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '../app/static/js/battery-dispatch.js'), 'utf8');
+const consoleSource = fs.readFileSync(path.join(__dirname, '../app/static/index.html'), 'utf8');
+
+function consoleFunction(name) {
+    // Run the actual Console functions so their availability wiring is covered
+    // in addition to the standalone form controller below.
+    const pattern = new RegExp(`        (?:async )?function ${name}\\(`);
+    const start = consoleSource.search(pattern);
+    assert.ok(start >= 0, `Console function ${name} exists`);
+    const end = consoleSource.indexOf('\n        }', start);
+    assert.ok(end >= 0);
+    return consoleSource.slice(start, end + '\n        }'.length);
+}
+
+function availabilityFixture({ capability = true, enabled = true, statsMode = 'full' } = {}) {
+    let status = { enabled, battery_dispatch: capability };
+    let statusError = false;
+    let statsError = false;
+    const elements = new Map();
+    const context = {
+        controlEnabled: false,
+        controlIslandingAvailable: false,
+        available: false,
+        gatewayMeta: {}, window: {}, console: { log() {} },
+        document: { getElementById(id) {
+            if (!elements.has(id)) elements.set(id, { style: {}, textContent: '' });
+            return elements.get(id);
+        } },
+        updateIslandingControls() {},
+        loadControlValues: async () => {},
+        controlBatteryDispatch: { setAvailable(value) { context.available = value; } },
+        fetch: async url => ({
+            ok: url === '/control/status' ? !statusError : url === '/stats' ? !statsError : true,
+            status: 503,
+            json: async () => url === '/control/status' ? status : url === '/stats'
+                ? { tedapi: true, tedapi_mode: statsMode } : {},
+        }),
+    };
+    for (const name of ['loadAlerts', 'loadStrings', 'loadGridStatus', 'loadPowerwalls', 'loadGateways', 'loadMqtt', 'loadDailyEnergy']) {
+        context[name] = () => {};
+    }
+    vm.createContext(context);
+    vm.runInContext(['loadStats', 'loadControlStatus', 'refreshSecondaryData'].map(consoleFunction).join('\n'), context);
+    return {
+        context,
+        setStatus(value) { status = value; },
+        failStatus() { statusError = true; },
+        failStats() { statsError = true; },
+    };
+}
+
+for (const [capability, statsMode] of [[true, 'full'], [false, 'v1r']]) {
+    for (const statsFirst of [true, false]) {
+        test(`Console uses default capability ${capability} with aggregate ${statsMode}; stats first: ${statsFirst}`, async () => {
+            const f = availabilityFixture({ capability, statsMode });
+            const first = statsFirst ? 'loadStats' : 'loadControlStatus';
+            const second = statsFirst ? 'loadControlStatus' : 'loadStats';
+            await f.context[first]();
+            await f.context[second]();
+            assert.equal(f.context.available, capability);
+        });
+    }
+}
+
+test('secondary polling refreshes capabilities when the live connection changes', async () => {
+    const f = availabilityFixture({ statsMode: 'v1r' });
+    await f.context.loadControlStatus();
+    assert.equal(f.context.available, true);
+    f.setStatus({ enabled: true, battery_dispatch: false });
+    f.context.refreshSecondaryData();
+    await new Promise(setImmediate);
+    assert.equal(f.context.available, false);
+    f.setStatus({ enabled: true, battery_dispatch: true });
+    f.context.refreshSecondaryData();
+    await new Promise(setImmediate);
+    assert.equal(f.context.available, true);
+});
+
+test('unknown capability and disabled control hide dispatch', async () => {
+    const f = availabilityFixture();
+    f.setStatus({ enabled: true });
+    await f.context.loadControlStatus();
+    assert.equal(f.context.available, false);
+    f.setStatus({ enabled: false, battery_dispatch: true });
+    await f.context.loadControlStatus();
+    assert.equal(f.context.available, false);
+});
+
+test('status errors fail closed while aggregate stats errors do not hide valid controls', async () => {
+    const f = availabilityFixture();
+    await f.context.loadControlStatus();
+    f.failStats();
+    await f.context.loadStats();
+    assert.equal(f.context.available, true);
+    f.failStatus();
+    await f.context.loadControlStatus();
+    assert.equal(f.context.available, false);
+});
 
 function fixture(options = {}) {
     const elements = {};

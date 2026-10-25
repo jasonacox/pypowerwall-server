@@ -17,6 +17,12 @@
   [dispatch support](https://github.com/jasonacox/pypowerwall/issues/437);
   the published dependency pin stays unchanged until that library release.
 
+**Fixed:**
+- Battery Dispatch availability now follows the default gateway's live v1r
+  connection through `/control/status`, instead of aggregate `/stats` modes.
+  Mixed v1r/full-mode gateways no longer hide valid dispatch/resume controls
+  or expose them for the wrong gateway. Availability refreshes as connections change.
+
 ### [0.12.0] - 2026-10-19
 
 The server now answers the legacy proxy's API the way the proxy does, so a

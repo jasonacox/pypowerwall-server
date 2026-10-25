@@ -2865,7 +2865,6 @@
                 controlIslandingAvailable = stats.tedapi === true
                     && stats.tedapi_mode === 'v1r';
                 updateIslandingControls();
-                controlBatteryDispatch?.setAvailable(controlEnabled && controlIslandingAvailable);
 
                 // Site Name
                 const siteName = stats.site_name || 'My Powerwall';
@@ -3041,7 +3040,6 @@
             } catch (e) {
                 controlIslandingAvailable = false;
                 updateIslandingControls();
-                controlBatteryDispatch?.setAvailable(false);
                 console.log('Stats not available:', e.message);
             }
         }
@@ -4154,17 +4152,19 @@
 
         async function loadControlStatus() {
             const card = document.getElementById('control-card');
+            let dispatchAvailable = false;
             try {
                 const resp = await fetch('/control/status');
                 if (!resp.ok) throw new Error('status ' + resp.status);
                 const data = await resp.json();
                 controlEnabled = data.enabled === true;
+                dispatchAvailable = data.battery_dispatch === true;
             } catch (e) {
                 console.log('Control status not available:', e.message);
                 controlEnabled = false;
             }
             if (card) card.style.display = controlEnabled ? '' : 'none';
-            controlBatteryDispatch?.setAvailable(controlEnabled && controlIslandingAvailable);
+            controlBatteryDispatch?.setAvailable(controlEnabled && dispatchAvailable);
             if (controlEnabled) {
                 await loadControlValues();
             }
@@ -4739,7 +4739,9 @@
             loadAlerts();
             loadStrings();
             loadStats();
-            loadControlValues();
+            // Refresh default-gateway capabilities as live connections change.
+            // loadControlStatus also refreshes operation values when enabled.
+            loadControlStatus();
             loadGridStatus();
             loadPowerwalls();
             loadGateways();

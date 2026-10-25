@@ -563,7 +563,7 @@ def test_control_status_enabled_when_secret_set(control_client):
     """GET /control/status returns enabled=true without auth when secret is set."""
     response = control_client.get("/control/status")
     assert response.status_code == 200
-    assert response.json() == {"enabled": True}
+    assert response.json() == {"enabled": True, "battery_dispatch": False}
 
 
 def test_control_status_disabled_without_secret(client):
@@ -573,7 +573,7 @@ def test_control_status_disabled_without_secret(client):
     assert not settings.control_secret
     response = client.get("/control/status")
     assert response.status_code == 200
-    assert response.json() == {"enabled": False}
+    assert response.json() == {"enabled": False, "battery_dispatch": False}
 
 
 def test_control_status_leaks_no_secret(control_client):

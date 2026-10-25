@@ -25,7 +25,7 @@ Auth Routes (powerflow web app compatibility):
     - POST /api/login/Basic -> Fake login; sets long-lived AuthCookie/UserRecord
 
 Control Routes (require authentication, except status):
-    - GET /control/status -> Control availability (unauthenticated, {"enabled": bool})
+    - GET /control/status -> Control availability and default-gateway capabilities
     - POST /control/{path} -> Control operations (reserve, mode, etc.)
 
 Tesla Cloud Routes (server-only; not in the pypowerwall proxy):
@@ -201,17 +201,25 @@ def powerwall_unit_labels(
 
 
 @router.get("/control/status")
-async def control_status():
+async def control_status() -> Dict[str, bool]:
     """Control availability for the Console WebGUI (unauthenticated).
 
-    Returns only ``{"enabled": bool}`` derived from
-    ``settings.control_enabled`` (i.e. ``PW_CONTROL_SECRET`` is set).
-    Deliberately contains no secret and no gateway details because
-    ``/console`` and ``/stats`` are unauthenticated — the browser needs
-    to know *whether* to show the Control card without learning the token.
-    All actual writes stay behind ``verify_control_token``.
+    Reports whether control is enabled and whether the default gateway's live
+    connection supports battery dispatch. Only booleans are exposed, without
+    gateway I/O, credentials or identifiers. All writes remain authenticated.
     """
-    return {"enabled": settings.control_enabled}
+    enabled = settings.control_enabled
+    battery_dispatch = False
+    if enabled:
+        try:
+            # Use the same gateway selection and live-connection check as the
+            # dispatch endpoints. /stats aggregates modes across all gateways
+            # and can describe a different gateway in a multi-gateway setup.
+            battery_dispatch = _is_v1r(get_default_gateway())
+        except HTTPException:
+            # The Console must still load before any gateway is configured.
+            pass
+    return {"enabled": enabled, "battery_dispatch": battery_dispatch}
 
 
 # The proxy's control API (pypowerwall proxy/server.py), so proxy clients such

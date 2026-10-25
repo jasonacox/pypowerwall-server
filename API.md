@@ -333,7 +333,7 @@ for the request format and write path.
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
-| GET | `/control/status` | | `{"enabled"}`: whether `PW_CONTROL_SECRET` is set. |
+| GET | `/control/status` | | `{"enabled": bool, "battery_dispatch": bool}`: whether `PW_CONTROL_SECRET` is set and battery dispatch is available on the default gateway's live v1r connection. Both fields are booleans; no credentials or gateway identifiers are exposed. |
 | GET | `/control/reserve` | | `{"reserve"}`, as in the proxy. Error when control is off. |
 | GET | `/control/mode` | | `{"mode"}` (`"unknown"` when not known), as in the proxy. |
 | GET | `/control/grid_charging` | | `{"grid_charging": true \| false}`, as in the proxy. |
@@ -512,7 +512,9 @@ path above applies. Islanding is unaffected.
 The Console's **Powerwall Control → Battery Dispatch** panel provides charge /
 discharge selection, power in watts, duration in seconds, **Start dispatch**
 and **Resume normal operation**. It appears when control is enabled and the
-default gateway uses local v1r, and uses the shared authorization token. These
+default gateway uses local v1r, and uses the shared authorization token. Its
+availability follows `battery_dispatch` from `/control/status`, refreshed as
+live connections change, independently of other gateways' modes in `/stats`. These
 actions are independent of Save. The UI validates power and duration, prevents
 duplicate requests while a command is pending, and reports acknowledgements;
 the power flow shows actual battery power.

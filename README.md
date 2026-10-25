@@ -832,7 +832,9 @@ grid settings reflect the live state — there is no separate "Now:" readout —
 the user just changed stays highlighted until the next poll confirms the
 gateway applied it.
 Availability is checked via unauthenticated `GET /control/status`
-(`{"enabled": bool}`); current values come from `GET /api/operation` (which
+(`{"enabled": bool, "battery_dispatch": bool}`); `battery_dispatch` follows the
+default gateway's live v1r connection and is refreshed with the control values.
+Other gateways' modes do not affect it. Current values come from `GET /api/operation` (which
 also reports `grid_charging` and `grid_export`, `null` when unavailable e.g.
 TEDAPI-only without
 cloud). One Save

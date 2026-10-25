@@ -34,6 +34,97 @@ def post(client, action, data, form=False, token=TOKEN):
     )
 
 
+def _register_gateway(gateway_id, mode, cached_mode=None):
+    """Register live and cached modes independently, without gateway I/O."""
+    from app.core.gateway_manager import gateway_manager
+    from app.models.gateway import Gateway, GatewayStatus, PowerwallData
+
+    gateway = Gateway(id=gateway_id, name=gateway_id)
+    connection = Mock(tedapi_mode=mode)
+    connection.dispatch_battery_power.return_value = {
+        "power_watts": 500,
+        "duration_seconds": 30,
+    }
+    gateway_manager.gateways[gateway_id] = gateway
+    gateway_manager.connections[gateway_id] = connection
+    gateway_manager.cache[gateway_id] = GatewayStatus(
+        gateway=gateway,
+        data=PowerwallData(
+            connection_mode="TEDAPI",
+            tedapi_mode=cached_mode if cached_mode is not None else mode,
+        ),
+        online=True,
+    )
+    return connection
+
+
+@pytest.mark.parametrize(
+    "gateways,available",
+    [
+        ((("default", "v1r"), ("other", "full")), True),
+        ((("default", "full"), ("other", "v1r")), False),
+        ((("other", "full"), ("default", "v1r")), True),
+        ((("other", "v1r"), ("default", "full")), False),
+        ((("first", "v1r"), ("second", "full")), True),
+        ((("first", "full"), ("second", "v1r")), False),
+    ],
+)
+def test_dispatch_capability_matches_default_gateway_endpoint(
+    client, gateways, available
+):
+    connections = {
+        gateway_id: _register_gateway(gateway_id, mode) for gateway_id, mode in gateways
+    }
+    # Aggregate stats retain their established meaning: the last cached mode
+    # can differ from the default gateway's live connection used for writes.
+    assert client.get("/stats").json()["tedapi_mode"] == gateways[-1][1]
+    response = client.get("/control/status")
+    assert response.status_code == 200
+    assert response.json() == {"enabled": True, "battery_dispatch": available}
+    assert all(not connection.method_calls for connection in connections.values())
+
+    result = post(client, "dispatch", {"power_watts": 500, "duration_seconds": 30})
+    assert result.status_code == (200 if available else 503)
+    default_id = "default" if "default" in connections else gateways[0][0]
+    for gateway_id, connection in connections.items():
+        if available and gateway_id == default_id:
+            connection.dispatch_battery_power.assert_called_once_with(500, 30)
+        else:
+            connection.dispatch_battery_power.assert_not_called()
+
+
+def test_dispatch_capability_tracks_live_connection_instead_of_stale_cache(client):
+    connection = _register_gateway("default", "full", cached_mode="v1r")
+    assert client.get("/control/status").json()["battery_dispatch"] is False
+    connection.tedapi_mode = "v1r"
+    assert client.get("/control/status").json()["battery_dispatch"] is True
+    connection.tedapi_mode = "cloud"
+    assert client.get("/control/status").json()["battery_dispatch"] is False
+    assert not connection.method_calls
+
+
+def test_dispatch_capability_is_false_without_a_gateway_or_live_connection(client):
+    from app.core.gateway_manager import gateway_manager
+
+    assert client.get("/control/status").json() == {
+        "enabled": True,
+        "battery_dispatch": False,
+    }
+    _register_gateway("default", "v1r")
+    gateway_manager.connections.clear()
+    assert client.get("/control/status").json()["battery_dispatch"] is False
+
+
+def test_dispatch_capability_is_false_when_control_is_disabled(client, monkeypatch):
+    from app.config import settings
+
+    connection = _register_gateway("default", "v1r")
+    monkeypatch.setattr(settings, "control_secret", None)
+    response = client.get("/control/status")
+    assert response.json() == {"enabled": False, "battery_dispatch": False}
+    assert not connection.method_calls
+
+
 @pytest.mark.parametrize("form", [False, True])
 @pytest.mark.parametrize("watts", [-500, 500, 0, 12.5])
 def test_dispatch_and_resume_stay_local(
