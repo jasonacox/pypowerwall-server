@@ -8,20 +8,19 @@
 - Console **Battery Dispatch** panel for local v1r gateways: choose charge or
   discharge, power in watts and a duration, then start a timed dispatch or
   resume normal operation. Uses the shared control token, validates input,
-  prevents duplicate submissions and reports command acknowledgements.
+  prevents duplicate submissions and reports command acknowledgements. Discharge
+  requires confirmation that it can export despite the Grid Export setting and
+  drain below Backup Reserve, as observed on Powerwall 2. README/API.md record
+  the observed behavior and remaining validation gaps.
 - Authenticated `POST /control/dispatch` and `/control/resume`, accepting JSON
   and proxy-compatible form fields, for timed local battery power control via
   paired v1r RSA transport. Positive watts discharge, negative watts charge;
   duration is 1-86400 seconds. Always uses the local connection and shares the
-  gateway write lock, including across timeouts. Requires pypowerwall with
-  [dispatch support](https://github.com/jasonacox/pypowerwall/issues/437);
-  the published dependency pin stays unchanged until that library release.
-
-**Fixed:**
-- Battery Dispatch availability now follows the default gateway's live v1r
-  connection through `/control/status`, instead of aggregate `/stats` modes.
-  Mixed v1r/full-mode gateways no longer hide valid dispatch/resume controls
-  or expose them for the wrong gateway. Availability refreshes as connections change.
+  gateway write lock, including across timeouts. Requires pypowerwall 0.22.0
+  (release pending; testing images can use merged upstream source).
+- Battery Dispatch availability follows the default gateway's live v1r
+  connection through `/control/status`, including mixed multi-gateway setups,
+  and refreshes as connections change.
 
 ### [0.12.0] - 2026-10-19
 

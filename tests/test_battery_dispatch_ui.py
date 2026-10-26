@@ -19,6 +19,11 @@ def test_console_serves_accessible_dispatch_form_and_script(client):
     assert panel.find(id="control-dispatch-start")["type"] == "submit"
     assert panel.find(id="control-dispatch-resume")["type"] == "button"
     assert panel.find(id="control-dispatch-message")["aria-live"] == "polite"
+    assert "drain below your Backup Reserve" in panel.get_text()
+    control_script = next(
+        script.text for script in html.find_all("script") if "initControl()" in script.text
+    )
+    assert "confirmDialog," in control_script
     script = next(
         s["src"]
         for s in html.find_all("script", src=True)

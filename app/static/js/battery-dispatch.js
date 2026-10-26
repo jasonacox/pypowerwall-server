@@ -3,7 +3,7 @@
 (function () {
     'use strict';
 
-    function create({ getToken, rememberToken, onUnauthorized, post, errorText }) {
+    function create({ getToken, rememberToken, onUnauthorized, post, errorText, confirmDialog }) {
         const panel = document.getElementById('control-dispatch-section');
         const form = document.getElementById('control-dispatch-form');
         const power = document.getElementById('control-dispatch-power');
@@ -60,14 +60,26 @@
                 body = { power_watts: direction === 'charge' ? -watts : watts, duration_seconds: seconds };
             }
 
-            rememberToken(token);
             busy = true;
             update();
             const button = release ? resume : start;
             const label = button.textContent;
-            button.textContent = 'Sending…';
-            showMessage(release ? 'Requesting normal operation…' : 'Sending battery dispatch…', '');
             try {
+                if (!release && body.power_watts > 0) {
+                    const confirmed = await confirmDialog({
+                        title: 'Start battery discharge?',
+                        body: `Discharge at ${body.power_watts.toLocaleString()} W for ${body.duration_seconds} seconds? This can export electricity to the grid even when Grid Export is set to Solar Only or Never, and drain the battery below your Backup Reserve. Only continue if your utility permits export and you accept using your backup energy.`,
+                        confirmLabel: 'Start discharge',
+                        danger: true,
+                    });
+                    if (!confirmed || !available) {
+                        showMessage('Dispatch cancelled.', '');
+                        return;
+                    }
+                }
+                rememberToken(token);
+                button.textContent = 'Sending…';
+                showMessage(release ? 'Requesting normal operation…' : 'Sending battery dispatch…', '');
                 const { resp, payload } = await post(release ? 'resume' : 'dispatch', body, token);
                 if (!resp.ok || payload?.error || payload?.ERROR) {
                     if (resp.status === 401) onUnauthorized();

@@ -849,12 +849,31 @@ grid charging or export changed. Controls the default gateway.
 local v1r. Choose **Charge** or **Discharge**, enter power in watts and a duration
 from 1 to 86400 whole seconds, then select **Start dispatch**. Defaults are
 500 W for 30 seconds. **Resume normal operation** releases a dispatch early;
-these buttons act immediately and are independent of Save. Zero watts requests
-no battery power. Both actions use the same control token, disable while a
-request is pending, and report whether the request was acknowledged. Check the
-power flow for actual power: a full battery may not charge, and gateway limits
-still apply. The gateway returns to its configured mode when the duration ends.
-The installed pypowerwall must include the battery dispatch library methods.
+these actions are independent of Save. Starting a discharge opens a confirmation
+warning that it can export to the grid and drain below the backup reserve.
+Zero watts requests no battery power. Both actions use the same control token,
+disable while confirmation or a request is pending, and report whether the
+request was acknowledged. Check the power flow for actual power. The gateway
+returns to its configured mode when the duration ends. Requires pypowerwall
+0.22.0 (release pending); testing images may use the merged upstream source.
+
+> **Warning:** A discharge can override the backup reserve and grid-export
+> setting, export electricity to the grid, and drain below the backup reserve.
+> On Powerwall 2 with Backup Gateway 1 (firmware 26.34.0), discharge ran with
+> reserve at 100% and export set to `pv_only` or `never`, exported the excess,
+> and raised `BackfeedLimited` and `BatteryUnexpectedPower` alerts. Do not rely
+> on those settings to prevent export or protect backup energy during dispatch.
+> The Console asks for confirmation before a discharge; API clients must account
+> for this behavior themselves.
+
+Observed on Powerwall 3 (firmware 26.26.4, v1r LAN, export `battery_ok`):
+discharge beyond the home load exports to the grid, `0` W holds the battery
+idle while the home draws from the grid, and requests above 10,000 W are
+rejected (status code 11). Mode, reserve, grid-charging and export settings
+remain unchanged afterwards; unchanged settings do not mean dispatch obeys
+them. Not yet verified: charging (negative watts), behavior during a grid
+outage or with grid charging disabled, and reserve/export overrides on
+Powerwall 3. Use short durations and check actual battery and grid power.
 
 **Grid charging / export eligibility:** enabling grid charging, or moving grid
 export from *Never* to an exporting option, pops a confirmation dialog and has

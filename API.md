@@ -517,7 +517,9 @@ availability follows `battery_dispatch` from `/control/status`, refreshed as
 live connections change, independently of other gateways' modes in `/stats`. These
 actions are independent of Save. The UI validates power and duration, prevents
 duplicate requests while a command is pending, and reports acknowledgements;
-the power flow shows actual battery power.
+the power flow shows actual battery power. Before starting a discharge, the
+Console uses the same confirmation dialog as grid-export controls to warn
+about grid export and draining below the backup reserve.
 
 Dispatch takes `{"power_watts": -500, "duration_seconds": 30}` and an
 `Authorization: Bearer <PW_CONTROL_SECRET>` header. Resume takes `{}` with the
@@ -546,9 +548,27 @@ observe the polled `/aggregates` to check battery power. Bad input returns
 400; an unsupported connection, gateway rejection or timeout returns 503.
 JSON errors use `{"detail": ...}`; forms use the proxy's `{"error": ...}`
 and status 400. Both require `PW_CONTROL_SECRET`; an invalid token returns 401.
-The installed pypowerwall must include
-[battery dispatch support](https://github.com/jasonacox/pypowerwall/issues/437).
-An older library returns a command failure without falling back to cloud.
+Requires pypowerwall 0.22.0 (release pending); testing images may use the
+merged upstream source. An older library returns a command failure without
+falling back to cloud.
+
+> **Warning:** A discharge can override the backup reserve and grid-export
+> setting, export electricity to the grid, and drain below the backup reserve.
+> On Powerwall 2 with Backup Gateway 1 (firmware 26.34.0), discharge ran with
+> reserve at 100% and export set to `pv_only` or `never`, exported the excess,
+> and raised `BackfeedLimited` and `BatteryUnexpectedPower` alerts. Do not rely
+> on those settings to prevent export or protect backup energy during dispatch.
+> The Console asks for confirmation before a discharge; API clients must account
+> for this behavior themselves.
+
+Observed on Powerwall 3 (firmware 26.26.4, v1r LAN, export `battery_ok`):
+discharge beyond the home load exports to the grid, `0` W holds the battery
+idle while the home draws from the grid, and requests above 10,000 W are
+rejected (status code 11). Mode, reserve, grid-charging and export settings
+remain unchanged afterwards; unchanged settings do not mean dispatch obeys
+them. Not yet verified: charging (negative watts), behavior during a grid
+outage or with grid charging disabled, and reserve/export overrides on
+Powerwall 3. Use short durations and check actual battery and grid power.
 
 ### Islanding: `POST /control/islanding`
 

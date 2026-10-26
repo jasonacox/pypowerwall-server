@@ -2019,7 +2019,8 @@
                                 <input type="number" id="control-dispatch-duration" min="1" max="86400" step="1" value="30" inputmode="numeric" required disabled>
                             </div>
                         </div>
-                        <p class="control-hint">Returns to your configured mode when the duration ends. Set 0 W to request no battery power. Battery and gateway limits still apply; a full battery may not charge.</p>
+                        <p class="control-hint">Returns to your configured mode when the duration ends. Set 0 W to request no battery power. Charging is still being validated; a full battery may not charge.</p>
+                        <p class="control-hint">Warning: discharge can export to the grid despite your Grid Export setting and drain below your Backup Reserve. You must confirm before starting a discharge.</p>
                         <div class="control-dispatch-actions">
                             <button type="submit" class="control-btn primary" id="control-dispatch-start" disabled>Start dispatch</button>
                             <button type="button" class="control-btn" id="control-dispatch-resume" disabled>Resume normal operation</button>
@@ -3974,7 +3975,7 @@
         const TOKEN_INFO = 'This is the PW_CONTROL_SECRET value set on the server. Paste it here to authorize changes to Mode, Backup Reserve, Battery Dispatch, Grid Charging, Grid Export and Grid Islanding. Check "Remember" to store it in this browser for next time.';
 
         // Styled confirmation modal (native <dialog>) replacing window.confirm.
-        // Shared by islanding, grid charging and grid export. Resolves true
+        // Shared by islanding, battery discharge, grid charging and grid export. Resolves true
         // only on an explicit confirm click; ESC, backdrop click, and Cancel
         // all resolve false.
         const CONFIRM_ICON_WARNING = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
@@ -4491,6 +4492,7 @@
                 },
                 post: postControl,
                 errorText: controlErrorText,
+                confirmDialog,
             });
             const rememberBox = document.getElementById('control-remember');
             const slider = document.getElementById('control-reserve-slider');
