@@ -855,7 +855,7 @@ Zero watts requests no battery power. Both actions use the same control token,
 disable while confirmation or a request is pending, and report whether the
 request was acknowledged. Check the power flow for actual power. The gateway
 returns to its configured mode when the duration ends. Requires pypowerwall
-0.22.0 (release pending); testing images may use the merged upstream source.
+0.22.0 or later.
 
 > **Warning:** A discharge can override the backup reserve and grid-export
 > setting, export electricity to the grid, and drain below the backup reserve.

@@ -548,8 +548,7 @@ observe the polled `/aggregates` to check battery power. Bad input returns
 400; an unsupported connection, gateway rejection or timeout returns 503.
 JSON errors use `{"detail": ...}`; forms use the proxy's `{"error": ...}`
 and status 400. Both require `PW_CONTROL_SECRET`; an invalid token returns 401.
-Requires pypowerwall 0.22.0 (release pending); testing images may use the
-merged upstream source. An older library returns a command failure without
+Requires pypowerwall 0.22.0 or later. An older library returns a command failure without
 falling back to cloud.
 
 > **Warning:** A discharge can override the backup reserve and grid-export

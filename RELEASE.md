@@ -17,10 +17,14 @@
   paired v1r RSA transport. Positive watts discharge, negative watts charge;
   duration is 1-86400 seconds. Always uses the local connection and shares the
   gateway write lock, including across timeouts. Requires pypowerwall 0.22.0
-  (release pending; testing images can use merged upstream source).
+  or later.
 - Battery Dispatch availability follows the default gateway's live v1r
   connection through `/control/status`, including mixed multi-gateway setups,
   and refreshes as connections change.
+
+**Fixed:**
+- Upgrade pypowerwall to 0.22.1, including the signed Wi-Fi v1r native-read
+  failover fix and the released battery dispatch methods (pypowerwall #445).
 
 ### [0.12.0] - 2026-10-19
 
