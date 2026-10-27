@@ -2,33 +2,56 @@
 
 ## Version History
 
-### [0.13.0] - Upcoming
+### [0.13.0] - 2026-10-26
+
+Local battery dispatch from the API and the Console, a FleetAPI HTTP/1.1
+setting, MQTT grid voltage and current, and pypowerwall 0.22.1. No existing
+behavior changes.
 
 **Added:**
-- Console **Battery Dispatch** panel for local v1r gateways: choose charge or
-  discharge, power in watts and a duration, then start a timed dispatch or
-  resume normal operation. Uses the shared control token, validates input,
-  prevents duplicate submissions and reports command acknowledgements. Discharge
-  requires confirmation that it can export despite the Grid Export setting and
-  drain below Backup Reserve, as observed on Powerwall 2. README/API.md record
-  the observed behavior and remaining validation gaps.
-- Authenticated `POST /control/dispatch` and `/control/resume`, accepting JSON
-  and proxy-compatible form fields, for timed local battery power control via
-  paired v1r RSA transport. Positive watts discharge, negative watts charge;
-  duration is 1-86400 seconds. Always uses the local connection and shares the
-  gateway write lock, including across timeouts. Requires pypowerwall 0.22.0
-  or later.
-- Battery Dispatch availability follows the default gateway's live v1r
-  connection through `/control/status`, including mixed multi-gateway setups,
-  and refreshes as connections change.
-- **`PW_FLEETAPI_HTTP` setting** - `1.1` forces HTTP/1.1 for all Tesla FleetAPI requests (default: HTTP/2), an escape hatch for the intermittent HTTP/2 connection-reuse errors (`COMPRESSION_ERROR`, h2 state errors) seen on some sites. pypowerwall 0.22.1 reads it (jasonacox/pypowerwall#436). `/stats` reports it under `config`, as the proxy does.
-- **MQTT grid voltage and current** - `{prefix}/{gw}/grid_voltage` (V) and `{prefix}/{gw}/grid_current` (A) from the site CT averages in `/api/meters/aggregates`, also in the `status` JSON, with Home Assistant Grid Voltage and Grid Current sensors. No new gateway requests. A gateway that doesn't report a value gets neither the topic nor the entity. On TEDAPI the current is grid power divided by voltage, so it is signed like grid power (negative = exporting); the Powerwall 2 local API passes through the gateway's value. (#179, #177)
+- **Local battery dispatch** - authenticated `POST /control/dispatch`
+  (`power_watts`, `duration_seconds`) and `POST /control/resume`, JSON or the
+  proxy's form fields, for timed battery power over the local v1r connection.
+  Positive watts discharge, negative watts charge; durations are 1-86400
+  seconds, and the gateway returns to its configured mode when one ends. Always
+  local, even in hybrid cloud mode, and serialized with every other write
+  under the gateway write lock, including across timeouts. `/control/status`
+  gains `battery_dispatch` (the default gateway's live v1r connection, no
+  gateway I/O). The Console's Control card gets a **Battery Dispatch** panel
+  that asks for confirmation before a discharge. **A dispatch overrides the
+  backup reserve and the export setting:** on a Powerwall 2 (Backup Gateway 1)
+  a discharge with the reserve at 100% and export `pv_only`/`never` still ran
+  and exported. Validated on Powerwall 2 through this server (discharge,
+  charge throttling, `0` W hold, resume) and on Powerwall 3 through
+  pypowerwall; README/API.md list what isn't verified yet. Thanks
+  @longzheng, tested by @BJReplay. (#180)
+- **`PW_FLEETAPI_HTTP` setting** - `1.1` forces HTTP/1.1 for all Tesla
+  FleetAPI requests (default: HTTP/2), an escape hatch for the intermittent
+  HTTP/2 connection-reuse errors (`COMPRESSION_ERROR`, h2 state errors) seen on
+  some sites (jasonacox/pypowerwall#436). `/stats` reports it under `config`,
+  as the proxy does. Thanks @jasonacox-sam. (#181)
+- **MQTT grid voltage and current** - `{prefix}/{gw}/grid_voltage` (V) and
+  `{prefix}/{gw}/grid_current` (A) from the site CT averages in
+  `/api/meters/aggregates`, also in the `status` JSON, with Home Assistant
+  Grid Voltage and Grid Current sensors. No new gateway requests. A gateway
+  that doesn't report a value gets neither the topic nor the entity. On TEDAPI
+  the current is grid power divided by voltage, so it is signed like grid power
+  (negative = exporting); the Powerwall 2 local API passes through the
+  gateway's value. Thanks @jasonacox-sam, requested by @ChrisJ60. (#179, #177)
 
 **Changed:**
-- **pypowerwall upgraded to 0.22.1** (from 0.21.0; `requirements.txt` pin and `pyproject.toml` minimum). Library changes that reach server users:
-  - The battery dispatch methods the endpoints above use (jasonacox/pypowerwall#440).
-  - TEDAPI `/api/system_status` on Powerwall 2 fills `instantaneous_max_charge_power` and `instantaneous_max_discharge_power`, which were `0`, and `/vitals` `TEPOD--` blocks carry `POD_available_charge_power` and `POD_available_dischg_power` (jasonacox/pypowerwall#429).
-  - FleetAPI: concurrent identical requests share one in-flight request, and Tesla's 429 retry guidance opens a shared backoff window instead of a request storm (jasonacox/pypowerwall#436).
+- **pypowerwall upgraded to 0.22.1** (from 0.21.0; `requirements.txt` pin and
+  `pyproject.toml` minimum). Library changes that reach server users:
+  - The battery dispatch methods the endpoints above use
+    (jasonacox/pypowerwall#440).
+  - TEDAPI `/api/system_status` on Powerwall 2 fills
+    `instantaneous_max_charge_power` and `instantaneous_max_discharge_power`,
+    which were `0`, and `/vitals` `TEPOD--` blocks carry
+    `POD_available_charge_power` and `POD_available_dischg_power`
+    (jasonacox/pypowerwall#429).
+  - FleetAPI: concurrent identical requests share one in-flight request, and
+    Tesla's 429 retry guidance opens a shared backoff window instead of a
+    request storm (jasonacox/pypowerwall#436).
 
 ### [0.12.0] - 2026-10-19
 
