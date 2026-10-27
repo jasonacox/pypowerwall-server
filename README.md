@@ -658,8 +658,23 @@ By default MQTT only publishes. Set `MQTT_CONTROLS` to let Home Assistant (or an
 | `4` | Grid charging | switch |
 | `8` | Grid export (`battery_ok`, `pv_only`, `never`) | select |
 | `16` | Go off grid / reconnect (TEDAPI v1r only) | two buttons |
+| `32` | Timed battery dispatch / resume (TEDAPI v1r only) | power and duration numbers, Start and Resume buttons |
 
-For example `MQTT_CONTROLS=15` enables everything except going off grid, which needs its own `16` (`31` = all). Controls also need `PW_CONTROL_SECRET`, `MQTT_USERNAME` and `MQTT_PASSWORD`; the log says which one is missing. Home Assistant only gets the controls your connection can run: reserve, mode and the grid settings need cloud, FleetAPI, hybrid cloud or TEDAPI v1r, and going off grid needs v1r.
+For example `MQTT_CONTROLS=15` enables reserve, mode and the grid settings;
+`31` also enables islanding. Battery dispatch needs its own `32` (`63` = all),
+so existing masks do not enable it on upgrade. Controls also need
+`PW_CONTROL_SECRET`, `MQTT_USERNAME` and `MQTT_PASSWORD`; the log says which one
+is missing. Home Assistant only gets the controls your connection can run:
+reserve, mode and the grid settings need cloud, FleetAPI, hybrid cloud or TEDAPI
+v1r, and islanding and dispatch need v1r.
+
+With bit `32`, set **Dispatch Power (positive discharges)** and **Dispatch
+Duration**, then press **Start Battery Dispatch**. Changing either input only
+prepares the next command. **Resume Battery Operation** releases it early.
+Discharge can export despite Grid Export settings and drain below Backup
+Reserve; pressing Start acknowledges these risks. See
+[MQTT battery dispatch](MQTT.md#battery-dispatch-bit-32) for details and atomic
+commands for automations.
 
 > **Secure your broker first.** The control secret is never sent over MQTT: anyone who can publish to `{MQTT_TOPIC_PREFIX}/+/control/#` (default prefix `pypowerwall`) on your broker can change these settings. Turn off anonymous access and limit who can publish to the control topics — see [Securing the broker](MQTT.md#securing-the-broker-required-for-controls) for a Mosquitto example. Topics, payloads and rules are in [MQTT.md](MQTT.md#control-command-topics-opt-in-mqtt_controls).
 

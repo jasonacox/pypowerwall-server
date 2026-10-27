@@ -166,7 +166,7 @@ services:
 | `MQTT_HA_PREFIX` | `homeassistant` | Home Assistant discovery prefix |
 | `MQTT_CLIENT_ID` | `pypowerwall-server` | MQTT client identifier |
 | `MQTT_KEEPALIVE` | `60` | Connection keepalive in seconds |
-| `MQTT_CONTROLS` | `0` | Opt-in Home Assistant controls: `1` reserve, `2` mode, `4` grid charging, `8` grid export, `16` go off grid / reconnect (v1r only). Add them up, e.g. `15`. `0` = monitoring only. **Use at your own risk:** read the warning in [Controls](#controls-optional) first |
+| `MQTT_CONTROLS` | `0` | Opt-in Home Assistant controls: `1` reserve, `2` mode, `4` grid charging, `8` grid export, `16` go off grid / reconnect, `32` battery dispatch / resume (the last two need v1r). Add them up, e.g. `15`; `63` = all. Existing `15`/`31` masks do not enable dispatch. `0` = monitoring only. **Use at your own risk:** read the warning in [Controls](#controls-optional) first |
 
 ---
 
@@ -475,7 +475,7 @@ pypowerwall-server can also take commands from Home Assistant: backup reserve, o
 
 1. Secure the broker: no anonymous clients, and only Home Assistant and pypowerwall-server itself may publish to `{MQTT_TOPIC_PREFIX}/+/control/+/set` (default prefix `pypowerwall`). pypowerwall-server needs that write access to clear retained commands. [MQTT.md](../MQTT.md#securing-the-broker-required-for-controls) has a Mosquitto example.
 2. Give pypowerwall-server its own broker login (`MQTT_USERNAME` / `MQTT_PASSWORD`) and set `PW_CONTROL_SECRET`.
-3. Set `MQTT_CONTROLS`, e.g. `15` for everything except going off grid, and restart.
+3. Set `MQTT_CONTROLS`, e.g. `15` for reserve, mode and grid settings, and restart.
 
 The controls appear on the Powerwall device: **Backup Reserve Control**, **Operation Mode Control**, **Grid Charging Control**, **Grid Export Control**, and with `16` on a TEDAPI v1r connection the **Go Off Grid** / **Reconnect Grid** buttons. Only controls your connection can run are shown. Every command is logged by pypowerwall-server with the gateway, value and connection used. Example automation:
 
@@ -492,6 +492,15 @@ action:
     data:
       value: 80
 ```
+
+Add bit `32` for local v1r battery dispatch (`47` = value controls plus dispatch,
+`63` = all). Home Assistant adds **Dispatch Power (positive discharges)**,
+**Dispatch Duration**, **Start Battery Dispatch** and **Resume Battery
+Operation**. Input changes only prepare a command; Start sends it. Discharge
+can export despite Grid Export settings and drain below Backup Reserve;
+pressing Start acknowledges these risks. For defaults, atomic automation
+payloads and the difference between prepared inputs and actual battery power,
+see [MQTT battery dispatch](../MQTT.md#battery-dispatch-bit-32).
 
 #### Troubleshooting
 

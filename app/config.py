@@ -265,7 +265,8 @@ MQTT_CONTROL_MODE = 2
 MQTT_CONTROL_GRID_CHARGING = 4
 MQTT_CONTROL_GRID_EXPORT = 8
 MQTT_CONTROL_ISLANDING = 16
-MQTT_CONTROLS_ALL = 31
+MQTT_CONTROL_DISPATCH = 32
+MQTT_CONTROLS_ALL = 63
 MQTT_CONTROL_BITS = {
     "reserve": MQTT_CONTROL_RESERVE,
     "reserve_hold": MQTT_CONTROL_RESERVE,
@@ -273,10 +274,16 @@ MQTT_CONTROL_BITS = {
     "grid_charging": MQTT_CONTROL_GRID_CHARGING,
     "grid_export": MQTT_CONTROL_GRID_EXPORT,
     "islanding": MQTT_CONTROL_ISLANDING,
+    "dispatch": MQTT_CONTROL_DISPATCH,
+    "dispatch_power": MQTT_CONTROL_DISPATCH,
+    "dispatch_duration": MQTT_CONTROL_DISPATCH,
+    "resume": MQTT_CONTROL_DISPATCH,
 }
-# reserve_hold shares Bit 1; Bit 1 logs as "reserve".
+# Each bit logs once, even when it enables several commands/entities.
 _MQTT_CONTROL_NAMES = {
-    bit: name for name, bit in MQTT_CONTROL_BITS.items() if name != "reserve_hold"
+    bit: name
+    for name, bit in MQTT_CONTROL_BITS.items()
+    if name not in ("reserve_hold", "dispatch_power", "dispatch_duration", "resume")
 }
 
 
@@ -459,8 +466,9 @@ class Settings(BaseSettings):
     mqtt_controls: int = Field(
         default=0, alias="MQTT_CONTROLS"
     )  # Bitmask opt-in for MQTT controls (0 = monitoring only; 1 reserve,
-    # 2 mode, 4 grid_charging, 8 grid_export, 16 islanding; e.g. 15 = all
-    # but islanding, 31 = all). Islanding needs its own explicit bit.
+    # 2 mode, 4 grid_charging, 8 grid_export, 16 islanding, 32 dispatch;
+    # 15 = value controls, 31 = value controls + islanding, 63 = all).
+    # Islanding and battery dispatch each need their own explicit bit.
 
     @field_validator("*", mode="before")
     @classmethod
@@ -508,7 +516,7 @@ class Settings(BaseSettings):
     @field_validator("mqtt_controls", mode="before")
     @classmethod
     def _parse_control_bits(cls, v) -> int:
-        """Fail closed: anything but an integer 0-31 means monitoring only.
+        """Fail closed: anything but an integer 0-63 means monitoring only.
 
         An invalid value must neither stop the server (monitoring keeps
         running) nor enable controls the user didn't spell out.

@@ -43,6 +43,7 @@ VALUE_CONTROLS = [
     "reserve_hold",
 ]
 ISLANDING = ["go_off_grid", "reconnect_grid"]
+DISPATCH = ["dispatch", "dispatch_duration", "dispatch_power", "resume"]
 
 
 def _status(gateway, tedapi_mode):
@@ -142,13 +143,25 @@ def calls(mock):
 # --- Configuration -----------------------------------------------------------
 
 
-@pytest.mark.parametrize("raw, expected", [
-    ("15", 15), (" 31 ", 31), ("0", 0), ("", 0),
-    ("reserve,mode", 0), ("48", 0), ("-1", 0), ("3.5", 0), ("32", 0),
-])
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("15", 15),
+        (" 31 ", 31),
+        ("0", 0),
+        ("", 0),
+        ("32", 32),
+        ("48", 48),
+        ("63", 63),
+        ("reserve,mode", 0),
+        ("80", 0),
+        ("64", 0),
+        ("-1", 0),
+        ("3.5", 0),
+    ],
+)
 def test_mqtt_controls_fails_closed(monkeypatch, caplog, raw, expected):
-    """Anything but an integer 0-31 means monitoring only, without stopping
-    the server (48 = 16 + an invalid bit must not enable islanding)."""
+    """Unknown bits fail closed without stopping monitoring (80 includes 64)."""
     from app.config import Settings
 
     monkeypatch.setenv("MQTT_CONTROLS", raw)
@@ -200,7 +213,14 @@ def test_discovery_follows_bits_and_capability():
 
 def test_control_config_topics_cover_every_control_entity():
     payloads = build_discovery_payloads(
-        "home", "Home", "pypowerwall", "homeassistant", controls=31, writable=True, is_v1r=True
+        "home",
+        "Home",
+        "pypowerwall",
+        "homeassistant",
+        controls=63,
+        writable=True,
+        is_v1r=True,
+        can_dispatch=True,
     )
     control_topics = {t for t, p in payloads if "/control/" in json.loads(p).get("command_topic", "")}
     assert control_topics == set(control_config_topics("home", "homeassistant"))
@@ -275,7 +295,7 @@ async def test_discovery_clears_controls_it_does_not_announce(env, gm, monkeypat
     monkeypatch.setattr(settings, "mqtt_controls", 0)
     announced, cleared = await _discover(["v1r"])
     assert announced == {}
-    assert cleared == {"v1r": sorted(VALUE_CONTROLS + ISLANDING)}
+    assert cleared == {"v1r": sorted(VALUE_CONTROLS + ISLANDING + DISPATCH)}
 
 
 @pytest.mark.asyncio
@@ -603,6 +623,312 @@ async def test_unexpected_error_is_contained(env, gm, caplog):
 # --- Control loop: bursts, retained commands, message safety -------------------
 
 
+@pytest.fixture
+def dispatch_env(env, gm, monkeypatch):
+    """Enable only dispatch, with independent live and cached transports."""
+    monkeypatch.setattr(settings, "mqtt_controls", 32)
+    for gateway_id, (_, mode) in GATEWAYS.items():
+        gm.connections[gateway_id] = MagicMock(tedapi_mode=mode)
+    return env
+
+
+def test_dispatch_bit_names_and_legacy_masks(env, monkeypatch) -> None:
+    for mask in (0, 15, 31):
+        monkeypatch.setattr(settings, "mqtt_controls", mask)
+        assert all(not settings.mqtt_control_allowed(name) for name in DISPATCH)
+    monkeypatch.setattr(settings, "mqtt_controls", 32)
+    assert settings.mqtt_control_names() == ["dispatch"]
+    assert all(settings.mqtt_control_allowed(name) for name in DISPATCH)
+    assert not settings.mqtt_control_allowed("reserve")
+
+
+def test_dispatch_discovery_payloads() -> None:
+    assert _announced(controls=32, is_v1r=True) == []
+    assert _announced(controls=31, can_dispatch=True, writable=True) == VALUE_CONTROLS
+    assert _announced(controls=32, can_dispatch=True) == DISPATCH
+    payloads = dict(
+        build_discovery_payloads(
+            "home", "Home", "custom/powerwall", "ha", controls=32, can_dispatch=True
+        )
+    )
+    for suffix, minimum, maximum, unit in (
+        ("dispatch_power", -100000, 100000, "W"),
+        ("dispatch_duration", 1, 86400, "s"),
+    ):
+        entity = json.loads(payloads[f"ha/number/pypowerwall_home_{suffix}/config"])
+        assert entity["command_topic"] == f"custom/powerwall/home/control/{suffix}/set"
+        assert entity["state_topic"] == f"custom/powerwall/home/{suffix}"
+        assert (entity["min"], entity["max"], entity["step"]) == (minimum, maximum, 1)
+        assert entity["unit_of_measurement"] == unit
+        assert entity["mode"] == "box"
+        assert not entity.get("retain", False)
+    start = json.loads(payloads["ha/button/pypowerwall_home_dispatch/config"])
+    resume = json.loads(payloads["ha/button/pypowerwall_home_resume/config"])
+    assert json.loads(start["payload_press"]) == {"confirm": True}
+    assert json.loads(resume["payload_press"]) == {}
+    assert start["availability_mode"] == "all" and len(start["availability"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_dispatch_discovery_tracks_live_connection(dispatch_env, gm) -> None:
+    # Cached v1r alone is insufficient; live v1r works even with a stale cache.
+    gm.connections["v1r"].tedapi_mode = "full"
+    gm.connections["hybrid"].tedapi_mode = "v1r"
+    announced, _ = await _discover(GATEWAYS)
+    assert announced == {"hybrid": DISPATCH}
+    gm.connections.clear()
+    announced, _ = await _discover(GATEWAYS)
+    assert announced == {}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_discovery_refires_and_clears_on_capability_loss(
+    dispatch_env, gm
+) -> None:
+    pub = MqttPublisher()
+    pub._client = AsyncMock()
+    pub._connected = True
+    connection = gm.connections["v1r"]
+    for mode, present in (("full", False), ("v1r", True), (None, False)):
+        pub._client.reset_mock()
+        connection.tedapi_mode = mode
+        await pub.publish_gateway("v1r", gm.get_gateway("v1r"))
+        topic = "homeassistant/button/pypowerwall_v1r_dispatch/config"
+        published = [
+            c.args[1] for c in pub._client.publish.call_args_list if c.args[0] == topic
+        ]
+        assert len(published) == 1 and bool(published[0]) is present
+    pub._client.reset_mock()
+    connection.tedapi_mode = "v1r"
+    await pub.publish_gateway("v1r", gm.get_gateway("v1r"))
+    states = {c.args[0]: c.args[1] for c in pub._client.publish.call_args_list}
+    assert states["pypowerwall/v1r/dispatch_power"] == "-500"
+    assert states["pypowerwall/v1r/dispatch_duration"] == "30"
+
+
+@pytest.mark.parametrize(
+    "watts,seconds", [(-500, 30), (500, 1), (0, 86400), (12.5, 60)]
+)
+@pytest.mark.asyncio
+async def test_mqtt_dispatch_and_resume_stay_local(
+    dispatch_env, gm, monkeypatch, watts, seconds, caplog
+) -> None:
+    # A bound hybrid cloud connection and local-first policy cannot reroute it.
+    monkeypatch.setattr(settings, "local_first", True)
+    monkeypatch.setattr(settings, "timeout", 12)
+    gm.connections["hybrid"].tedapi_mode = "v1r"
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await run_commands(
+            cmd(
+                "hybrid",
+                "dispatch",
+                {
+                    "power_watts": watts,
+                    "duration_seconds": seconds,
+                    "confirm": True,
+                },
+            ),
+            cmd("hybrid", "resume", {}),
+        )
+    assert calls(gm.local_control) == [
+        (("hybrid", "dispatch_battery_power", watts, seconds), {"timeout": 17.0}),
+        (("hybrid", "resume_battery_operation"), {"timeout": 17.0}),
+    ]
+    gm.cloud_control.assert_not_awaited()
+    assert "acknowledged" in caplog.text and "check actual battery power" in caplog.text
+    assert "applied" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"confirm": False},
+        {"confirm": "true"},
+        {"confirm": True, "power_watts": 500},
+        {"confirm": True, "duration_seconds": 30},
+        {"confirm": True, "power_watts": "500", "duration_seconds": 30},
+        {"confirm": True, "power_watts": True, "duration_seconds": 30},
+        {"confirm": True, "power_watts": float("nan"), "duration_seconds": 30},
+        {"confirm": True, "power_watts": float("inf"), "duration_seconds": 30},
+        {"confirm": True, "power_watts": 10**400, "duration_seconds": 30},
+        {"confirm": True, "power_watts": 0, "duration_seconds": True},
+        {"confirm": True, "power_watts": 0, "duration_seconds": 30.0},
+        {"confirm": True, "power_watts": 0, "duration_seconds": "30"},
+        {"confirm": True, "power_watts": 0, "duration_seconds": 0},
+        {"confirm": True, "power_watts": 0, "duration_seconds": 86401},
+        {"confirm": True, "duration": 30},
+    ],
+)
+@pytest.mark.asyncio
+async def test_mqtt_dispatch_rejects_invalid_parameters(
+    dispatch_env, gm, payload, caplog
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        await run_commands(cmd("v1r", "dispatch", payload))
+    gm.local_control.assert_not_awaited()
+    assert "rejected:" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "control,payload",
+    [
+        ("dispatch", {"confirm": True}),
+        ("resume", {}),
+        ("dispatch_power", {"value": 500}),
+        ("dispatch_duration", {"value": 60}),
+    ],
+)
+@pytest.mark.parametrize("mode", [None, "full", "cloud", "missing"])
+@pytest.mark.asyncio
+async def test_mqtt_dispatch_requires_live_v1r(
+    dispatch_env, gm, control, payload, mode, caplog
+) -> None:
+    if mode == "missing":
+        del gm.connections["v1r"]
+    else:
+        gm.connections["v1r"].tedapi_mode = mode
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        await run_commands(cmd("v1r", control, payload))
+    gm.local_control.assert_not_awaited()
+    gm.cloud_control.assert_not_awaited()
+    assert "no confirmed live v1r transport" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "control,payload",
+    [
+        ("dispatch", {"confirm": True}),
+        ("resume", {}),
+        ("dispatch_power", {"value": 500}),
+        ("dispatch_duration", {"value": 60}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_mqtt_dispatch_requires_its_own_bit(
+    env, gm, control, payload, caplog
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        await run_commands(cmd("v1r", control, payload))
+    gm.local_control.assert_not_awaited()
+    assert "bit not set" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_dispatch_prepared_inputs_are_isolated_and_only_start_on_command(
+    dispatch_env, gm
+) -> None:
+    pub = MqttPublisher()
+    pub._connected = True
+    pub._client = AsyncMock()
+
+    async def send(gateway: str, control: str, payload: dict) -> None:
+        topic, data, _ = cmd(gateway, control, payload)
+        await pub._handle_control_message(topic, json.dumps(data).encode())
+
+    gm.connections["hybrid"].tedapi_mode = "v1r"
+    await send("v1r", "dispatch_power", {"value": 1200})
+    await send("v1r", "dispatch_duration", {"value": 120})
+    gm.local_control.assert_not_awaited()
+    pub._discovery_sent.clear()  # A broker reconnect must not reset prepared inputs.
+    await send("v1r", "dispatch", {"confirm": True})
+    await send("hybrid", "dispatch", {"confirm": True})
+    assert [c.args for c in gm.local_control.call_args_list] == [
+        ("v1r", "dispatch_battery_power", 1200, 120),
+        ("hybrid", "dispatch_battery_power", -500, 30),
+    ]
+    states = {c.args[0]: c.args[1] for c in pub._client.publish.call_args_list}
+    assert states["pypowerwall/v1r/dispatch_power"] == "1200"
+    assert states["pypowerwall/v1r/dispatch_duration"] == "120"
+    assert MqttPublisher()._dispatch_parameters == {}  # Restart resets the inputs.
+
+
+@pytest.mark.parametrize(
+    "control,value",
+    [
+        ("dispatch_power", True),
+        ("dispatch_power", "500"),
+        ("dispatch_power", float("inf")),
+        ("dispatch_power", None),
+        ("dispatch_duration", 0),
+        ("dispatch_duration", 86401),
+        ("dispatch_duration", True),
+        ("dispatch_duration", 30.0),
+    ],
+)
+@pytest.mark.asyncio
+async def test_invalid_dispatch_inputs_do_not_change_prepared_values(
+    dispatch_env, gm, control, value
+) -> None:
+    pub = MqttPublisher()
+    topic, data, _ = cmd("v1r", control, {"value": value})
+    await pub._handle_control_message(topic, json.dumps(data).encode())
+    assert pub._dispatch_parameters == {}
+    gm.local_control.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "result", [None, False, {}, [], {"error": "x"}, {"ERROR": "x"}]
+)
+@pytest.mark.asyncio
+async def test_dispatch_failure_is_not_acknowledged(
+    dispatch_env, gm, result, caplog
+) -> None:
+    gm.local_control.return_value = result
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await run_commands(cmd("v1r", "dispatch", {"confirm": True}))
+    assert gm.local_control.await_count == 1
+    gm.cloud_control.assert_not_awaited()
+    assert "failed" in caplog.text and "acknowledged" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_dispatch_retained_messages_and_bursts(dispatch_env, gm) -> None:
+    # The final command per topic wins, while dispatch/resume ordering is kept.
+    await run_commands(
+        cmd(
+            "v1r",
+            "dispatch",
+            {"confirm": True, "power_watts": 500, "duration_seconds": 1},
+        ),
+        cmd("v1r", "resume", {}),
+        cmd(
+            "v1r",
+            "dispatch",
+            {"confirm": True, "power_watts": -500, "duration_seconds": 30},
+        ),
+    )
+    assert [c.args for c in gm.local_control.call_args_list] == [
+        ("v1r", "resume_battery_operation"),
+        ("v1r", "dispatch_battery_power", -500, 30),
+    ]
+    gm.local_control.reset_mock()
+    client = await run_commands(
+        cmd("v1r", "dispatch", {"confirm": True}, retain=True),
+        cmd("v1r", "resume", {}, retain=True),
+        cmd("v1r", "dispatch_power", {"value": 500}, retain=True),
+    )
+    gm.local_control.assert_not_awaited()
+    assert len(client.published) == 3
+    assert all(payload == b"" and retained for _, payload, retained in client.published)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_invalid_resume_and_worker_failure_do_not_stop_loop(
+    dispatch_env, gm, caplog
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        await run_commands(cmd("v1r", "resume", {"value": "resume"}))
+        gm.local_control.assert_not_awaited()
+        gm.local_control.side_effect = [RuntimeError("worker failed"), {"ok": True}]
+        await run_commands(
+            cmd("v1r", "dispatch", {"confirm": True}), cmd("v1r", "resume", {})
+        )
+    assert gm.local_control.await_count == 2
+    assert "worker failed" in caplog.text
+    assert "resume requires an empty JSON object" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_burst_collapses_to_latest_per_topic(env, gm):
     await run_commands(*(cmd("cloud", "reserve", {"value": v}) for v in range(50)))
@@ -722,8 +1048,18 @@ async def test_says_why_controls_are_off(env, monkeypatch, caplog, missing):
     assert len(warnings) == 1 and warnings[0].endswith(f"set {env_name}")
 
 
+@pytest.mark.parametrize(
+    "mask,names,warning",
+    [
+        (31, "reserve, mode, grid_charging, grid_export, islanding", "MQTT ISLANDING"),
+        (32, "dispatch", "MQTT BATTERY DISPATCH"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_startup_names_enabled_controls_and_warns_on_islanding(env, monkeypatch, caplog):
+async def test_startup_names_enabled_controls_and_warns_on_islanding(
+    env, monkeypatch, caplog, mask, names, warning
+):
+    monkeypatch.setattr(settings, "mqtt_controls", mask)
     monkeypatch.setattr(settings, "mqtt_topic_prefix", "home")
     pub = MqttPublisher()
 
@@ -734,7 +1070,8 @@ async def test_startup_names_enabled_controls_and_warns_on_islanding(env, monkey
     _fake_aiomqtt(monkeypatch, enter)
     with caplog.at_level(logging.INFO, logger=LOGGER):
         await asyncio.wait_for(pub._connection_loop(), timeout=5)
-    assert "enabled: reserve, mode, grid_charging, grid_export, islanding" in caplog.text
+    assert f"enabled: {names}" in caplog.text
+    assert warning in caplog.text
     assert "ACL home/+/control/#" in caplog.text
 
 

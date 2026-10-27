@@ -5,6 +5,12 @@
 ### [0.13.0] - Upcoming
 
 **Added:**
+- MQTT battery dispatch and resume with a separate `MQTT_CONTROLS` bit `32`:
+  Home Assistant gets prepared power/duration inputs and Start/Resume buttons;
+  automations can send an atomic power/duration command. Dispatch requires
+  `confirm:true`, uses the gateway's live local v1r connection and shares the
+  HTTP write lock, including across timeouts. Existing masks remain unchanged;
+  `63` enables all controls. Retained commands are ignored and cleared.
 - Console **Battery Dispatch** panel for local v1r gateways: choose charge or
   discharge, power in watts and a duration, then start a timed dispatch or
   resume normal operation. Uses the shared control token, validates input,

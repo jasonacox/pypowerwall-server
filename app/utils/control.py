@@ -1,6 +1,21 @@
 """Control helpers shared by the HTTP API, the MQTT controls and the gateway
 manager (kept here so none of them imports another's module for them)."""
+import math
 from typing import Any
+
+
+def valid_dispatch_parameters(watts: object, seconds: object) -> bool:
+    """Validate the shared HTTP/MQTT battery dispatch parameters."""
+    try:
+        return (
+            isinstance(watts, (int, float))
+            and not isinstance(watts, bool)
+            and math.isfinite(watts)
+            and type(seconds) is int
+            and 1 <= seconds <= 86400
+        )
+    except OverflowError:
+        return False
 
 
 def is_error_result(result: object) -> bool:
