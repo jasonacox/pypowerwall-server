@@ -402,3 +402,12 @@ def test_startup_warns_when_dispatch_is_opted_in(
         assert any(expected in m for m in messages)
     else:
         assert not messages
+
+
+def test_lifespan_stays_an_async_context_manager():
+    """The startup warning helper sits next to lifespan: keep the decorator on
+    lifespan (FastAPI's contract), not on the helper."""
+    from app import main
+
+    manager = main.lifespan(main.app)  # creating it doesn't run startup
+    assert hasattr(manager, "__aenter__") and hasattr(manager, "__aexit__")

@@ -120,7 +120,6 @@ if not settings.debug:
 logger = logging.getLogger(__name__)
 
 
-@asynccontextmanager
 def _log_battery_dispatch_opt_in() -> None:
     """Warn at startup when battery dispatch is opted in (use at your own risk)."""
     if not settings.battery_dispatch:
@@ -138,6 +137,7 @@ def _log_battery_dispatch_opt_in() -> None:
         )
 
 
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
     # Startup
