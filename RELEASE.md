@@ -2,6 +2,16 @@
 
 ## Version History
 
+### [0.14.0] - Upcoming
+
+**Added:**
+- MQTT battery dispatch and resume with a separate `MQTT_CONTROLS` bit `32`:
+  Home Assistant gets prepared power/duration inputs and Start/Resume buttons;
+  automations can send an atomic power/duration command. Dispatch requires
+  `confirm:true`, uses the gateway's live local v1r connection and shares the
+  HTTP write lock, including across timeouts. Existing masks remain unchanged;
+  `63` enables all controls. Retained commands are ignored and cleared. (#184)
+
 ### [0.13.0] - 2026-10-26
 
 Local battery dispatch from the API and the Console, a FleetAPI HTTP/1.1

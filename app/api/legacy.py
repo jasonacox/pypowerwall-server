@@ -56,7 +56,6 @@ Adding New Endpoints:
 """
 import asyncio
 import logging
-import math
 import os
 import time
 from datetime import datetime, timedelta
@@ -71,7 +70,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.api.auth import bearer_token, token_matches, verify_control_token
-from app.utils.control import is_error_result
+from app.utils.control import is_error_result, valid_dispatch_parameters
 from app.core.gateway_manager import (
     IslandingCommandInProgressError,
     IslandingCooldownError,
@@ -622,19 +621,7 @@ async def _control_json(path: str, data: dict):
         method = "resume_battery_operation"
         if path == "dispatch":
             watts, seconds = data.get("power_watts"), data.get("duration_seconds")
-            try:
-                valid_power = (
-                    isinstance(watts, (int, float))
-                    and not isinstance(watts, bool)
-                    and math.isfinite(watts)
-                )
-            except OverflowError:
-                valid_power = False
-            if (
-                not valid_power
-                or type(seconds) is not int
-                or not 1 <= seconds <= 86400
-            ):
+            if not valid_dispatch_parameters(watts, seconds):
                 raise HTTPException(
                     status_code=400,
                     detail="power_watts must be finite and duration_seconds "

@@ -251,3 +251,66 @@ async def test_resume_waits_for_timed_out_dispatch(connected_gateway, mock_pypow
         release.set()
         if resume:
             await resume
+
+
+@pytest.mark.parametrize("mqtt_action", ["dispatch", "resume"])
+@pytest.mark.asyncio
+async def test_mqtt_and_http_share_dispatch_write_lock(
+    connected_gateway, mock_pypowerwall, monkeypatch, mqtt_action
+) -> None:
+    """A timed-out write on either API must finish before the other can run."""
+    import json
+
+    from app.api.legacy import _control_json
+    from app.config import settings
+    from app.core.gateway_manager import gateway_manager
+    from app.mqtt.publisher import MqttPublisher
+
+    monkeypatch.setattr(settings, "mqtt_controls", 32)
+    started, release = threading.Event(), threading.Event()
+    real_local_control = gateway_manager.local_control
+
+    async def short_timeout(*args, **kwargs) -> object:
+        return await real_local_control(*args, **{**kwargs, "timeout": 0.05})
+
+    monkeypatch.setattr(gateway_manager, "local_control", short_timeout)
+
+    def slow_dispatch(*_args) -> dict:
+        started.set()
+        release.wait(2)
+        return {"power_watts": -500, "duration_seconds": 30}
+
+    mock_pypowerwall.dispatch_battery_power.side_effect = slow_dispatch
+    pub = MqttPublisher()
+
+    async def mqtt(action: str) -> None:
+        payload = {"power_watts": -500, "duration_seconds": 30, "confirm": True}
+        await pub._handle_control_message(
+            f"pypowerwall/test-gateway/control/{action}/set",
+            json.dumps(payload if action == "dispatch" else {}).encode(),
+        )
+
+    resume = None
+    try:
+        if mqtt_action == "dispatch":
+            await mqtt("dispatch")  # MQTT's waiter times out; its worker stays locked.
+            resume = asyncio.create_task(_control_json("resume", {}))
+        else:
+            # The real HTTP dispatcher times out while its worker is active.
+            from fastapi import HTTPException
+
+            with pytest.raises(HTTPException):
+                await _control_json(
+                    "dispatch", {"power_watts": -500, "duration_seconds": 30}
+                )
+            resume = asyncio.create_task(mqtt("resume"))
+        assert started.is_set()
+        await asyncio.sleep(0.01)
+        mock_pypowerwall.resume_battery_operation.assert_not_called()
+        release.set()
+        await resume
+        mock_pypowerwall.resume_battery_operation.assert_called_once_with()
+    finally:
+        release.set()
+        if resume:
+            await resume

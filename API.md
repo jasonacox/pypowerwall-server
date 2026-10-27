@@ -162,7 +162,7 @@ discovery and broker security are documented in [MQTT.md](MQTT.md).
 | `MQTT_HA_PREFIX` | `homeassistant` | Home Assistant discovery prefix. |
 | `MQTT_CLIENT_ID` | `pypowerwall-server` | MQTT client id. |
 | `MQTT_KEEPALIVE` | `60` | Keepalive in seconds. |
-| `MQTT_CONTROLS` | `0` | Bitmask of MQTT controls: `1` reserve (and reserve hold), `2` mode, `4` grid charging, `8` grid export, `16` islanding; `31` = all. Anything other than an integer 0-31 means `0` (monitoring only). Controls also need `PW_CONTROL_SECRET`, `MQTT_USERNAME` and `MQTT_PASSWORD`. **Read the warning in [MQTT.md](MQTT.md#control-command-topics-opt-in-mqtt_controls) first.** |
+| `MQTT_CONTROLS` | `0` | Bitmask of MQTT controls: `1` reserve (and reserve hold), `2` mode, `4` grid charging, `8` grid export, `16` islanding, `32` battery dispatch/resume; `63` = all. Existing `15` and `31` masks do not enable dispatch. Anything other than an integer 0-63 means `0` (monitoring only). Controls also need `PW_CONTROL_SECRET`, `MQTT_USERNAME` and `MQTT_PASSWORD`. **Read the warning in [MQTT.md](MQTT.md#control-command-topics-opt-in-mqtt_controls) first.** |
 
 ### Time-series and history
 
@@ -509,6 +509,11 @@ have been applied. When the LAN is down (the library's LAN failover tripped, or 
 path above applies. Islanding is unaffected.
 
 ### Timed battery dispatch: `POST /control/dispatch` and `POST /control/resume`
+
+MQTT clients can use the same local operations with `MQTT_CONTROLS` bit `32`.
+Home Assistant discovers prepared power/duration inputs and Start/Resume
+buttons. See [MQTT battery dispatch](MQTT.md#battery-dispatch-bit-32) for command
+topics, atomic payloads and the required acknowledgement of dispatch risks.
 
 The Console's **Powerwall Control → Battery Dispatch** panel provides charge /
 discharge selection, power in watts, duration in seconds, **Start dispatch**

@@ -55,6 +55,8 @@ Topic layout
     {prefix}/{gateway_id}/aggregates      JSON   — full aggregates dict
     {prefix}/{gateway_id}/status          JSON   — summary dict
     {prefix}/{gateway_id}/availability    str    — "online" | "offline" (LWT)
+    {prefix}/{gateway_id}/dispatch_power  float  — prepared watts (bit 32; not active power)
+    {prefix}/{gateway_id}/dispatch_duration int  — prepared seconds (bit 32; not time remaining)
 
     {prefix}/{gateway_id}/grid_energy_imported     int — Wh, lifetime grid import (whole Wh, no decimals)
     {prefix}/{gateway_id}/grid_energy_exported     int — Wh, lifetime grid export (whole Wh, no decimals)
@@ -112,7 +114,11 @@ import json
 import logging
 import ssl
 from typing import Dict, List, Optional, Tuple
-from app.utils.control import is_error_result, is_v1r_gateway  # noqa: F401
+from app.utils.control import (
+    is_error_result,
+    is_v1r_gateway,  # noqa: F401
+    valid_dispatch_parameters,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +156,10 @@ class MqttPublisher:
         self._discovery_controls_state: Dict[str, tuple] = {}
         self._backoff: int = 2           # current reconnect backoff in seconds
         self._controls_warn_done: bool = False  # half-configured controls warning
+        # Prepared HA inputs, per gateway. Changing these never writes to the
+        # battery; only an explicit dispatch command starts a timed operation.
+        # Reset on server restart; a broker reconnect preserves them.
+        self._dispatch_parameters: Dict[str, Tuple[float, int]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -234,7 +244,7 @@ class MqttPublisher:
         return batteries
 
     def _control_announce_state(self, gateway_id: str) -> tuple:
-        """(mask, writable, is_v1r): which control entities to announce.
+        """(mask, writable, is_v1r, can_dispatch): controls to announce.
 
         Uses the same checks as command dispatch, so Home Assistant only
         shows controls this gateway can actually execute.
@@ -243,11 +253,12 @@ class MqttPublisher:
         from app.core.gateway_manager import gateway_manager
 
         if not settings.mqtt_controls_available:
-            return (0, False, False)
+            return (0, False, False, False)
         return (
             settings.mqtt_controls,
             _write_path(gateway_manager, gateway_id) is not None,
             _gateway_is_v1r(gateway_manager, gateway_id),
+            _gateway_can_dispatch(gateway_manager, gateway_id),
         )
 
     async def _publish_ha_discovery(
@@ -292,7 +303,9 @@ class MqttPublisher:
                 extract_remote_meters(status.data.vitals) if status.data else {}
             )
 
-            controls_mask, writable, is_v1r = self._control_announce_state(gateway_id)
+            controls_mask, writable, is_v1r, can_dispatch = (
+                self._control_announce_state(gateway_id)
+            )
 
             batteries = self._battery_blocks(
                 gateway_id, status.data.system_status if status.data else None
@@ -311,6 +324,7 @@ class MqttPublisher:
                 controls=controls_mask,
                 writable=writable,
                 is_v1r=is_v1r,
+                can_dispatch=can_dispatch,
                 grid_metrics=_grid_metrics(status.data if status else None),
             )
             for topic, payload in payloads:
@@ -410,6 +424,9 @@ class MqttPublisher:
             prefix = f"{settings.mqtt_topic_prefix}/{gateway_id}"
             qos = settings.mqtt_qos
             retain = settings.mqtt_retain
+
+            if settings.mqtt_control_allowed("dispatch") and controls_state[3]:
+                await self._publish_dispatch_parameters(gateway_id)
 
             data = status.data
 
@@ -958,6 +975,14 @@ class MqttPublisher:
                                     "Restrict broker access and ACL %s/+/control/#",
                                     settings.mqtt_topic_prefix,
                                 )
+                            if settings.mqtt_control_allowed("dispatch"):
+                                logger.warning(
+                                    "MQTT BATTERY DISPATCH control is enabled: "
+                                    "discharge may export despite Grid Export "
+                                    "settings and drain below Backup Reserve. "
+                                    "Restrict broker access and ACL %s/+/control/#",
+                                    settings.mqtt_topic_prefix,
+                                )
                             control_task = asyncio.create_task(
                                 self._control_message_loop(client),
                                 name="mqtt-control-handler",
@@ -1148,6 +1173,9 @@ class MqttPublisher:
                 logger.warning(f"{label} rejected: payload is not a JSON object")
                 return
 
+            if control in ("dispatch_power", "dispatch_duration", "dispatch", "resume"):
+                await self._handle_dispatch_command(gateway_id, control, payload, label)
+                return
             if control == "islanding":
                 action = payload.get("action")
                 confirm = payload.get("confirm")
@@ -1253,6 +1281,90 @@ class MqttPublisher:
         except Exception as e:
             logger.warning(f"MQTT control handler error for {topic!r}: {e}")
 
+    async def _publish_dispatch_parameters(self, gateway_id: str) -> None:
+        """Publish prepared inputs, never an inferred active dispatch state."""
+        from app.config import settings
+
+        watts, seconds = self._dispatch_parameters.get(gateway_id, (-500, 30))
+        for name, value in (("dispatch_power", watts), ("dispatch_duration", seconds)):
+            await self._safe_publish(
+                f"{settings.mqtt_topic_prefix}/{gateway_id}/{name}",
+                str(value),
+                settings.mqtt_retain,
+                settings.mqtt_qos,
+            )
+
+    async def _handle_dispatch_command(
+        self, gateway_id: str, control: str, payload: dict, label: str
+    ) -> None:
+        """Prepare inputs or execute a local timed dispatch/resume command."""
+        from app.config import settings
+        from app.core.gateway_manager import gateway_manager
+
+        # Same live connection check as HTTP dispatch/resume. Cached polling
+        # modes can lag a transport change, and the shared cloud must never win.
+        if not _gateway_can_dispatch(gateway_manager, gateway_id):
+            logger.warning(f"{label} rejected: no confirmed live v1r transport")
+            return
+
+        watts, seconds = self._dispatch_parameters.get(gateway_id, (-500, 30))
+        if control in ("dispatch_power", "dispatch_duration"):
+            value = payload.get("value")
+            if control == "dispatch_power":
+                watts = value
+            else:
+                seconds = value
+            if set(payload) != {"value"} or not valid_dispatch_parameters(
+                watts, seconds
+            ):
+                logger.warning(
+                    f"{label} rejected: send a JSON object with only value; "
+                    "power_watts must be finite and duration_seconds an "
+                    "integer from 1 to 86400"
+                )
+                return
+            self._dispatch_parameters[gateway_id] = (watts, seconds)
+            await self._publish_dispatch_parameters(gateway_id)
+            logger.info(f"{label} prepared (value={value!r}; battery unchanged)")
+            return
+
+        method, args = "resume_battery_operation", ()
+        audit = "via local v1r"
+        if control == "dispatch":
+            # Atomic MQTT requests supply both fields; HA's Start button uses
+            # the prepared inputs. A partial request must never use a default.
+            if "power_watts" in payload or "duration_seconds" in payload:
+                watts = payload.get("power_watts")
+                seconds = payload.get("duration_seconds")
+            if (
+                payload.get("confirm") is not True
+                or set(payload) - {"power_watts", "duration_seconds", "confirm"}
+                or not valid_dispatch_parameters(watts, seconds)
+            ):
+                logger.warning(
+                    f"{label} rejected: need confirm:true, finite power_watts "
+                    "and integer duration_seconds from 1 to 86400; omit both "
+                    "parameters to use the prepared inputs"
+                )
+                return
+            method, args = "dispatch_battery_power", (watts, seconds)
+            audit = f"power_watts={watts!r}, duration_seconds={seconds} {audit}"
+        elif payload:
+            logger.warning(f"{label} rejected: resume requires an empty JSON object")
+            return
+
+        # GatewayManager holds the write lock until the worker finishes, even
+        # if this await times out. No cloud path, fallback or automatic retry.
+        result = await gateway_manager.local_control(
+            gateway_id, method, *args, timeout=max(10.0, settings.timeout + 5.0)
+        )
+        if isinstance(result, dict) and result and not is_error_result(result):
+            logger.info(f"{label} acknowledged ({audit}); check actual battery power")
+        else:
+            logger.warning(
+                f"{label} failed ({audit}): {_short(result)}; check actual battery power"
+            )
+
 
 # Value checks and library setters for the value controls (same rules as the
 # HTTP POST /control/* routes). bool is an int subclass, so reserve rejects it.
@@ -1338,6 +1450,12 @@ def _gateway_is_v1r(gateway_manager, gateway_id: str) -> bool:
         )
     except Exception:
         return False
+
+
+def _gateway_can_dispatch(gateway_manager, gateway_id: str) -> bool:
+    """Match HTTP dispatch's live v1r capability without gateway I/O."""
+    connection = gateway_manager.get_connection(gateway_id)
+    return getattr(connection, "tedapi_mode", None) == "v1r"
 
 
 def _safe_float(val) -> Optional[float]:

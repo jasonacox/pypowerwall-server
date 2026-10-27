@@ -95,7 +95,7 @@ All use `MQTT_` prefix (no `PW_` prefix — MQTT is not a Powerwall concept).
 | `MQTT_HA_PREFIX` | `homeassistant` | HA discovery topic prefix |
 | `MQTT_CLIENT_ID` | `pypowerwall-server` | MQTT client identifier |
 | `MQTT_KEEPALIVE` | `60` | Broker keepalive interval (seconds) |
-| `MQTT_CONTROLS` | `0` | Opt-in bitmask for Home Assistant controls (needs `PW_CONTROL_SECRET` and `MQTT_USERNAME`/`MQTT_PASSWORD`): `1` reserve (incl. `reserve_hold`), `2` mode, `4` grid_charging, `8` grid_export, `16` islanding. `15` = all but islanding, `31` = all, `0` = monitoring only. Any other value is logged as an error and treated as `0`. **Use at your own risk** (see the warning under *Control command topics*) |
+| `MQTT_CONTROLS` | `0` | Opt-in bitmask for Home Assistant controls (needs `PW_CONTROL_SECRET` and `MQTT_USERNAME`/`MQTT_PASSWORD`): `1` reserve (incl. `reserve_hold`), `2` mode, `4` grid_charging, `8` grid_export, `16` islanding, `32` battery dispatch/resume. `15` = value controls, `31` = value controls + islanding, `63` = all, `0` = monitoring only. Existing `15`/`31` masks do not enable dispatch. Anything other than an integer 0-63 is logged as an error and treated as `0`. **Use at your own risk** (see the warning under *Control command topics*) |
 
 Add to `app/config.py` Settings class:
 
@@ -187,6 +187,10 @@ last retained value persists until the gateway's `availability` goes `offline`.
 | `{prefix}/{gw}/control/grid_charging/set` | `4` | `{"value": true}` | `true`, `false` (JSON booleans) |
 | `{prefix}/{gw}/control/grid_export/set` | `8` | `{"value": "battery_ok"}` | `battery_ok`, `pv_only`, `never` |
 | `{prefix}/{gw}/control/islanding/set` | `16` | `{"action": "off_grid", "confirm": true}` | `off_grid`, `on_grid`, always with `"confirm": true` |
+| `{prefix}/{gw}/control/dispatch_power/set` | `32` | `{"value": -500}` | Prepare finite signed watts; negative charges, positive discharges, zero idles; no battery write |
+| `{prefix}/{gw}/control/dispatch_duration/set` | `32` | `{"value": 30}` | Prepare integer `1`-`86400` seconds; no battery write |
+| `{prefix}/{gw}/control/dispatch/set` | `32` | `{"power_watts": -500, "duration_seconds": 30, "confirm": true}` | Start timed dispatch; omit both parameters to use prepared inputs; always `"confirm": true` |
+| `{prefix}/{gw}/control/resume/set` | `32` | `{}` | Release dispatch early; empty JSON object only |
 
 How commands run:
 
@@ -197,6 +201,68 @@ How commands run:
 - **Bits off.** Turning a bit off (or controls off) removes the entity from Home Assistant on the next start.
 - **Releasing a hold.** `reserve_hold` sets the reserve once from a live poll. To release it, set the reserve back with `{prefix}/{gw}/control/reserve/set` or the Backup Reserve number. Tesla caps the backup reserve at 80%, so a hold above 80% charge sets 80%. Anyone with MQTT bit `1` gets the new **Hold Battery** button on upgrade.
 - **Hybrid site.** If the Tesla account has more than one site, set `PW_SITEID` (or pick the site with `pypowerwall setup`); otherwise the hybrid cloud connection could point at another site, so MQTT controls don't use it.
+
+#### Battery dispatch (bit `32`)
+
+Set `MQTT_CONTROLS=32` for dispatch only, `47` for value controls plus dispatch,
+or `63` for all controls. Existing masks such as `15` and `31` keep their previous
+behavior. Broker credentials and `PW_CONTROL_SECRET` are still required; the
+secret is never included in an MQTT payload.
+
+Dispatch and resume require the target gateway's **live local v1r connection**,
+the same capability checked by HTTP dispatch. No cloud call or automatic retry
+is made, including in hybrid mode or with `PW_LOCAL_FIRST=yes`. The shared write
+lock orders MQTT and HTTP commands, including when a worker continues after a
+timeout. The timeout is the greater of 10 seconds and `PW_TIMEOUT + 5` seconds.
+Home Assistant removes the four entities when that connection loses v1r
+capability or the bit is disabled, and restores them when it becomes available.
+
+Home Assistant adds two prepared inputs and two buttons:
+
+- **Dispatch Power (positive discharges)**: negative watts charge, positive watts
+  discharge, and zero requests idle. The number input offers -100000 to 100000 W
+  in 1 W steps; atomic MQTT requests also accept finite fractional watts, as the
+  HTTP API does. The gateway's hardware limits still apply.
+- **Dispatch Duration**: 1 to 86400 whole seconds.
+- **Start Battery Dispatch**: sends `{"confirm":true}` using those inputs.
+- **Resume Battery Operation**: sends `{}` to release a dispatch early.
+
+Input changes **never start or modify a battery operation**. Prepared values are
+per gateway, default to -500 W for 30 seconds, survive broker reconnects and reset
+on server restart. They are published at `{prefix}/{gw}/dispatch_power` and
+`{prefix}/{gw}/dispatch_duration` with the configured retain/QoS settings. These
+topics describe the **next prepared command**, not the active dispatch or actual
+battery power. A direct request with its own parameters leaves prepared inputs
+unchanged. A new dispatch replaces the gateway's existing power setpoint and
+timer; expiry or Resume returns to the configured operating mode.
+
+**Discharge can export despite Grid Export settings and drain below Backup
+Reserve**, as observed on Powerwall 2. `confirm:true` acknowledges those risks;
+Home Assistant's Start button includes it when pressed. There is no additional
+confirmation dialog in Home Assistant. Review [battery dispatch behavior and
+validation gaps](API.md#timed-battery-dispatch-post-controldispatch-and-post-controlresume)
+before enabling it. An acknowledgement only confirms command acceptance: check
+the Powerwall Power sensor or power flow for actual behavior.
+
+For automations, send power and duration together so another client's prepared
+inputs cannot change the command. Missing either field, booleans or strings in
+numeric fields, non-finite power, and fractional/out-of-range durations are
+rejected. Publish with `retain: false`:
+
+```yaml
+action:
+  - service: mqtt.publish
+    data:
+      topic: pypowerwall/default/control/dispatch/set
+      payload: '{"power_watts":-500,"duration_seconds":30,"confirm":true}'
+      qos: 1
+      retain: false
+```
+
+To release early, publish `{}` to `pypowerwall/default/control/resume/set` with
+`retain: false`, or press Resume. Rejected/failed commands are logged at WARNING;
+accepted operations are logged as **acknowledged**, without claiming measured
+power or an active timer.
 
 ### Securing the broker (required for controls)
 
@@ -223,7 +289,9 @@ topic write pypowerwall/+/control/+/set
 topic readwrite homeassistant/#
 ```
 
-Islanding (bit `16`) opens the grid contactor, so it needs its own bit: `MQTT_CONTROLS=15` enables everything else.
+Islanding (bit `16`) opens the grid contactor and dispatch (bit `32`) overrides
+battery operation, so each needs its own explicit bit. `MQTT_CONTROLS=15`
+enables only reserve, mode and grid settings.
 
 ### Lifetime energy topics (Wh accumulators)
 
@@ -415,6 +483,10 @@ Controls (opt-in `MQTT_CONTROLS`, use at your own risk; only enabled bits the ga
 | Grid Export Control | `8` | `select` | `battery_ok`, `pv_only`, `never` | `mdi:transmission-tower-export` |
 | Go Off Grid | `16` | `button` | `{"action":"off_grid","confirm":true}`, v1r only | `mdi:transmission-tower-off` |
 | Reconnect Grid | `16` | `button` | `{"action":"on_grid","confirm":true}`, v1r only | `mdi:transmission-tower` |
+| Dispatch Power (positive discharges) | `32` | `number` | Prepared -100000 to 100000 W, step 1; live v1r only | `mdi:battery-charging` |
+| Dispatch Duration | `32` | `number` | Prepared 1-86400 s, step 1; live v1r only | `mdi:timer-outline` |
+| Start Battery Dispatch | `32` | `button` | `{"confirm":true}` uses prepared inputs; live v1r only | `mdi:battery-arrow-up` |
+| Resume Battery Operation | `32` | `button` | `{}`; live v1r only | `mdi:battery-sync` |
 
 Remote meter sensors (one set of five per CT, `entity_category: diagnostic`,
 named e.g. `Remote Meter EM…B10BC CT0 (solar) Voltage`, unique ID

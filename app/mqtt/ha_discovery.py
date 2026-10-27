@@ -81,16 +81,18 @@ Numeric sensors:
 
 Controls (MQTT_CONTROLS bitmask + PW_CONTROL_SECRET set, broker-trust;
 only bits in the mask are announced — 1 reserve, 2 mode, 4 grid_charging,
-8 grid_export, 16 islanding):
+8 grid_export, 16 islanding, 32 battery dispatch):
     reserve       — number 0-100 % (state reserve)
     reserve_hold  — button "Hold Battery" (reserve = cached SoC; bit 1, like reserve)
     mode          — select [self_consumption, backup, autonomous] (state mode)
     grid_charging — switch (state grid_charging)
     grid_export   — select [battery_ok, pv_only, never] (state grid_export)
     islanding     — buttons Go Off Grid / Reconnect Grid
+    dispatch      — prepared power/duration numbers and Start/Resume buttons
 Commands go to {prefix}/{gw}/control/{control}/set.
 Reserve, mode and the grid controls are announced only where the gateway can
 write them (cloud, FleetAPI, bound hybrid cloud or v1r); islanding only on v1r.
+Battery dispatch uses the target gateway's live v1r connection, like HTTP.
 
 Site-wide sensors share the single "Powerwall" gateway device block so HA
 groups them together.  Per-unit entities (per-battery capacity/charge from
@@ -107,6 +109,7 @@ References
     https://www.home-assistant.io/integrations/sensor.mqtt/
     https://www.home-assistant.io/integrations/binary_sensor.mqtt/
 """
+
 import hashlib
 import json
 import logging
@@ -224,6 +227,10 @@ CONTROL_ENTITIES = (
     ("select", "grid_export_control"),
     ("button", "go_off_grid"),
     ("button", "reconnect_grid"),
+    ("number", "dispatch_power"),
+    ("number", "dispatch_duration"),
+    ("button", "dispatch"),
+    ("button", "resume"),
 )
 
 
@@ -331,6 +338,7 @@ def build_discovery_payloads(
     writable: bool = False,
     is_v1r: bool = False,
     grid_metrics: Optional[Sequence[str]] = None,
+    can_dispatch: bool = False,
 ) -> list[tuple[str, str]]:
     """Build all HA auto-discovery (topic, payload) pairs for a gateway.
 
@@ -367,6 +375,7 @@ def build_discovery_payloads(
                    FleetAPI, bound hybrid cloud or v1r); those four need it.
         is_v1r:    The gateway uses the v1r transport; the islanding buttons
                    (PW2 and PW3) need it.
+        can_dispatch: The live connection is v1r (same check as HTTP dispatch).
         grid_metrics:  Grid health metrics the gateway actually reports
                        (subset of {"grid_voltage", "grid_current"} from the
                        site CT averages, #177).  Sensors whose metric is not
@@ -465,6 +474,7 @@ def build_discovery_payloads(
         min_val: float = 0,
         max_val: float = 100,
         step: float = 1,
+        mode: Optional[str] = None,
     ) -> tuple[str, str]:
         """Build a HA number (slider) discovery entry for controls."""
         unique_id = f"pypowerwall_{gateway_id}_{uid_suffix}"
@@ -484,6 +494,8 @@ def build_discovery_payloads(
         }
         if unit:
             payload["unit_of_measurement"] = unit
+        if mode:
+            payload["mode"] = mode
         if device_class:
             payload["device_class"] = device_class
         if icon:
@@ -790,6 +802,7 @@ def build_discovery_payloads(
 
     if controls:
         from app.config import (
+            MQTT_CONTROL_DISPATCH,
             MQTT_CONTROL_GRID_CHARGING,
             MQTT_CONTROL_GRID_EXPORT,
             MQTT_CONTROL_ISLANDING,
@@ -861,6 +874,51 @@ def build_discovery_payloads(
                     icon="mdi:transmission-tower",
                 ),
             ])
+
+        if (controls & MQTT_CONTROL_DISPATCH) and can_dispatch:
+            results.extend(
+                [
+                    number(
+                        "dispatch_power",
+                        "Dispatch Power (positive discharges)",
+                        f"{data_prefix}/dispatch_power",
+                        f"{data_prefix}/control/dispatch_power/set",
+                        unit="W",
+                        device_class="power",
+                        icon="mdi:battery-charging",
+                        min_val=-100000,
+                        max_val=100000,
+                        step=1,
+                        mode="box",
+                    ),
+                    number(
+                        "dispatch_duration",
+                        "Dispatch Duration",
+                        f"{data_prefix}/dispatch_duration",
+                        f"{data_prefix}/control/dispatch_duration/set",
+                        unit="s",
+                        icon="mdi:timer-outline",
+                        min_val=1,
+                        max_val=86400,
+                        step=1,
+                        mode="box",
+                    ),
+                    button(
+                        "dispatch",
+                        "Start Battery Dispatch",
+                        f"{data_prefix}/control/dispatch/set",
+                        '{"confirm":true}',
+                        icon="mdi:battery-arrow-up",
+                    ),
+                    button(
+                        "resume",
+                        "Resume Battery Operation",
+                        f"{data_prefix}/control/resume/set",
+                        "{}",
+                        icon="mdi:battery-sync",
+                    ),
+                ]
+            )
 
     # --- Solar string sensors (per-string + paired rollups) ---
     if string_ids:
