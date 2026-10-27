@@ -13,7 +13,7 @@
   no idea whether incorrect use could damage your home, your Powerwall system
   or the grid. `POST /control/resume` works without it, so turning it off never
   strands a running dispatch. The server logs a warning at startup when it's
-  on, and `/stats` reports it under `config`.
+  on, and `/stats` reports it under `config`. (#185)
 
 **Added:**
 - **Battery dispatch safeguards in the Console.** Every dispatch (charge,
@@ -21,8 +21,8 @@
   Console durations are capped at 4 hours (the API still accepts up to 86400
   seconds). While a dispatch this server sent is running, a banner shows its
   power and end time, from the new `dispatch_active` field in
-  `/control/status`.
-- **"Use at your own risk" warning** for battery dispatch in README and API.md.
+  `/control/status`. (#185)
+- **"Use at your own risk" warning** for battery dispatch in README and API.md. (#185)
 
 ### [0.13.0] - 2026-10-26
 
