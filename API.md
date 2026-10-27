@@ -513,10 +513,9 @@ path above applies. Islanding is unaffected.
 
 > **⚠️ WARNING: USE AT YOUR OWN RISK**
 >
-> We aren't trying to be pedantic, but we want to be clear about how serious
-> this control is. Battery dispatch takes direct control of your Powerwall's
-> battery through an undocumented Tesla command. It is meant only for people
-> who know what they are doing.
+> Battery dispatch takes direct control of your Powerwall's battery through an
+> undocumented Tesla command. It is meant only for people who know what they
+> are doing.
 >
 > - A **discharge** overrides the backup reserve and the grid export setting.
 >   It can drain the battery below your reserve, leaving you **without backup
