@@ -11,10 +11,13 @@ TOKEN = "dispatch-test-token"
 
 @pytest.fixture(autouse=True)
 def controls(monkeypatch, mock_pypowerwall):
+    from app.api import legacy
     from app.config import settings
     from app.core.gateway_manager import gateway_manager
 
     monkeypatch.setattr(settings, "control_secret", TOKEN)
+    monkeypatch.setattr(settings, "battery_dispatch", True)
+    legacy._active_dispatch.clear()
     mock_pypowerwall.tedapi_mode = "v1r"
     mock_pypowerwall.dispatch_battery_power.return_value = {
         "power_watts": -500.0,
@@ -80,7 +83,11 @@ def test_dispatch_capability_matches_default_gateway_endpoint(
     assert client.get("/stats").json()["tedapi_mode"] == gateways[-1][1]
     response = client.get("/control/status")
     assert response.status_code == 200
-    assert response.json() == {"enabled": True, "battery_dispatch": available}
+    assert response.json() == {
+        "enabled": True,
+        "battery_dispatch": available,
+        "dispatch_active": None,
+    }
     assert all(not connection.method_calls for connection in connections.values())
 
     result = post(client, "dispatch", {"power_watts": 500, "duration_seconds": 30})
@@ -109,6 +116,7 @@ def test_dispatch_capability_is_false_without_a_gateway_or_live_connection(clien
     assert client.get("/control/status").json() == {
         "enabled": True,
         "battery_dispatch": False,
+        "dispatch_active": None,
     }
     _register_gateway("default", "v1r")
     gateway_manager.connections.clear()
@@ -121,7 +129,11 @@ def test_dispatch_capability_is_false_when_control_is_disabled(client, monkeypat
     connection = _register_gateway("default", "v1r")
     monkeypatch.setattr(settings, "control_secret", None)
     response = client.get("/control/status")
-    assert response.json() == {"enabled": False, "battery_dispatch": False}
+    assert response.json() == {
+        "enabled": False,
+        "battery_dispatch": False,
+        "dispatch_active": None,
+    }
     assert not connection.method_calls
 
 
@@ -251,3 +263,142 @@ async def test_resume_waits_for_timed_out_dispatch(connected_gateway, mock_pypow
         release.set()
         if resume:
             await resume
+
+
+# --- PW_BATTERY_DISPATCH opt-in (use at your own risk) ---
+
+
+@pytest.mark.parametrize("form", [False, True])
+def test_dispatch_is_off_without_the_opt_in(
+    client, connected_gateway, mock_pypowerwall, monkeypatch, form
+):
+    """Control alone doesn't enable dispatch: the panel hides and the API refuses."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "battery_dispatch", False)
+    assert client.get("/control/status").json() == {
+        "enabled": True,
+        "battery_dispatch": False,
+        "dispatch_active": None,
+    }
+    r = post(client, "dispatch", {"power_watts": 500, "duration_seconds": 30}, form)
+    if form:
+        assert "PW_BATTERY_DISPATCH" in r.json()["error"]
+    else:
+        assert r.status_code == 403
+        assert "PW_BATTERY_DISPATCH" in r.json()["detail"]
+    mock_pypowerwall.dispatch_battery_power.assert_not_called()
+
+
+@pytest.mark.parametrize("form", [False, True])
+def test_resume_works_without_the_opt_in(
+    client, connected_gateway, mock_pypowerwall, monkeypatch, form
+):
+    """Resume only hands control back, so turning the opt-in off can't strand
+    a running dispatch."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "battery_dispatch", False)
+    r = post(client, "resume", {}, form)
+    assert (r.status_code, r.json()) == (200, {"resume_battery_operation": True})
+    mock_pypowerwall.resume_battery_operation.assert_called_once_with()
+
+
+def test_status_reports_the_running_dispatch_until_resume(
+    client, connected_gateway, mock_pypowerwall, monkeypatch
+):
+    from app.api import legacy
+
+    now = 1_000_000.0
+    monkeypatch.setattr(legacy.time, "time", lambda: now)
+    mock_pypowerwall.dispatch_battery_power.return_value = {
+        "power_watts": -2000,
+        "duration_seconds": 600,
+    }
+    assert post(client, "dispatch", {"power_watts": -2000, "duration_seconds": 600}).status_code == 200
+    active = client.get("/control/status").json()["dispatch_active"]
+    assert active == {"power_watts": -2000, "until": now + 600}
+    assert post(client, "resume", {}).status_code == 200
+    assert client.get("/control/status").json()["dispatch_active"] is None
+
+
+def test_status_drops_an_expired_dispatch(
+    client, connected_gateway, mock_pypowerwall, monkeypatch
+):
+    from app.api import legacy
+
+    clock = [1_000_000.0]
+    monkeypatch.setattr(legacy.time, "time", lambda: clock[0])
+    mock_pypowerwall.dispatch_battery_power.return_value = {
+        "power_watts": 500,
+        "duration_seconds": 30,
+    }
+    post(client, "dispatch", {"power_watts": 500, "duration_seconds": 30})
+    assert client.get("/control/status").json()["dispatch_active"]["until"] == clock[0] + 30
+    clock[0] += 30
+    assert client.get("/control/status").json()["dispatch_active"] is None
+
+
+def test_failed_dispatch_is_not_reported_as_running(
+    client, connected_gateway, mock_pypowerwall
+):
+    mock_pypowerwall.dispatch_battery_power.return_value = None
+    assert post(client, "dispatch", {"power_watts": 500, "duration_seconds": 30}).status_code == 503
+    assert client.get("/control/status").json()["dispatch_active"] is None
+
+
+def test_running_dispatch_is_hidden_when_the_opt_in_is_off(
+    client, connected_gateway, mock_pypowerwall, monkeypatch
+):
+    from app.config import settings
+
+    mock_pypowerwall.dispatch_battery_power.return_value = {
+        "power_watts": 500,
+        "duration_seconds": 30,
+    }
+    post(client, "dispatch", {"power_watts": 500, "duration_seconds": 30})
+    monkeypatch.setattr(settings, "battery_dispatch", False)
+    assert client.get("/control/status").json()["dispatch_active"] is None
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_stats_reports_the_opt_in(client, monkeypatch, value):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "battery_dispatch", value)
+    assert client.get("/stats").json()["config"]["PW_BATTERY_DISPATCH"] is value
+
+
+def test_opt_in_defaults_off(monkeypatch):
+    from app.config import Settings
+
+    monkeypatch.delenv("PW_BATTERY_DISPATCH", raising=False)
+    assert Settings().battery_dispatch is False
+    monkeypatch.setenv("PW_BATTERY_DISPATCH", "yes")
+    assert Settings().battery_dispatch is True
+
+
+@pytest.mark.parametrize(
+    "opted_in, secret, expected",
+    [
+        (True, TOKEN, "USE AT YOUR OWN RISK"),
+        (True, None, "no effect without PW_CONTROL_SECRET"),
+        (False, TOKEN, None),
+    ],
+)
+def test_startup_warns_when_dispatch_is_opted_in(
+    monkeypatch, caplog, opted_in, secret, expected
+):
+    import logging
+    from app import main
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "battery_dispatch", opted_in)
+    monkeypatch.setattr(settings, "control_secret", secret)
+    with caplog.at_level(logging.WARNING, logger=main.logger.name):
+        main._log_battery_dispatch_opt_in()
+    messages = [r.getMessage() for r in caplog.records]
+    if expected:
+        assert any(expected in m for m in messages)
+    else:
+        assert not messages

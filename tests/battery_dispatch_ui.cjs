@@ -35,7 +35,7 @@ function availabilityFixture({ capability = true, enabled = true, statsMode = 'f
         } },
         updateIslandingControls() {},
         loadControlValues: async () => {},
-        controlBatteryDispatch: { setAvailable(value) { context.available = value; } },
+        controlBatteryDispatch: { setAvailable(value, running) { context.available = value; context.running = running; } },
         fetch: async url => ({
             ok: url === '/control/status' ? !statusError : url === '/stats' ? !statsError : true,
             status: 503,
@@ -106,7 +106,7 @@ test('status errors fail closed while aggregate stats errors do not hide valid c
 
 function fixture(options = {}) {
     const elements = {};
-    for (const name of ['section', 'form', 'power', 'duration', 'start', 'resume', 'message']) {
+    for (const name of ['section', 'form', 'power', 'duration', 'start', 'resume', 'message', 'active']) {
         elements['control-dispatch-' + name] = {
             style: {}, attrs: {}, listeners: {}, value: '', disabled: false,
             textContent: name, focused: false,
@@ -155,6 +155,10 @@ function fixture(options = {}) {
         get forgotten() { return forgotten; },
         get remembered() { return remembered; },
         get message() { return elements['control-dispatch-message'].textContent; },
+        get banner() {
+            const el = elements['control-dispatch-active'];
+            return el.style.display === 'block' ? el.textContent : '';
+        },
     };
 }
 
@@ -179,7 +183,7 @@ for (const [direction, watts] of [['discharge', 5000], ['charge', -5000]]) {
         assert.equal(f.remembered, 'test-token');
         assert.match(f.message, /request accepted/);
         assert.match(f.message, /actual battery power/);
-        assert.equal(f.confirmations.length, direction === 'discharge' ? 1 : 0);
+        assert.equal(f.confirmations.length, 1);
     });
 }
 
@@ -191,7 +195,9 @@ test('zero power remains a dispatch', async () => {
     assert.equal(f.requests[0].route, 'dispatch');
     assert.equal(f.requests[0].body.power_watts, 0);
     assert.match(f.message, /Zero-power/);
-    assert.equal(f.confirmations.length, 0);
+    assert.equal(f.confirmations.length, 1);
+    assert.match(f.confirmations[0].body, /won't power your home/);
+    assert.match(f.confirmations[0].body, /own risk/);
 });
 
 test('discharge confirmation warns about export and backup reserve; cancelling sends nothing', async () => {
@@ -204,6 +210,9 @@ test('discharge confirmation warns about export and backup reserve; cancelling s
     assert.match(dialog.body, /export electricity to the grid/);
     assert.match(dialog.body, /Solar Only or Never/);
     assert.match(dialog.body, /below your Backup Reserve/);
+    assert.match(dialog.body, /until /);
+    assert.match(dialog.body, /Use at your own risk/);
+    assert.match(dialog.body, /home, your Powerwall system or the grid/);
     assert.equal(dialog.danger, true);
     assert.equal(f.requests.length, 0);
     assert.equal(f.remembered, '');
@@ -242,7 +251,7 @@ test('losing availability while confirming prevents discharge', async () => {
     assert.equal(f.elements['control-dispatch-form'].attrs['aria-busy'], 'false');
 });
 
-for (const [field, values] of [['power', ['', '-1', 'NaN', 'Infinity']], ['duration', ['', '0', '-1', '1.5', '86401']]]) {
+for (const [field, values] of [['power', ['', '-1', 'NaN', 'Infinity']], ['duration', ['', '0', '-1', '1.5', '14401', '86400']]]) {
     for (const value of values) {
         test(`invalid ${field} ${JSON.stringify(value)} never sends`, async () => {
             const f = fixture();
@@ -324,4 +333,76 @@ test('network failure permits resume without resending the dispatch', async () =
     assert.match(f.message, /Network unavailable/);
     assert.equal(f.elements['control-dispatch-resume'].disabled, false);
     assert.equal(f.requests.length, 1);
+});
+
+test('charge confirmation warns about grid draw and Grid Charging; cancelling sends nothing', async () => {
+    const f = fixture({ confirm: () => false });
+    f.controller.setAvailable(true);
+    f.setDirection('charge');
+    await f.fire('form', 'submit');
+    const dialog = f.confirmations[0];
+    assert.equal(dialog.title, 'Start battery charge?');
+    assert.match(dialog.body, /5,000 W for 30 seconds/);
+    assert.match(dialog.body, /draw power from the grid/);
+    assert.match(dialog.body, /Grid Charging/);
+    assert.match(dialog.body, /Use at your own risk/);
+    assert.equal(dialog.danger, true);
+    assert.equal(f.requests.length, 0);
+});
+
+test('the Console caps a dispatch at 4 hours', async () => {
+    const f = fixture();
+    f.controller.setAvailable(true);
+    f.elements['control-dispatch-duration'].value = '14400';
+    await f.fire('form', 'submit');
+    assert.equal(f.requests[0].body.duration_seconds, 14400);
+    f.elements['control-dispatch-duration'].value = '14401';
+    await f.fire('form', 'submit');
+    assert.equal(f.requests.length, 1);
+    assert.match(f.message, /14400 seconds \(4 hours\)/);
+});
+
+test('an accepted dispatch shows the running banner and resume clears it', async () => {
+    const f = fixture();
+    f.controller.setAvailable(true);
+    f.setDirection('charge');
+    await f.fire('form', 'submit');
+    assert.match(f.banner, /charging at 5,000 W until /);
+    await f.fire('resume', 'click');
+    assert.equal(f.banner, '');
+});
+
+test('a failed dispatch shows no banner', async () => {
+    const f = fixture({ post: async () => ({ resp: { ok: false, status: 503 }, payload: { detail: 'Battery dispatch command failed' } }) });
+    f.controller.setAvailable(true);
+    await f.fire('form', 'submit');
+    assert.equal(f.banner, '');
+});
+
+test('the banner follows the server status and hides with the panel', () => {
+    const f = fixture();
+    const until = Date.now() / 1000 + 600;
+    f.controller.setAvailable(true, { power_watts: 3000, until });
+    assert.match(f.banner, /discharging at 3,000 W until /);
+    f.controller.setAvailable(true, null);
+    assert.equal(f.banner, '');
+    f.controller.setAvailable(true, { power_watts: 0, until });
+    assert.match(f.banner, /holding the battery at 0 W/);
+    f.controller.setAvailable(true, { power_watts: 500, until: Date.now() / 1000 - 1 });
+    assert.equal(f.banner, '', 'an expired dispatch is not shown');
+    f.controller.setAvailable(true, { power_watts: 500, until });
+    f.controller.setAvailable(false, { power_watts: 500, until });
+    assert.equal(f.banner, '');
+    assert.equal(f.elements['control-dispatch-section'].style.display, 'none');
+});
+
+test('Console passes the server dispatch_active to the panel', async () => {
+    const f = availabilityFixture();
+    const running = { power_watts: -1000, until: 2e9 };
+    f.setStatus({ enabled: true, battery_dispatch: true, dispatch_active: running });
+    await f.context.loadControlStatus();
+    assert.deepEqual(f.context.running, running);
+    f.setStatus({ enabled: true, battery_dispatch: true });
+    await f.context.loadControlStatus();
+    assert.equal(f.context.running, null);
 });

@@ -121,6 +121,23 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
+def _log_battery_dispatch_opt_in() -> None:
+    """Warn at startup when battery dispatch is opted in (use at your own risk)."""
+    if not settings.battery_dispatch:
+        return
+    if settings.control_enabled:
+        logger.warning(
+            "Battery dispatch is ON (PW_BATTERY_DISPATCH=yes). USE AT YOUR OWN "
+            "RISK: a dispatch overrides the backup reserve and grid export "
+            "settings, and its effects on your home, system and the grid are "
+            "not fully known."
+        )
+    else:
+        logger.warning(
+            "PW_BATTERY_DISPATCH=yes has no effect without PW_CONTROL_SECRET"
+        )
+
+
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
     # Startup
@@ -133,6 +150,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Server listening on {settings.server_host}:{settings.server_port}")
     if _proxy_base:
         logger.info(f"Reverse proxy base path (PROXY_BASE_URL): {_proxy_base}")
+    _log_battery_dispatch_opt_in()
 
     # Initialize gateway manager
     await gateway_manager.initialize(

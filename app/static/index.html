@@ -635,6 +635,15 @@
         #control-dispatch-section {
             margin-bottom: 16px;
         }
+        #control-dispatch-risk,
+        #control-dispatch-active {
+            margin: 0 0 12px;
+        }
+        #control-dispatch-risk {
+            display: block;
+            background: rgba(248, 81, 73, 0.12);
+            border-left-color: var(--accent-red);
+        }
         .control-dispatch-actions {
             display: flex;
             flex-wrap: wrap;
@@ -1996,6 +2005,8 @@
                 <section class="control-section" id="control-dispatch-section" aria-labelledby="control-dispatch-title" style="display:none">
                     <div class="control-section-title" id="control-dispatch-title">Battery Dispatch</div>
                     <form class="control-section-body" id="control-dispatch-form" novalidate>
+                        <div class="control-warning" id="control-dispatch-risk"><strong>Use at your own risk.</strong> Battery dispatch takes direct control of your Powerwall. A discharge can export to the grid despite your Grid Export setting and drain the battery below your Backup Reserve; a charge can draw from the grid and may ignore Grid Charging. We don't know what incorrect use could do to your home, your Powerwall system or the grid. Use it only if you understand these risks. Every dispatch asks you to confirm.</div>
+                        <div class="control-warning" id="control-dispatch-active" role="status" aria-live="polite"></div>
                         <div class="control-section-row">
                             <div class="control-field">
                                 <div class="control-label" id="control-dispatch-direction-label">Direction</div>
@@ -2015,12 +2026,11 @@
                                 <input type="number" id="control-dispatch-power" min="0" step="any" value="500" inputmode="decimal" required disabled>
                             </div>
                             <div class="control-field">
-                                <label class="control-label" for="control-dispatch-duration">Duration (seconds)</label>
-                                <input type="number" id="control-dispatch-duration" min="1" max="86400" step="1" value="30" inputmode="numeric" required disabled>
+                                <label class="control-label" for="control-dispatch-duration">Duration (seconds, up to 4 hours)</label>
+                                <input type="number" id="control-dispatch-duration" min="1" max="14400" step="1" value="30" inputmode="numeric" required disabled>
                             </div>
                         </div>
-                        <p class="control-hint">Returns to your configured mode when the duration ends. Set 0 W to request no battery power. A full battery may not charge.</p>
-                        <p class="control-hint">Warning: discharge can export to the grid despite your Grid Export setting and drain below your Backup Reserve. You must confirm before starting a discharge.</p>
+                        <p class="control-hint">Returns to your configured mode when the duration ends, or when you select Resume normal operation. Set 0 W to request no battery power. A full battery may not charge.</p>
                         <div class="control-dispatch-actions">
                             <button type="submit" class="control-btn primary" id="control-dispatch-start" disabled>Start dispatch</button>
                             <button type="button" class="control-btn" id="control-dispatch-resume" disabled>Resume normal operation</button>
@@ -4154,18 +4164,20 @@
         async function loadControlStatus() {
             const card = document.getElementById('control-card');
             let dispatchAvailable = false;
+            let dispatchActive = null;
             try {
                 const resp = await fetch('/control/status');
                 if (!resp.ok) throw new Error('status ' + resp.status);
                 const data = await resp.json();
                 controlEnabled = data.enabled === true;
                 dispatchAvailable = data.battery_dispatch === true;
+                dispatchActive = data.dispatch_active || null;
             } catch (e) {
                 console.log('Control status not available:', e.message);
                 controlEnabled = false;
             }
             if (card) card.style.display = controlEnabled ? '' : 'none';
-            controlBatteryDispatch?.setAvailable(controlEnabled && dispatchAvailable);
+            controlBatteryDispatch?.setAvailable(controlEnabled && dispatchAvailable, dispatchActive);
             if (controlEnabled) {
                 await loadControlValues();
             }

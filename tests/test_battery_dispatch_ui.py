@@ -15,11 +15,15 @@ def test_console_serves_accessible_dispatch_form_and_script(client):
     assert panel["aria-labelledby"] == "control-dispatch-title"
     assert panel.find(id="control-dispatch-power")["min"] == "0"
     duration = panel.find(id="control-dispatch-duration")
-    assert (duration["min"], duration["max"], duration["step"]) == ("1", "86400", "1")
+    assert (duration["min"], duration["max"], duration["step"]) == ("1", "14400", "1")
     assert panel.find(id="control-dispatch-start")["type"] == "submit"
     assert panel.find(id="control-dispatch-resume")["type"] == "button"
     assert panel.find(id="control-dispatch-message")["aria-live"] == "polite"
-    assert "drain below your Backup Reserve" in panel.get_text()
+    risk = panel.find(id="control-dispatch-risk").get_text()
+    assert "Use at your own risk." in risk
+    assert "drain the battery below your Backup Reserve" in risk
+    assert "your home, your Powerwall system or the grid" in risk
+    assert panel.find(id="control-dispatch-active")["aria-live"] == "polite"
     control_script = next(
         script.text for script in html.find_all("script") if "initControl()" in script.text
     )

@@ -200,26 +200,53 @@ def powerwall_unit_labels(
     return labels
 
 
+# The last battery dispatch this server sent, so the Console can show that one
+# is running. Held in memory and only touched on the event loop: a dispatch
+# sent before a restart, or by another client, is not shown.
+_active_dispatch: Dict[str, Any] = {}
+
+
+def _dispatch_active(gateway_id: str) -> Optional[Dict[str, float]]:
+    """The running dispatch this server sent to gateway_id, or None."""
+    if (
+        _active_dispatch.get("gateway_id") != gateway_id
+        or _active_dispatch.get("until", 0) <= time.time()
+    ):
+        return None
+    return {
+        "power_watts": _active_dispatch["power_watts"],
+        "until": _active_dispatch["until"],
+    }
+
+
 @router.get("/control/status")
-async def control_status() -> Dict[str, bool]:
+async def control_status() -> Dict[str, Any]:
     """Control availability for the Console WebGUI (unauthenticated).
 
-    Reports whether control is enabled and whether the default gateway's live
-    connection supports battery dispatch. Only booleans are exposed, without
+    Reports whether control is enabled, whether battery dispatch is opted in
+    (PW_BATTERY_DISPATCH) and available on the default gateway's live v1r
+    connection, and the dispatch this server last sent while it runs. No
     gateway I/O, credentials or identifiers. All writes remain authenticated.
     """
     enabled = settings.control_enabled
     battery_dispatch = False
-    if enabled:
+    dispatch_active = None
+    if enabled and settings.battery_dispatch:
         try:
             # Use the same gateway selection and live-connection check as the
             # dispatch endpoints. /stats aggregates modes across all gateways
             # and can describe a different gateway in a multi-gateway setup.
-            battery_dispatch = _is_v1r(get_default_gateway())
+            gateway_id = get_default_gateway()
+            battery_dispatch = _is_v1r(gateway_id)
+            dispatch_active = _dispatch_active(gateway_id)
         except HTTPException:
             # The Console must still load before any gateway is configured.
             pass
-    return {"enabled": enabled, "battery_dispatch": battery_dispatch}
+    return {
+        "enabled": enabled,
+        "battery_dispatch": battery_dispatch,
+        "dispatch_active": dispatch_active,
+    }
 
 
 # The proxy's control API (pypowerwall proxy/server.py), so proxy clients such
@@ -618,6 +645,14 @@ async def _control_json(path: str, data: dict):
     failed write."""
 
     if path in ("dispatch", "resume"):
+        # Dispatch is opt-in. Resume is not: it only hands control back to the
+        # configured mode, so it works even after the opt-in is turned off.
+        if path == "dispatch" and not settings.battery_dispatch:
+            raise HTTPException(
+                status_code=403,
+                detail="Battery dispatch is off. Set PW_BATTERY_DISPATCH=yes "
+                "to enable it (use at your own risk).",
+            )
         args = ()
         method = "resume_battery_operation"
         if path == "dispatch":
@@ -657,6 +692,15 @@ async def _control_json(path: str, data: dict):
             raise HTTPException(
                 status_code=503, detail="Battery dispatch command failed"
             )
+        if path == "dispatch":
+            _active_dispatch.clear()
+            _active_dispatch.update(
+                gateway_id=gateway_id,
+                power_watts=args[0],
+                until=time.time() + args[1],
+            )
+        else:
+            _active_dispatch.clear()
         return result
 
     # Validate grid_charging requires an explicit boolean value to prevent
@@ -2915,6 +2959,7 @@ async def get_stats():
         "PW_TEDAPI_PROBE_INTERVAL": settings.tedapi_probe_interval,
         "PW_FAILOVER": settings.failover,
         "PW_FLEETAPI_HTTP": settings.fleetapi_http or None,
+        "PW_BATTERY_DISPATCH": settings.battery_dispatch,
         "PW_CLOUD_HYBRID": settings.cloud_hybrid,
         "PW_LOCAL_FIRST": settings.local_first,
     }
