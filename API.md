@@ -565,9 +565,13 @@ discharge beyond the home load exports to the grid, `0` W holds the battery
 idle while the home draws from the grid, and requests above 10,000 W are
 rejected (status code 11). Mode, reserve, grid-charging and export settings
 remain unchanged afterwards; unchanged settings do not mean dispatch obeys
-them. Not yet verified: charging (negative watts), behavior during a grid
-outage or with grid charging disabled, and reserve/export overrides on
-Powerwall 3. Use short durations and check actual battery and grid power.
+them. Charging from the grid (-1000 W, grid charging enabled) was validated
+on 2x Powerwall 3 (firmware 26.26.11). Through this server on Powerwall 2 with
+Backup Gateway 1, a -2000 W dispatch cut charging from 5,000 W to about 2,000 W
+until resumed, and `0` W held the battery near idle while solar exported. Not
+yet verified: behavior during a grid outage or with grid charging disabled, and
+reserve/export overrides on Powerwall 3. Use short durations and check actual
+battery and grid power.
 
 ### Islanding: `POST /control/islanding`
 

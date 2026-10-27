@@ -22,9 +22,11 @@
   connection through `/control/status`, including mixed multi-gateway setups,
   and refreshes as connections change.
 
-**Fixed:**
-- Upgrade pypowerwall to 0.22.1, including the signed Wi-Fi v1r native-read
-  failover fix and the released battery dispatch methods (pypowerwall #445).
+**Changed:**
+- **pypowerwall upgraded to 0.22.1** (from 0.21.0; `requirements.txt` pin and `pyproject.toml` minimum). Library changes that reach server users:
+  - The battery dispatch methods the endpoints above use (jasonacox/pypowerwall#440).
+  - TEDAPI `/api/system_status` on Powerwall 2 fills `instantaneous_max_charge_power` and `instantaneous_max_discharge_power`, which were `0`, and `/vitals` `TEPOD--` blocks carry `POD_available_charge_power` and `POD_available_dischg_power` (jasonacox/pypowerwall#429).
+  - FleetAPI: concurrent identical requests share one in-flight request, and Tesla's 429 retry guidance opens a shared backoff window instead of a request storm (jasonacox/pypowerwall#436).
 
 ### [0.12.0] - 2026-10-19
 
