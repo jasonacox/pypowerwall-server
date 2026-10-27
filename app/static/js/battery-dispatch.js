@@ -48,6 +48,9 @@
         let available = false;
         let busy = false;
         let active = null;  // {power_watts, until (epoch seconds)} this server sent
+        // Bumped on each successful command, so a status response requested
+        // before it can't overwrite the newer banner state.
+        let revision = 0;
 
         function update() {
             panel.style.display = available ? '' : 'none';
@@ -141,6 +144,7 @@
                     : payload?.power_watts === body.power_watts
                         && payload?.duration_seconds === body.duration_seconds;
                 if (!acknowledged) throw new Error('The gateway did not acknowledge this request.');
+                revision++;
                 if (release) {
                     showActive(null);
                     showMessage('Resume accepted. The battery will follow its configured operating mode.', 'success');
@@ -166,12 +170,17 @@
         resume.addEventListener('click', () => send(true));
         update();
         return {
+            // Read before requesting /control/status; pass it back with the result.
+            revision() { return revision; },
             // value: dispatch is opted in and available; running: the server's
-            // dispatch_active ({power_watts, until}) or null.
-            setAvailable(value, running) {
+            // dispatch_active ({power_watts, until}) or null; requestedAt: the
+            // revision() read before that status request. A response requested
+            // before a newer successful command doesn't change the banner.
+            setAvailable(value, running, requestedAt) {
                 available = value === true;
                 update();
-                if (running !== undefined) showActive(available ? running : null);
+                if (!available) showActive(null);
+                else if (running !== undefined && (requestedAt === undefined || requestedAt === revision)) showActive(running);
             },
         };
     }

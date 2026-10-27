@@ -35,7 +35,10 @@ function availabilityFixture({ capability = true, enabled = true, statsMode = 'f
         } },
         updateIslandingControls() {},
         loadControlValues: async () => {},
-        controlBatteryDispatch: { setAvailable(value, running) { context.available = value; context.running = running; } },
+        controlBatteryDispatch: {
+            revision() { return 7; },
+            setAvailable(value, running, requestedAt) { context.available = value; context.running = running; context.requestedAt = requestedAt; },
+        },
         fetch: async url => ({
             ok: url === '/control/status' ? !statusError : url === '/stats' ? !statsError : true,
             status: 503,
@@ -402,7 +405,31 @@ test('Console passes the server dispatch_active to the panel', async () => {
     f.setStatus({ enabled: true, battery_dispatch: true, dispatch_active: running });
     await f.context.loadControlStatus();
     assert.deepEqual(f.context.running, running);
+    assert.equal(f.context.requestedAt, 7, 'the revision is read before the request and passed back');
     f.setStatus({ enabled: true, battery_dispatch: true });
     await f.context.loadControlStatus();
     assert.equal(f.context.running, null);
+});
+
+test('a status response requested before a successful command is ignored for the banner', async () => {
+    const f = fixture();
+    const until = Date.now() / 1000 + 600;
+    f.controller.setAvailable(true);
+    // Status requested, then a dispatch succeeds before the (empty) response lands
+    let requestedAt = f.controller.revision();
+    await f.fire('form', 'submit');
+    assert.match(f.banner, /discharging at 5,000 W/);
+    f.controller.setAvailable(true, null, requestedAt);
+    assert.match(f.banner, /discharging at 5,000 W/, 'stale empty status keeps the new banner');
+    // Status requested while running, then resume succeeds before it lands
+    requestedAt = f.controller.revision();
+    await f.fire('resume', 'click');
+    f.controller.setAvailable(true, { power_watts: 5000, until }, requestedAt);
+    assert.equal(f.banner, '', 'stale running status does not restore the banner');
+    // A fresh response applies
+    f.controller.setAvailable(true, { power_watts: -1000, until }, f.controller.revision());
+    assert.match(f.banner, /charging at 1,000 W/);
+    // Losing availability always hides it, even with a stale revision
+    f.controller.setAvailable(false, { power_watts: -1000, until }, requestedAt);
+    assert.equal(f.banner, '');
 });

@@ -4165,6 +4165,7 @@
             const card = document.getElementById('control-card');
             let dispatchAvailable = false;
             let dispatchActive = null;
+            const dispatchRevision = controlBatteryDispatch?.revision();
             try {
                 const resp = await fetch('/control/status');
                 if (!resp.ok) throw new Error('status ' + resp.status);
@@ -4177,7 +4178,7 @@
                 controlEnabled = false;
             }
             if (card) card.style.display = controlEnabled ? '' : 'none';
-            controlBatteryDispatch?.setAvailable(controlEnabled && dispatchAvailable, dispatchActive);
+            controlBatteryDispatch?.setAvailable(controlEnabled && dispatchAvailable, dispatchActive, dispatchRevision);
             if (controlEnabled) {
                 await loadControlValues();
             }
