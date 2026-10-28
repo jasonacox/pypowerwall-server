@@ -19,10 +19,17 @@ def test_console_serves_accessible_dispatch_form_and_script(client):
     assert panel.find(id="control-dispatch-start")["type"] == "submit"
     assert panel.find(id="control-dispatch-resume")["type"] == "button"
     assert panel.find(id="control-dispatch-message")["aria-live"] == "polite"
-    risk = panel.find(id="control-dispatch-risk").get_text()
-    assert "Use at your own risk." in risk
-    assert "drain the battery below your Backup Reserve" in risk
-    assert "your home, your Powerwall system or the grid" in risk
+    # A short caution line on the panel; the full risks are behind its info icon
+    caution = panel.find(id="control-dispatch-caution")
+    assert caution.get_text(" ", strip=True) == (
+        "Battery dispatch takes direct control of your Powerwall. Use with caution."
+    )
+    assert caution.find(id="control-dispatch-info")["aria-label"] == "About battery dispatch"
+    info = next(s.text for s in html.find_all("script") if "DISPATCH_INFO" in s.text)
+    assert "Use at your own risk." in info
+    assert "drain the battery below your Backup Reserve" in info
+    assert "your home, your Powerwall system or the grid" in info
+    assert "addEventListener('click'" in info and "body: DISPATCH_INFO" in info
     # The running-dispatch banner sits outside the panel, so it stays visible
     # when dispatch becomes unavailable (e.g. after losing v1r)
     assert panel.find(id="control-dispatch-active") is None

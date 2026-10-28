@@ -219,7 +219,7 @@ test('discharge confirmation warns about export and backup reserve; cancelling s
     const dialog = f.confirmations[0];
     assert.match(dialog.body, /5,000 W for 30 seconds/);
     assert.match(dialog.body, /export electricity to the grid/);
-    assert.match(dialog.body, /Solar Only or Never/);
+    assert.match(dialog.body, /Solar or Never/);
     assert.match(dialog.body, /below your Backup Reserve/);
     assert.match(dialog.body, /ending about .* if you confirm now/);
     assert.match(dialog.body, /starts when the gateway accepts the command/);

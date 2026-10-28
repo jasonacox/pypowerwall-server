@@ -20,7 +20,7 @@
         if (watts > 0) {
             return {
                 title: 'Start battery discharge?',
-                body: `Discharge at ${power} W ${until}? This can export electricity to the grid even when Grid Export is set to Solar Only or Never, and drain the battery below your Backup Reserve. ${RISK}`,
+                body: `Discharge at ${power} W ${until}? This can export electricity to the grid even when Grid Export is set to Solar or Never, and drain the battery below your Backup Reserve. ${RISK}`,
                 confirmLabel: 'Start discharge',
             };
         }
