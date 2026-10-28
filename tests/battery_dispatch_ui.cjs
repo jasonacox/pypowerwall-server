@@ -37,7 +37,7 @@ function availabilityFixture({ capability = true, enabled = true, statsMode = 'f
         loadControlValues: async () => {},
         controlBatteryDispatch: {
             revision() { return 7; },
-            setAvailable(value, running, requestedAt) { context.available = value; context.running = running; context.requestedAt = requestedAt; },
+            setAvailable(value, dispatch, requestedAt) { context.available = value; context.dispatch = dispatch; context.requestedAt = requestedAt; },
         },
         fetch: async url => ({
             ok: url === '/control/status' ? !statusError : url === '/stats' ? !statsError : true,
@@ -125,7 +125,14 @@ function fixture(options = {}) {
     form.querySelectorAll = () => ['power', 'duration', 'start', 'resume'].map(name => elements['control-dispatch-' + name]);
     elements['control-dispatch-power'].value = '5000';
     elements['control-dispatch-duration'].value = '30';
-    const context = { window: {}, document: { getElementById: id => id === 'control-token' ? tokenInput : elements[id] } };
+    // Fake timers: the banner's expiry timer is fired by the test, not the clock.
+    const timers = new Map();
+    let timerId = 0;
+    const window = {
+        setTimeout(fn, ms) { timers.set(++timerId, { fn, ms }); return timerId; },
+        clearTimeout(id) { timers.delete(id); },
+    };
+    const context = { window, document: { getElementById: id => id === 'control-token' ? tokenInput : elements[id] } };
     vm.runInNewContext(source, context);
     const requests = [];
     const confirmations = [];
@@ -153,7 +160,8 @@ function fixture(options = {}) {
         await new Promise(setImmediate);
     }
     return {
-        controller, elements, requests, confirmations, tokenInput, fire,
+        controller, elements, requests, confirmations, tokenInput, fire, timers,
+        fireTimers() { const due = [...timers.values()]; timers.clear(); due.forEach(t => t.fn()); },
         setDirection(value) { direction = value; },
         get forgotten() { return forgotten; },
         get remembered() { return remembered; },
@@ -213,7 +221,8 @@ test('discharge confirmation warns about export and backup reserve; cancelling s
     assert.match(dialog.body, /export electricity to the grid/);
     assert.match(dialog.body, /Solar Only or Never/);
     assert.match(dialog.body, /below your Backup Reserve/);
-    assert.match(dialog.body, /until /);
+    assert.match(dialog.body, /ending about .* if you confirm now/);
+    assert.match(dialog.body, /starts when the gateway accepts the command/);
     assert.match(dialog.body, /Use at your own risk/);
     assert.match(dialog.body, /home, your Powerwall system or the grid/);
     assert.equal(dialog.danger, true);
@@ -382,54 +391,95 @@ test('a failed dispatch shows no banner', async () => {
     assert.equal(f.banner, '');
 });
 
-test('the banner follows the server status and hides with the panel', () => {
+test('the banner follows the server status and stays when dispatch becomes unavailable', () => {
     const f = fixture();
-    const until = Date.now() / 1000 + 600;
-    f.controller.setAvailable(true, { power_watts: 3000, until });
-    assert.match(f.banner, /discharging at 3,000 W until /);
-    f.controller.setAvailable(true, null);
+    f.controller.setAvailable(true, { active: { power_watts: 3000, remaining_seconds: 600 }, pending: false });
+    assert.match(f.banner, /discharging at 3,000 W until about /);
+    assert.match(f.banner, /Resume normal operation/);
+    f.controller.setAvailable(true, { active: null, pending: false });
     assert.equal(f.banner, '');
-    f.controller.setAvailable(true, { power_watts: 0, until });
+    f.controller.setAvailable(true, { active: { power_watts: 0, remaining_seconds: 60 }, pending: false });
     assert.match(f.banner, /holding the battery at 0 W/);
-    f.controller.setAvailable(true, { power_watts: 500, until: Date.now() / 1000 - 1 });
-    assert.equal(f.banner, '', 'an expired dispatch is not shown');
-    f.controller.setAvailable(true, { power_watts: 500, until });
-    f.controller.setAvailable(false, { power_watts: 500, until });
-    assert.equal(f.banner, '');
+    // Losing v1r hides the controls but keeps the warning: the gateway still runs it
+    f.controller.setAvailable(false, { active: { power_watts: 500, remaining_seconds: 60 }, pending: false });
     assert.equal(f.elements['control-dispatch-section'].style.display, 'none');
+    assert.match(f.banner, /discharging at 500 W/);
+    assert.match(f.banner, /Local resume isn't available/);
+    // Unknown status (a failed request) leaves the banner as it is
+    f.controller.setAvailable(false, undefined);
+    assert.match(f.banner, /discharging at 500 W/);
 });
 
-test('Console passes the server dispatch_active to the panel', async () => {
+test('the banner expires at its deadline without waiting for status', () => {
+    const f = fixture();
+    f.controller.setAvailable(true, { active: { power_watts: 500, remaining_seconds: 1 }, pending: false });
+    assert.match(f.banner, /discharging/);
+    assert.deepEqual([...f.timers.values()].map(t => t.ms), [1000], 'timer uses the server remaining time');
+    f.fireTimers();
+    assert.equal(f.banner, '');
+});
+
+test('a new status replaces the expiry timer', () => {
+    const f = fixture();
+    f.controller.setAvailable(true, { active: { power_watts: 500, remaining_seconds: 5 }, pending: false });
+    f.controller.setAvailable(true, { active: { power_watts: 500, remaining_seconds: 300 }, pending: false });
+    assert.deepEqual([...f.timers.values()].map(t => t.ms), [300000]);
+    f.controller.setAvailable(true, { active: null, pending: false });
+    assert.equal(f.timers.size, 0);
+});
+
+test('a skewed browser clock does not hide a running dispatch', () => {
+    const f = fixture();
+    const realNow = Date.now;
+    Date.now = () => realNow() + 10 * 60 * 1000;  // browser clock 10 minutes fast
+    try {
+        f.controller.setAvailable(true, { active: { power_watts: 500, remaining_seconds: 30 }, pending: false });
+        assert.match(f.banner, /discharging at 500 W/);
+    } finally {
+        Date.now = realNow;
+    }
+});
+
+test('a command still being processed is shown', () => {
+    const f = fixture();
+    f.controller.setAvailable(true, { active: null, pending: true });
+    assert.match(f.banner, /still being processed/);
+    assert.match(f.banner, /actual battery power/);
+    f.controller.setAvailable(true, { active: null, pending: false });
+    assert.equal(f.banner, '');
+});
+
+test('Console passes the server dispatch status to the panel', async () => {
     const f = availabilityFixture();
-    const running = { power_watts: -1000, until: 2e9 };
-    f.setStatus({ enabled: true, battery_dispatch: true, dispatch_active: running });
+    const active = { power_watts: -1000, remaining_seconds: 90 };
+    f.setStatus({ enabled: true, battery_dispatch: true, dispatch_active: active, dispatch_pending: true });
     await f.context.loadControlStatus();
-    assert.deepEqual(f.context.running, running);
+    assert.deepEqual(JSON.parse(JSON.stringify(f.context.dispatch)), { active, pending: true });
     assert.equal(f.context.requestedAt, 7, 'the revision is read before the request and passed back');
-    f.setStatus({ enabled: true, battery_dispatch: true });
+    f.setStatus({ enabled: true, battery_dispatch: false });
     await f.context.loadControlStatus();
-    assert.equal(f.context.running, null);
+    assert.deepEqual(JSON.parse(JSON.stringify(f.context.dispatch)), { active: null, pending: false });
+    f.failStatus();
+    await f.context.loadControlStatus();
+    assert.equal(f.context.dispatch, undefined, 'unknown status leaves the banner alone');
 });
 
 test('a status response requested before a successful command is ignored for the banner', async () => {
     const f = fixture();
-    const until = Date.now() / 1000 + 600;
     f.controller.setAvailable(true);
     // Status requested, then a dispatch succeeds before the (empty) response lands
     let requestedAt = f.controller.revision();
     await f.fire('form', 'submit');
     assert.match(f.banner, /discharging at 5,000 W/);
-    f.controller.setAvailable(true, null, requestedAt);
+    f.controller.setAvailable(true, { active: null, pending: false }, requestedAt);
     assert.match(f.banner, /discharging at 5,000 W/, 'stale empty status keeps the new banner');
     // Status requested while running, then resume succeeds before it lands
     requestedAt = f.controller.revision();
     await f.fire('resume', 'click');
-    f.controller.setAvailable(true, { power_watts: 5000, until }, requestedAt);
+    f.controller.setAvailable(true, { active: { power_watts: 5000, remaining_seconds: 600 }, pending: false }, requestedAt);
     assert.equal(f.banner, '', 'stale running status does not restore the banner');
     // A fresh response applies
-    f.controller.setAvailable(true, { power_watts: -1000, until }, f.controller.revision());
+    f.controller.setAvailable(true, { active: { power_watts: -1000, remaining_seconds: 600 }, pending: false }, f.controller.revision());
     assert.match(f.banner, /charging at 1,000 W/);
-    // Losing availability always hides it, even with a stale revision
-    f.controller.setAvailable(false, { power_watts: -1000, until }, requestedAt);
-    assert.equal(f.banner, '');
 });
+

@@ -23,7 +23,10 @@ def test_console_serves_accessible_dispatch_form_and_script(client):
     assert "Use at your own risk." in risk
     assert "drain the battery below your Backup Reserve" in risk
     assert "your home, your Powerwall system or the grid" in risk
-    assert panel.find(id="control-dispatch-active")["aria-live"] == "polite"
+    # The running-dispatch banner sits outside the panel, so it stays visible
+    # when dispatch becomes unavailable (e.g. after losing v1r)
+    assert panel.find(id="control-dispatch-active") is None
+    assert html.find(id="control-dispatch-active")["aria-live"] == "polite"
     control_script = next(
         script.text for script in html.find_all("script") if "initControl()" in script.text
     )

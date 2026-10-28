@@ -2547,6 +2547,7 @@ class GatewayManager:
         method: str,
         *args,
         timeout: float = 10.0,
+        on_submit: Optional[Callable[[asyncio.Future], None]] = None,
         **kwargs,
     ) -> Optional[Any]:
         """Safely call a control method on a gateway's local pypowerwall connection.
@@ -2560,6 +2561,10 @@ class GatewayManager:
             method: Method name on pypowerwall (e.g., 'set_mode', 'set_operation')
             *args: Positional arguments for the method
             timeout: Timeout in seconds (default: 10.0)
+            on_submit: For a write, called with the worker's future right
+                after submission (under the write lock). The future completes
+                even after this call times out, so done-callbacks see the
+                real outcome, in write order.
             **kwargs: Keyword arguments for the method
 
         Returns:
@@ -2616,6 +2621,13 @@ class GatewayManager:
                                 self._islanding_futures.pop(gateway_id, None)
 
                         future.add_done_callback(clear_after_completion)
+
+                if on_submit is not None:
+                    hooks = [hook for hook in (on_dispatch, on_submit) if hook]
+
+                    def on_dispatch(future, hooks=hooks):
+                        for hook in hooks:
+                            hook(future)
 
                 result = await self._locked_call(
                     lambda: method_func(*args, **kwargs), timeout, on_dispatch

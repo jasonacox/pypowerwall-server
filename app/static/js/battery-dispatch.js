@@ -8,12 +8,14 @@
     const MAX_CONSOLE_SECONDS = 14400;
     const RISK = 'Use at your own risk: we don\'t know what incorrect use could do to your home, your Powerwall system or the grid.';
 
-    function endTime(seconds) {
-        return new Date(Date.now() + seconds * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    function clock(ms) {
+        return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     }
 
     function confirmation(watts, seconds) {
-        const until = `for ${seconds} seconds (until ${endTime(seconds)})`;
+        // The gateway starts the timer when it accepts the command, so the end
+        // time is an estimate that assumes you confirm right away.
+        const until = `for ${seconds} seconds, ending about ${clock(Date.now() + seconds * 1000)} if you confirm now (the time starts when the gateway accepts the command)`;
         const power = Math.abs(watts).toLocaleString();
         if (watts > 0) {
             return {
@@ -47,7 +49,13 @@
         const banner = document.getElementById('control-dispatch-active');
         let available = false;
         let busy = false;
-        let active = null;  // {power_watts, until (epoch seconds)} this server sent
+        // The running dispatch this server sent ({power_watts, deadline} with
+        // deadline on this browser's clock) and whether a dispatch command is
+        // still being processed. The banner is outside the panel: it stays
+        // visible when dispatch is unavailable, e.g. after losing v1r.
+        let active = null;
+        let pending = false;
+        let expiryTimer = null;
         // Bumped on each successful command, so a status response requested
         // before it can't overwrite the newer banner state.
         let revision = 0;
@@ -60,22 +68,40 @@
             form.setAttribute('aria-busy', String(busy));
         }
 
-        // The status refresh (every 30 s) clears the banner once the server
-        // drops the expired dispatch.
-        function showActive(value) {
-            active = value && Number.isFinite(value.until) && value.until * 1000 > Date.now() ? value : null;
+        function renderBanner() {
             if (!banner) return;
-            if (!active) {
-                banner.style.display = 'none';
-                banner.textContent = '';
-                return;
+            const parts = [];
+            if (active) {
+                const watts = active.power_watts;
+                const action = watts > 0 ? `discharging at ${watts.toLocaleString()} W`
+                    : watts < 0 ? `charging at ${Math.abs(watts).toLocaleString()} W` : 'holding the battery at 0 W';
+                parts.push(`Battery dispatch running: ${action} until about ${clock(active.deadline)}.`);
+                parts.push(available
+                    ? 'Select Resume normal operation to stop it early.'
+                    : 'Local resume isn\'t available right now; the gateway ends the dispatch on its own.');
             }
-            const watts = active.power_watts;
-            const action = watts > 0 ? `discharging at ${watts.toLocaleString()} W`
-                : watts < 0 ? `charging at ${Math.abs(watts).toLocaleString()} W` : 'holding the battery at 0 W';
-            const until = new Date(active.until * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-            banner.textContent = `Battery dispatch running: ${action} until ${until}. Select Resume normal operation to stop it early.`;
-            banner.style.display = 'block';
+            if (pending) {
+                parts.push('A battery dispatch command is still being processed. Check the power flow for actual battery power.');
+            }
+            banner.textContent = parts.join(' ');
+            banner.style.display = parts.length ? 'block' : 'none';
+        }
+
+        // remaining: seconds left, counted from now on this browser's clock,
+        // so a skewed clock still ends the banner at the right moment.
+        function setRunning(watts, remaining) {
+            if (expiryTimer) window.clearTimeout(expiryTimer);
+            expiryTimer = null;
+            active = null;
+            if (Number.isFinite(watts) && Number.isFinite(remaining) && remaining > 0) {
+                active = { power_watts: watts, deadline: Date.now() + remaining * 1000 };
+                expiryTimer = window.setTimeout(() => {
+                    expiryTimer = null;
+                    active = null;
+                    renderBanner();
+                }, remaining * 1000);
+            }
+            renderBanner();
         }
 
         function showMessage(text, type) {
@@ -145,11 +171,12 @@
                         && payload?.duration_seconds === body.duration_seconds;
                 if (!acknowledged) throw new Error('The gateway did not acknowledge this request.');
                 revision++;
+                pending = false;
                 if (release) {
-                    showActive(null);
+                    setRunning(null, 0);
                     showMessage('Resume accepted. The battery will follow its configured operating mode.', 'success');
                 } else {
-                    showActive({ power_watts: body.power_watts, until: Date.now() / 1000 + body.duration_seconds });
+                    setRunning(body.power_watts, body.duration_seconds);
                     const action = body.power_watts === 0 ? 'Zero-power'
                         : direction === 'charge' ? 'Charging' : 'Discharging';
                     showMessage(`${action} request accepted: ${Math.abs(body.power_watts).toLocaleString()} W for ${body.duration_seconds} s. Check the power flow for actual battery power.`, 'success');
@@ -172,15 +199,22 @@
         return {
             // Read before requesting /control/status; pass it back with the result.
             revision() { return revision; },
-            // value: dispatch is opted in and available; running: the server's
-            // dispatch_active ({power_watts, until}) or null; requestedAt: the
-            // revision() read before that status request. A response requested
-            // before a newer successful command doesn't change the banner.
-            setAvailable(value, running, requestedAt) {
+            // value: dispatch is opted in and available (shows the controls).
+            // dispatch: {active: the server's dispatch_active
+            // ({power_watts, remaining_seconds}) or null, pending: bool}, or
+            // undefined when unknown (the banner is left as it is).
+            // requestedAt: the revision() read before that status request; a
+            // response requested before a newer successful command doesn't
+            // change the banner.
+            setAvailable(value, dispatch, requestedAt) {
                 available = value === true;
                 update();
-                if (!available) showActive(null);
-                else if (running !== undefined && (requestedAt === undefined || requestedAt === revision)) showActive(running);
+                if (dispatch !== undefined && (requestedAt === undefined || requestedAt === revision)) {
+                    pending = dispatch?.pending === true;
+                    setRunning(dispatch?.active?.power_watts, dispatch?.active?.remaining_seconds);
+                } else {
+                    renderBanner();
+                }
             },
         };
     }

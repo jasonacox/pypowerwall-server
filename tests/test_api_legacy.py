@@ -567,6 +567,7 @@ def test_control_status_enabled_when_secret_set(control_client):
         "enabled": True,
         "battery_dispatch": False,
         "dispatch_active": None,
+        "dispatch_pending": False,
     }
 
 
@@ -581,6 +582,7 @@ def test_control_status_disabled_without_secret(client):
         "enabled": False,
         "battery_dispatch": False,
         "dispatch_active": None,
+        "dispatch_pending": False,
     }
 
 

@@ -60,7 +60,7 @@ import math
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs
 
 import psutil
@@ -200,22 +200,63 @@ def powerwall_unit_labels(
     return labels
 
 
-# The last battery dispatch this server sent, so the Console can show that one
-# is running. Held in memory and only touched on the event loop: a dispatch
-# sent before a restart, or by another client, is not shown.
-_active_dispatch: Dict[str, Any] = {}
+# Battery dispatches this server sent, so the Console can warn while one runs.
+# gateway_id -> (power_watts, estimated end on time.monotonic()). Updated by
+# done-callbacks on the event loop when the library call actually finishes,
+# in write order (the write lock serializes commands), even if the HTTP
+# request timed out. In memory only: a dispatch sent before a restart, or by
+# another client, is not shown.
+_dispatch_running: Dict[str, Tuple[float, float]] = {}
+# gateway_id -> the future of a dispatch/resume command still being processed
+_dispatch_pending: Dict[str, "asyncio.Future"] = {}
 
 
-def _dispatch_active(gateway_id: str) -> Optional[Dict[str, float]]:
-    """The running dispatch this server sent to gateway_id, or None."""
-    if (
-        _active_dispatch.get("gateway_id") != gateway_id
-        or _active_dispatch.get("until", 0) <= time.time()
-    ):
-        return None
+def _track_dispatch(gateway_id: str, method: str, args: tuple):
+    """local_control on_submit hook: record the command's real outcome."""
+
+    def on_submit(future: "asyncio.Future") -> None:
+        # The gateway's timer starts when it accepts the command; submission
+        # (under the write lock) is the closest time we know.
+        submitted = time.monotonic()
+        _dispatch_pending[gateway_id] = future
+
+        def on_done(done: "asyncio.Future") -> None:
+            if _dispatch_pending.get(gateway_id) is done:
+                del _dispatch_pending[gateway_id]
+            if done.cancelled() or done.exception() is not None:
+                return  # outcome unknown: keep the last known state
+            result = done.result()
+            if not isinstance(result, dict) or not result or is_error_result(result):
+                return  # not accepted: the previous dispatch (if any) still runs
+            if method == "dispatch_battery_power":
+                _dispatch_running[gateway_id] = (args[0], submitted + args[1])
+            else:
+                _dispatch_running.pop(gateway_id, None)
+
+        future.add_done_callback(on_done)
+
+    return on_submit
+
+
+def _dispatch_status(gateway_id: str) -> Dict[str, Any]:
+    """dispatch_active ({power_watts, remaining_seconds} or None) and
+    dispatch_pending for gateway_id. Remaining time, not a wall-clock end,
+    so a client with a skewed clock still counts down correctly."""
+    running = _dispatch_running.get(gateway_id)
+    active = None
+    if running is not None:
+        remaining = running[1] - time.monotonic()
+        if remaining > 0:
+            active = {
+                "power_watts": running[0],
+                "remaining_seconds": math.ceil(remaining),
+            }
+        else:
+            del _dispatch_running[gateway_id]
+    pending = _dispatch_pending.get(gateway_id)
     return {
-        "power_watts": _active_dispatch["power_watts"],
-        "until": _active_dispatch["until"],
+        "dispatch_active": active,
+        "dispatch_pending": pending is not None and not pending.done(),
     }
 
 
@@ -223,30 +264,34 @@ def _dispatch_active(gateway_id: str) -> Optional[Dict[str, float]]:
 async def control_status() -> Dict[str, Any]:
     """Control availability for the Console WebGUI (unauthenticated).
 
-    Reports whether control is enabled, whether battery dispatch is opted in
+    Reports whether control is enabled; whether battery dispatch is opted in
     (PW_BATTERY_DISPATCH) and available on the default gateway's live v1r
-    connection, and the dispatch this server last sent while it runs. No
-    gateway I/O, credentials or identifiers. All writes remain authenticated.
+    connection; and, independently of that connection, the dispatch this
+    server sent while it runs and whether a dispatch command is still being
+    processed. No gateway I/O, credentials or identifiers. All writes remain
+    authenticated.
     """
     enabled = settings.control_enabled
-    battery_dispatch = False
-    dispatch_active = None
-    if enabled and settings.battery_dispatch:
+    status: Dict[str, Any] = {
+        "enabled": enabled,
+        "battery_dispatch": False,
+        "dispatch_active": None,
+        "dispatch_pending": False,
+    }
+    if enabled:
         try:
             # Use the same gateway selection and live-connection check as the
             # dispatch endpoints. /stats aggregates modes across all gateways
             # and can describe a different gateway in a multi-gateway setup.
             gateway_id = get_default_gateway()
-            battery_dispatch = _is_v1r(gateway_id)
-            dispatch_active = _dispatch_active(gateway_id)
         except HTTPException:
             # The Console must still load before any gateway is configured.
-            pass
-    return {
-        "enabled": enabled,
-        "battery_dispatch": battery_dispatch,
-        "dispatch_active": dispatch_active,
-    }
+            return status
+        status["battery_dispatch"] = settings.battery_dispatch and _is_v1r(gateway_id)
+        # Reported even when v1r is down: the gateway keeps running a timed
+        # dispatch while local resume is unavailable.
+        status.update(_dispatch_status(gateway_id))
+    return status
 
 
 # The proxy's control API (pypowerwall proxy/server.py), so proxy clients such
@@ -684,23 +729,19 @@ async def _control_json(path: str, data: dict):
             )
         # Timed dispatch always uses local RSA control, including in hybrid
         # cloud mode. The shared write lock orders dispatch and resume even
-        # when a request times out while its worker is still running.
+        # when a request times out while its worker is still running, and
+        # _track_dispatch records the outcome when the worker finishes.
         result = await gateway_manager.local_control(
-            gateway_id, method, *args, timeout=max(10.0, settings.timeout + 5.0)
+            gateway_id,
+            method,
+            *args,
+            timeout=max(10.0, settings.timeout + 5.0),
+            on_submit=_track_dispatch(gateway_id, method, args),
         )
         if not isinstance(result, dict) or not result or is_error_result(result):
             raise HTTPException(
                 status_code=503, detail="Battery dispatch command failed"
             )
-        if path == "dispatch":
-            _active_dispatch.clear()
-            _active_dispatch.update(
-                gateway_id=gateway_id,
-                power_watts=args[0],
-                until=time.time() + args[1],
-            )
-        else:
-            _active_dispatch.clear()
         return result
 
     # Validate grid_charging requires an explicit boolean value to prevent
