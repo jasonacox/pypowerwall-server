@@ -1,0 +1,84 @@
+"""Optional HTTPS listener (PW_HTTPS=yes) alongside the main HTTP one.
+
+Started from the app's lifespan so it works however the server is launched
+(the Docker image runs `uvicorn app.main:app`, the CLI calls uvicorn.run). It
+serves the same app on PW_HTTPS_PORT with lifespan off (startup and shutdown
+run once, in the main server) and leaves signal handling to the main server.
+A failure to start (port in use, bad certificate) is logged and HTTP keeps
+serving.
+"""
+
+import asyncio
+import contextlib
+import logging
+from typing import Optional, Tuple
+
+import uvicorn
+
+from app.core.tls import certificate_files
+
+logger = logging.getLogger(__name__)
+
+
+class _EmbeddedServer(uvicorn.Server):
+    """A uvicorn server that runs inside another one's event loop."""
+
+    @contextlib.contextmanager
+    def capture_signals(self):
+        # The main server owns SIGINT/SIGTERM and stops this one on shutdown
+        yield
+
+
+async def start_https_listener(app, settings) -> Optional[Tuple[uvicorn.Server, asyncio.Task]]:
+    """Start the HTTPS listener when PW_HTTPS=yes; None when off or failed."""
+    if not settings.https_mode:
+        return None
+    if settings.https_port == settings.server_port:
+        logger.error(
+            "HTTPS not started: PW_HTTPS_PORT (%s) is the same as PW_PORT",
+            settings.https_port,
+        )
+        return None
+    try:
+        certfile, keyfile = certificate_files(settings.https_cert, settings.https_key)
+        config = uvicorn.Config(
+            app,
+            host=settings.server_host,
+            port=settings.https_port,
+            ssl_certfile=certfile,
+            ssl_keyfile=keyfile,
+            lifespan="off",
+            access_log=settings.debug,
+            log_config=None,  # keep the logging the main server set up
+        )
+        config.load()  # validates the certificate and key
+        # Bind here, not in serve(): on a bind error uvicorn calls sys.exit(),
+        # which inside a task would stop the whole event loop (and HTTP)
+        sock = config.bind_socket()
+    except (Exception, SystemExit) as e:
+        logger.error("HTTPS not started on port %s: %s", settings.https_port, e)
+        return None
+    server = _EmbeddedServer(config)
+    task = asyncio.create_task(server.serve(sockets=[sock]))
+    while not server.started and not task.done():
+        await asyncio.sleep(0.05)
+    if not server.started:
+        with contextlib.suppress(Exception):
+            await task
+        sock.close()
+        logger.error("HTTPS not started on port %s", settings.https_port)
+        return None
+    logger.info(
+        "HTTPS listening on %s:%s", settings.server_host, settings.https_port
+    )
+    return server, task
+
+
+async def stop_https_listener(listener) -> None:
+    """Stop the HTTPS listener started by start_https_listener()."""
+    if not listener:
+        return
+    server, task = listener
+    server.should_exit = True
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(task, timeout=10)

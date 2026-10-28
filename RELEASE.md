@@ -2,6 +2,20 @@
 
 ## Version History
 
+### [0.14.0] - Upcoming
+
+**Added:**
+- **HTTPS (optional): `PW_HTTPS=yes` also serves HTTPS on port 8775**
+  (`PW_HTTPS_PORT`), next to HTTP on 8675, so existing clients and health checks
+  are unchanged. The server generates a self-signed certificate once, unique to
+  this install, in `/data/tls` (else `data/tls`), or uses `PW_HTTPS_CERT` /
+  `PW_HTTPS_KEY`. Over HTTPS the power-flow cookies are `SameSite=None; Secure`
+  so the page works in an HTTPS iframe. `/stats` reports `PW_HTTPS_PORT`.
+
+**Fixed:**
+- **`PW_HTTPS` did nothing.** The server accepted it and reported it in `/stats`
+  but always served plain HTTP; `PW_HTTPS=yes` now starts the HTTPS listener.
+
 ### [0.13.0] - 2026-10-26
 
 Local battery dispatch from the API and the Console, a FleetAPI HTTP/1.1
