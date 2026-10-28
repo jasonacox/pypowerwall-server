@@ -7,6 +7,7 @@ import ipaddress
 import logging
 import os
 import socket
+import ssl
 from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ def certificate_files(
     directory: Optional[str] = None,
 ) -> Tuple[str, str]:
     """(certfile, keyfile): the user's pair if given (both required), else the
-    generated pair in `directory`, created when missing or expired."""
+    generated pair in `directory`, regenerated when missing, broken or expired."""
     if cert or key:
         if not (cert and key):
             raise ValueError("PW_HTTPS_CERT and PW_HTTPS_KEY must be set together")
@@ -35,17 +36,21 @@ def certificate_files(
     directory = directory or default_tls_dir()
     cert_path = os.path.join(directory, _CERT_NAME)
     key_path = os.path.join(directory, _KEY_NAME)
-    if not _valid(cert_path) or not os.path.isfile(key_path):
+    if not _usable(cert_path, key_path):
         _generate(cert_path, key_path)
         logger.info("Generated a self-signed HTTPS certificate in %s", directory)
     return cert_path, key_path
 
 
-def _valid(cert_path: str) -> bool:
-    """True when the generated certificate exists and hasn't expired."""
+def _usable(cert_path: str, key_path: str) -> bool:
+    """True when the pair loads together and the certificate hasn't expired."""
     from cryptography import x509
 
     try:
+        # Catches an empty, truncated or mismatched key; the password callback
+        # stops an encrypted key from prompting. ssl.SSLError is an OSError.
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert_path, key_path, password=lambda: b"")
         with open(cert_path, "rb") as file:
             certificate = x509.load_pem_x509_certificate(file.read())
     except (OSError, ValueError):
@@ -66,13 +71,15 @@ def _generate(cert_path: str, key_path: str) -> None:
     key = ec.generate_private_key(ec.SECP256R1())
     hostname = socket.gethostname()
     names = [x509.DNSName("localhost")]
-    if hostname and hostname != "localhost":
+    if hostname and hostname != "localhost" and hostname.isascii():
         names.append(x509.DNSName(hostname))
     names += [
         x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
         x509.IPAddress(ipaddress.ip_address("::1")),
     ]
-    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "pypowerwall-server")])
+    subject = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "pypowerwall-server")]
+    )
     now = datetime.datetime.now(datetime.timezone.utc)
     certificate = (
         x509.CertificateBuilder()
@@ -83,7 +90,9 @@ def _generate(cert_path: str, key_path: str) -> None:
         .not_valid_before(now - datetime.timedelta(minutes=5))
         .not_valid_after(now + datetime.timedelta(days=_VALID_DAYS))
         .add_extension(x509.SubjectAlternativeName(names), critical=False)
-        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(
+            x509.BasicConstraints(ca=False, path_length=None), critical=True
+        )
         .sign(key, hashes.SHA256())
     )
     # The private key is readable by the owner only, from before anything is

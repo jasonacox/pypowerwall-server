@@ -51,9 +51,9 @@ Environment Variables (Proxy Compatible):
         PW_HTTPS             - "yes" also serves HTTPS on PW_HTTPS_PORT; HTTP on
                                PW_PORT is unchanged (default: "no")
         PW_HTTPS_PORT        - HTTPS port when PW_HTTPS=yes (default: 8775)
-        PW_HTTPS_CERT        - PEM certificate for HTTPS (default: a self-signed
-                               certificate generated once in the data directory)
-        PW_HTTPS_KEY         - PEM private key for PW_HTTPS_CERT
+        PW_HTTPS_CERT        - Path to a PEM certificate file for HTTPS (default: a
+                               self-signed one generated once in the data dir)
+        PW_HTTPS_KEY         - Path to the PEM private key file for PW_HTTPS_CERT
 
     Performance Settings:
         PW_CACHE_EXPIRE      - Polling frequency in seconds (default: 5)
@@ -362,8 +362,12 @@ class Settings(BaseSettings):
     )  # Connection pool size
     https_mode: bool = Field(default=False, alias="PW_HTTPS")
     https_port: int = Field(default=8775, alias="PW_HTTPS_PORT")
-    https_cert: Optional[str] = Field(default=None, alias="PW_HTTPS_CERT")
-    https_key: Optional[str] = Field(default=None, alias="PW_HTTPS_KEY")
+    https_cert: Optional[str] = Field(
+        default=None, alias="PW_HTTPS_CERT"
+    )  # Path to a PEM certificate file
+    https_key: Optional[str] = Field(
+        default=None, alias="PW_HTTPS_KEY"
+    )  # Path to the PEM private key file
 
     # Network robustness settings
     suppress_network_errors: bool = Field(

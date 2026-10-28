@@ -6,11 +6,16 @@ Startup failures are logged; HTTP keeps serving.
 import asyncio
 import contextlib
 import logging
-from typing import Optional, Tuple
+from typing import Iterator, Optional, Tuple
 
 import uvicorn
+from fastapi import FastAPI
 
+from app.config import Settings
 from app.core.tls import certificate_files
+
+Listener = Tuple[uvicorn.Server, asyncio.Task]
+_START_TIMEOUT = 10.0  # seconds
 
 logger = logging.getLogger(__name__)
 
@@ -19,14 +24,12 @@ class _EmbeddedServer(uvicorn.Server):
     """A uvicorn server that runs inside another one's event loop."""
 
     @contextlib.contextmanager
-    def capture_signals(self):
+    def capture_signals(self) -> Iterator[None]:
         # The main server owns SIGINT/SIGTERM and stops this one on shutdown
         yield
 
 
-async def start_https_listener(
-    app, settings
-) -> Optional[Tuple[uvicorn.Server, asyncio.Task]]:
+async def start_https_listener(app: FastAPI, settings: Settings) -> Optional[Listener]:
     """Start when PW_HTTPS=yes: (server, task), or None if off or failed."""
     if not settings.https_mode:
         return None
@@ -59,11 +62,15 @@ async def start_https_listener(
         return None
     server = _EmbeddedServer(config)
     task = asyncio.create_task(server.serve(sockets=[sock]))
+    deadline = asyncio.get_running_loop().time() + _START_TIMEOUT
     while not server.started and not task.done():
+        if asyncio.get_running_loop().time() > deadline:
+            server.should_exit = True
+            break
         await asyncio.sleep(0.05)
     if not server.started:
         with contextlib.suppress(Exception):
-            await task
+            await asyncio.wait_for(task, timeout=_START_TIMEOUT)
         sock.close()
         logger.error("HTTPS not started on port %s", settings.https_port)
         return None
@@ -73,7 +80,7 @@ async def start_https_listener(
     return server, task
 
 
-async def stop_https_listener(listener) -> None:
+async def stop_https_listener(listener: Optional[Listener]) -> None:
     """Stop the HTTPS listener started by start_https_listener()."""
     if not listener:
         return

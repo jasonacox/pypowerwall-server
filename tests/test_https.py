@@ -5,6 +5,7 @@ import datetime
 import os
 import socket
 import stat
+import sys
 from types import SimpleNamespace
 
 import httpx
@@ -16,6 +17,10 @@ from cryptography.x509.oid import NameOID
 
 from app.core import tls
 from app.core.https_listener import start_https_listener, stop_https_listener
+
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32", reason="POSIX permission bits"
+)
 
 
 def _free_port():
@@ -40,7 +45,8 @@ def _settings(tmp_path, **overrides):
 def test_generates_a_private_certificate_once_and_reuses_it(tmp_path):
     directory = str(tmp_path / "tls")
     cert, key = tls.certificate_files(directory=directory)
-    assert stat.S_IMODE(os.stat(key).st_mode) == 0o600, "private key is owner-only"
+    if sys.platform != "win32":
+        assert stat.S_IMODE(os.stat(key).st_mode) == 0o600, "owner-only key"
     with open(cert, "rb") as f:
         first = f.read()
     certificate = x509.load_pem_x509_certificate(first)
@@ -52,6 +58,7 @@ def test_generates_a_private_certificate_once_and_reuses_it(tmp_path):
         assert f.read() == first, "reused, not regenerated"
 
 
+@posix_only
 def test_a_replaced_key_file_becomes_owner_only(tmp_path):
     directory = tmp_path / "tls"
     directory.mkdir()
@@ -63,8 +70,8 @@ def test_a_replaced_key_file_becomes_owner_only(tmp_path):
 
 
 def test_each_install_gets_its_own_key(tmp_path):
-    a, _ = tls.certificate_files(directory=str(tmp_path / "a"))
-    b, _ = tls.certificate_files(directory=str(tmp_path / "b"))
+    _, a = tls.certificate_files(directory=str(tmp_path / "a"))
+    _, b = tls.certificate_files(directory=str(tmp_path / "b"))
     assert open(a, "rb").read() != open(b, "rb").read()
 
 
@@ -180,6 +187,45 @@ def test_stats_reports_the_https_settings(client, monkeypatch):
 
 def test_generates_without_fchmod(tmp_path, monkeypatch):
     """Windows has no os.fchmod: generation still works."""
-    monkeypatch.delattr(tls.os, "fchmod")
+    monkeypatch.delattr(tls.os, "fchmod", raising=False)
     cert, key = tls.certificate_files(directory=str(tmp_path / "tls"))
     assert os.path.isfile(cert) and os.path.isfile(key)
+
+
+@pytest.mark.parametrize("damage", ["empty", "truncated", "other_key"])
+def test_a_broken_or_mismatched_key_is_regenerated(tmp_path, damage):
+    """A still-valid certificate with an unusable key would fail every restart."""
+    directory = str(tmp_path / "tls")
+    cert, key = tls.certificate_files(directory=directory)
+    if damage == "other_key":
+        _, other = tls.certificate_files(directory=str(tmp_path / "other"))
+        content = open(other, "rb").read()
+    else:
+        content = b"" if damage == "empty" else open(key, "rb").read()[:40]
+    with open(key, "wb") as f:
+        f.write(content)
+    assert not tls._usable(cert, key)
+    tls.certificate_files(directory=directory)
+    assert tls._usable(cert, key)
+
+
+def test_a_non_ascii_hostname_is_left_out(tmp_path, monkeypatch):
+    monkeypatch.setattr(tls.socket, "gethostname", lambda: "café")
+    cert, _ = tls.certificate_files(directory=str(tmp_path / "tls"))
+    sans = x509.load_pem_x509_certificate(open(cert, "rb").read()).extensions
+    names = sans.get_extension_for_class(x509.SubjectAlternativeName).value
+    assert names.get_values_for_type(x509.DNSName) == ["localhost"]
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_start_gives_up_instead_of_hanging(tmp_path, monkeypatch):
+    from app.core import https_listener
+    from app.main import app
+
+    async def never_starts(self, sockets=None):
+        while not self.should_exit:
+            await asyncio.sleep(0.01)
+
+    monkeypatch.setattr(https_listener, "_START_TIMEOUT", 0.2)
+    monkeypatch.setattr(https_listener._EmbeddedServer, "serve", never_starts)
+    assert await start_https_listener(app, _settings(tmp_path)) is None

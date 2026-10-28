@@ -498,14 +498,17 @@ self-signed certificate once, unique to this install, and keeps it in
 `/data/tls`. Mount `/data` so it survives container updates, or the browser asks
 again. Browsers warn about a self-signed certificate until you accept or trust
 it. To use your own certificate (for example from your home CA or Let's
-Encrypt), set `PW_HTTPS_CERT` and `PW_HTTPS_KEY` to PEM files. Over HTTPS the
-power-flow page's cookies are `SameSite=None; Secure`, so it works inside an
-HTTPS iframe such as a Home Assistant dashboard.
+Encrypt), set `PW_HTTPS_CERT` and `PW_HTTPS_KEY` to the paths of its PEM
+certificate and key files. Over HTTPS the power-flow page's cookies are
+`SameSite=None; Secure`, so it works inside an HTTPS iframe such as a Home
+Assistant dashboard.
 
-If you start uvicorn yourself with `--port`, set `PW_PORT` to the same port so
-the two listeners can't collide (the Docker image and the `pypowerwall-server`
-command already match). For access from outside your network, a reverse proxy
-with a real certificate (below) is still the better choice.
+HTTPS uses `PW_PORT` and `PW_BIND_ADDRESS`, not uvicorn's own options. If you
+start uvicorn yourself with `--port` or `--host`, set `PW_PORT` and
+`PW_BIND_ADDRESS` to match, so the listeners can't collide and a loopback-only
+setup stays loopback-only (the Docker image and the `pypowerwall-server` command
+already match). For access from outside your network, a reverse proxy with a
+real certificate (below) is still the better choice.
 
 ### Reverse Proxy / HTTPS Proxy
 

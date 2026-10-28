@@ -105,8 +105,8 @@ PW_GATEWAYS='[
 | `PW_PORT` | `8675` | ✓ | Port to listen on. Also `server.port` in the config file. |
 | `PW_HTTPS` | `no` | ✓ | `yes` also serves HTTPS on `PW_HTTPS_PORT`; HTTP on `PW_PORT` keeps working for existing clients and health checks. Unlike the proxy (which switches its one port to HTTPS), the server adds a second port. The proxy's `http` reads as `no`: cookies follow each request's scheme. See [HTTPS](README.md#https-optional). |
 | `PW_HTTPS_PORT` | `8775` | | HTTPS port when `PW_HTTPS=yes`. Not 8676, which Powerwall-Dashboard's weather service uses. |
-| `PW_HTTPS_CERT` | none | | PEM certificate for HTTPS, with `PW_HTTPS_KEY` (both or neither). Without them the server generates a self-signed certificate once, unique to this install, in `/data/tls` (else `data/tls`), and reuses it. |
-| `PW_HTTPS_KEY` | none | | PEM private key for `PW_HTTPS_CERT`. |
+| `PW_HTTPS_CERT` | none | | Path to a PEM certificate file for HTTPS, with `PW_HTTPS_KEY` (both or neither). Without them the server generates a self-signed certificate once, unique to this install, in `/data/tls` (else `data/tls`), and reuses it. |
+| `PW_HTTPS_KEY` | none | | Path to the PEM private key file for `PW_HTTPS_CERT`. |
 
 `PW_BIND_ADDRESS` and `PW_PORT` apply when the server is started with the
 `pypowerwall-server` command. The Docker image starts uvicorn directly on
