@@ -81,9 +81,8 @@ Environment Variables (Proxy Compatible):
         PW_CONTROL_SECRET    - Enable control commands (default: none/disabled)
         PW_ISLANDING_COOLDOWN - Seconds between islanding commands per gateway
                                (default: 30; 0 disables)
-        PW_BATTERY_DISPATCH  - Enable timed battery dispatch "yes"/"no" (default:
-                               "no"). Use at your own risk: a dispatch overrides
-                               the backup reserve and grid export settings.
+        PW_BATTERY_DISPATCH  - Enable battery dispatch "yes"/"no" (default: "no");
+                               use at your own risk
         PW_LOCAL_FIRST       - Prefer local v1r writes "yes"/"no" (default: "no")
         PW_CLOUD_HYBRID      - Start the hybrid cloud connection for a local gateway
                                with PW_EMAIL even without PW_CONTROL_SECRET, for its
@@ -408,7 +407,7 @@ class Settings(BaseSettings):
     )  # Server-enforced seconds between islanding commands per gateway (0 disables)
     battery_dispatch: bool = Field(
         default=False, alias="PW_BATTERY_DISPATCH"
-    )  # Opt-in for timed battery dispatch (use at your own risk; needs control)
+    )  # Battery dispatch opt-in (also needs PW_CONTROL_SECRET)
     proxy_base_url: str = Field(default="/", alias="PROXY_BASE_URL")
     pw_rsa_key_path: Optional[str] = Field(
         default=None, alias="PW_RSA_KEY_PATH"

@@ -201,7 +201,8 @@ def powerwall_unit_labels(
 
 
 def _dispatch_acknowledged(method: str, args: tuple, result: Any) -> bool:
-    """True only for the gateway's method-specific acknowledgement."""
+    """True if result acknowledges this command: matching power and duration
+    for a dispatch, resume_battery_operation True for a resume."""
     if not isinstance(result, dict) or is_error_result(result):
         return False
     if method == "dispatch_battery_power":
@@ -214,12 +215,10 @@ def _dispatch_acknowledged(method: str, args: tuple, result: Any) -> bool:
 
 @router.get("/control/status")
 async def control_status() -> Dict[str, bool]:
-    """Control availability for the Console WebGUI (unauthenticated).
+    """Control availability for the Console (unauthenticated, booleans only).
 
-    Reports whether control is enabled and whether battery dispatch is opted in
-    (PW_BATTERY_DISPATCH) and available on the default gateway's live v1r
-    connection. Only booleans are exposed, without gateway I/O, credentials or
-    identifiers. All writes remain authenticated.
+    battery_dispatch: opted in (PW_BATTERY_DISPATCH) and the default gateway's
+    live connection is v1r. No gateway I/O.
     """
     enabled = settings.control_enabled
     battery_dispatch = False
@@ -631,8 +630,8 @@ async def _control_json(path: str, data: dict):
     failed write."""
 
     if path in ("dispatch", "resume"):
-        # Dispatch is opt-in. Resume is not: it only hands control back to the
-        # configured mode, so it works even after the opt-in is turned off.
+        # Dispatch is opt-in; resume isn't, so turning the opt-in off can't
+        # strand a running dispatch.
         if path == "dispatch" and not settings.battery_dispatch:
             raise HTTPException(
                 status_code=403,

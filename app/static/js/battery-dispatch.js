@@ -1,6 +1,5 @@
-/* Battery dispatch controls for the Console. Requests use the shared token
- * and control API helpers; polling and page load never send a command.
- * Every dispatch asks for confirmation: use at your own risk. */
+/* Console battery dispatch controls. Only a user action sends a command
+ * (each dispatch is confirmed first); page load and polling never do. */
 (function () {
     'use strict';
 
@@ -12,8 +11,7 @@
         return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     }
 
-    // The gateway starts the timer when it accepts the command, so end times
-    // are estimates ("about").
+    // End times are estimates: the gateway's timer starts when it accepts.
     function until(seconds) {
         return `until about ${clock(Date.now() + seconds * 1000)}`;
     }

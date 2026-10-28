@@ -121,7 +121,7 @@ logger = logging.getLogger(__name__)
 
 
 def _log_battery_dispatch_opt_in() -> None:
-    """Warn at startup when battery dispatch is opted in (use at your own risk)."""
+    """Log a startup warning when PW_BATTERY_DISPATCH is on."""
     if not settings.battery_dispatch:
         return
     if settings.control_enabled:

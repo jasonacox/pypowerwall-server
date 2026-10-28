@@ -288,8 +288,7 @@ def test_dispatch_is_off_without_the_opt_in(
 def test_resume_works_without_the_opt_in(
     client, connected_gateway, mock_pypowerwall, monkeypatch, form
 ):
-    """Resume only hands control back, so turning the opt-in off can't strand
-    a running dispatch."""
+    """Resume works without the opt-in, so turning it off can't strand a dispatch."""
     from app.config import settings
 
     monkeypatch.setattr(settings, "battery_dispatch", False)
@@ -342,8 +341,7 @@ def test_startup_warns_when_dispatch_is_opted_in(
 
 
 def test_lifespan_stays_an_async_context_manager():
-    """The startup warning helper sits next to lifespan: keep the decorator on
-    lifespan (FastAPI's contract), not on the helper."""
+    """lifespan keeps its @asynccontextmanager (FastAPI's contract)."""
     from app import main
 
     manager = main.lifespan(main.app)  # creating it doesn't run startup
