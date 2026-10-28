@@ -16,6 +16,39 @@
 - **`PW_HTTPS` did nothing.** The server accepted it and reported it in `/stats`
   but always served plain HTTP; `PW_HTTPS=yes` now starts the HTTPS listener.
 
+### [0.13.1] - 2026-10-27
+
+Battery dispatch becomes a separate opt-in, with a clear "use at your own risk"
+warning, plus pypowerwall 0.22.2. Read **Changed** if you use battery dispatch.
+
+**Changed:**
+- **Battery dispatch is now opt-in: `PW_BATTERY_DISPATCH=yes`.** This is a
+  behavior change from 0.13.0. With only `PW_CONTROL_SECRET` set, the Console's
+  Battery Dispatch panel is hidden and `POST /control/dispatch` returns 403.
+  Set `PW_BATTERY_DISPATCH=yes` to turn it back on, **at your own risk**: a
+  dispatch overrides the backup reserve and grid export settings, and we have
+  no idea whether incorrect use could damage your home, your Powerwall system
+  or the grid. `POST /control/resume` works without it, so turning it off never
+  strands a running dispatch. The server logs a warning at startup when it's
+  on, and `/stats` reports it under `config`. (#185)
+- **pypowerwall upgraded to 0.22.2** (from 0.22.1; `requirements.txt` pin and
+  `pyproject.toml` minimum). Each accepted battery dispatch is now logged at
+  WARNING (action, watts, duration), and the library documents dispatch as use
+  at your own risk (jasonacox/pypowerwall#446).
+
+**Added:**
+- **Battery dispatch safeguards in the Console.** Every dispatch (charge,
+  discharge or 0 W) asks for confirmation, showing its risks, and the result
+  says when it is expected to end. Console durations are capped at 4 hours
+  (the API still accepts up to 86400 seconds). The panel shows one caution
+  line, with the full risks behind an info icon. (#185)
+- **"Use at your own risk" warning** for battery dispatch in README and API.md. (#185)
+
+**Fixed:**
+- **Battery dispatch success needs the gateway's acknowledgement for that
+  command** (matching power and duration, or `resume_battery_operation:
+  true`). Any other non-error reply was reported as success. (#185)
+
 ### [0.13.0] - 2026-10-26
 
 Local battery dispatch from the API and the Console, a FleetAPI HTTP/1.1

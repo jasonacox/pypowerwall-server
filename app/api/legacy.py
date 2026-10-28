@@ -200,17 +200,33 @@ def powerwall_unit_labels(
     return labels
 
 
+def _dispatch_acknowledged(method: str, args: tuple, result: Any) -> bool:
+    """True if result acknowledges this command: matching power and duration
+    for a dispatch, resume_battery_operation True for a resume."""
+    if not isinstance(result, dict) or is_error_result(result):
+        return False
+    if method == "dispatch_battery_power":
+        watts, seconds = result.get("power_watts"), result.get("duration_seconds")
+        # bool is an int in Python (False == 0, True == 1): not an ack
+        return (
+            not isinstance(watts, bool)
+            and not isinstance(seconds, bool)
+            and watts == args[0]
+            and seconds == args[1]
+        )
+    return result.get("resume_battery_operation") is True
+
+
 @router.get("/control/status")
 async def control_status() -> Dict[str, bool]:
-    """Control availability for the Console WebGUI (unauthenticated).
+    """Control availability for the Console (unauthenticated, booleans only).
 
-    Reports whether control is enabled and whether the default gateway's live
-    connection supports battery dispatch. Only booleans are exposed, without
-    gateway I/O, credentials or identifiers. All writes remain authenticated.
+    battery_dispatch: opted in (PW_BATTERY_DISPATCH) and the default gateway's
+    live connection is v1r. No gateway I/O.
     """
     enabled = settings.control_enabled
     battery_dispatch = False
-    if enabled:
+    if enabled and settings.battery_dispatch:
         try:
             # Use the same gateway selection and live-connection check as the
             # dispatch endpoints. /stats aggregates modes across all gateways
@@ -618,6 +634,14 @@ async def _control_json(path: str, data: dict):
     failed write."""
 
     if path in ("dispatch", "resume"):
+        # Dispatch is opt-in; resume isn't, so turning the opt-in off can't
+        # strand a running dispatch.
+        if path == "dispatch" and not settings.battery_dispatch:
+            raise HTTPException(
+                status_code=403,
+                detail="Battery dispatch is off. Set PW_BATTERY_DISPATCH=yes "
+                "to enable it (use at your own risk).",
+            )
         args = ()
         method = "resume_battery_operation"
         if path == "dispatch":
@@ -653,9 +677,11 @@ async def _control_json(path: str, data: dict):
         result = await gateway_manager.local_control(
             gateway_id, method, *args, timeout=max(10.0, settings.timeout + 5.0)
         )
-        if not isinstance(result, dict) or not result or is_error_result(result):
+        if not _dispatch_acknowledged(method, args, result):
             raise HTTPException(
-                status_code=503, detail="Battery dispatch command failed"
+                status_code=503,
+                detail="Battery dispatch not confirmed by the gateway. Check "
+                "battery power before retrying.",
             )
         return result
 
@@ -2925,6 +2951,7 @@ async def get_stats():
         "PW_TEDAPI_PROBE_INTERVAL": settings.tedapi_probe_interval,
         "PW_FAILOVER": settings.failover,
         "PW_FLEETAPI_HTTP": settings.fleetapi_http or None,
+        "PW_BATTERY_DISPATCH": settings.battery_dispatch,
         "PW_CLOUD_HYBRID": settings.cloud_hybrid,
         "PW_LOCAL_FIRST": settings.local_first,
     }

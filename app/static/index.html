@@ -635,6 +635,17 @@
         #control-dispatch-section {
             margin-bottom: 16px;
         }
+        .control-dispatch-caution {
+            margin-bottom: 12px;
+            font-size: 0.85em;
+            color: var(--text-primary);
+        }
+        .control-dispatch-caution > svg {
+            flex: none;
+            width: 16px;
+            height: 16px;
+            color: var(--accent-yellow);
+        }
         .control-dispatch-actions {
             display: flex;
             flex-wrap: wrap;
@@ -1996,6 +2007,11 @@
                 <section class="control-section" id="control-dispatch-section" aria-labelledby="control-dispatch-title" style="display:none">
                     <div class="control-section-title" id="control-dispatch-title">Battery Dispatch</div>
                     <form class="control-section-body" id="control-dispatch-form" novalidate>
+                        <div class="control-label-row control-dispatch-caution" id="control-dispatch-caution">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                            <span>Battery dispatch takes direct control of your Powerwall. Use with caution.</span>
+                            <button type="button" class="control-btn control-icon-btn control-info-btn" id="control-dispatch-info" title="About battery dispatch" aria-label="About battery dispatch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></button>
+                        </div>
                         <div class="control-section-row">
                             <div class="control-field">
                                 <div class="control-label" id="control-dispatch-direction-label">Direction</div>
@@ -2015,12 +2031,11 @@
                                 <input type="number" id="control-dispatch-power" min="0" step="any" value="500" inputmode="decimal" required disabled>
                             </div>
                             <div class="control-field">
-                                <label class="control-label" for="control-dispatch-duration">Duration (seconds)</label>
-                                <input type="number" id="control-dispatch-duration" min="1" max="86400" step="1" value="30" inputmode="numeric" required disabled>
+                                <label class="control-label" for="control-dispatch-duration">Duration (seconds, up to 4 hours)</label>
+                                <input type="number" id="control-dispatch-duration" min="1" max="14400" step="1" value="30" inputmode="numeric" required disabled>
                             </div>
                         </div>
-                        <p class="control-hint">Returns to your configured mode when the duration ends. Set 0 W to request no battery power. A full battery may not charge.</p>
-                        <p class="control-hint">Warning: discharge can export to the grid despite your Grid Export setting and drain below your Backup Reserve. You must confirm before starting a discharge.</p>
+                        <p class="control-hint">Note: The Powerwall returns to its operating mode when the duration ends.</p>
                         <div class="control-dispatch-actions">
                             <button type="submit" class="control-btn primary" id="control-dispatch-start" disabled>Start dispatch</button>
                             <button type="button" class="control-btn" id="control-dispatch-resume" disabled>Resume normal operation</button>
@@ -3972,6 +3987,7 @@
         const GRID_CHARGE_INFO = 'Only enable grid charging if your utility rate plan and local rules allow it. If you claim the U.S. federal Investment Tax Credit, verify how grid charging affects it (see the README). Rules differ by country and utility — you are responsible for complying with them; pypowerwall-server does not determine or enforce regulatory compliance.';
         const MODE_INFO = 'Self-Consumption uses solar first, the battery next, and the grid only as a last resort. Backup keeps the battery topped up toward your reserve level to be ready for outages. Time-Based (autonomous) shifts battery usage automatically to your utility\'s rate schedule to reduce cost.';
         const RESERVE_INFO = 'Backup Reserve is the percentage of battery capacity held back for outages. Capacity above this level is available for daily self-consumption or export, depending on your Mode and Grid Export settings.';
+        const DISPATCH_INFO = 'Use at your own risk. Battery dispatch takes direct control of your Powerwall\'s battery. A discharge can export to the grid even when Grid Export is set to Solar or Never, and can drain the battery below your Backup Reserve. A charge can draw from the grid and may ignore Grid Charging. 0 W holds the battery idle, so your home may draw from the grid. Behavior during a grid outage is untested. We don\'t know what incorrect use could do to your home, your Powerwall system or the grid. Use it only if you understand these risks.';
         const TOKEN_INFO = 'This is the PW_CONTROL_SECRET value set on the server. Paste it here to authorize changes to Mode, Backup Reserve, Battery Dispatch, Grid Charging, Grid Export and Grid Islanding. Check "Remember" to store it in this browser for next time.';
 
         // Styled confirmation modal (native <dialog>) replacing window.confirm.
@@ -4651,6 +4667,10 @@
             const gridExportInfo = document.getElementById('control-grid-export-info');
             if (gridExportInfo) gridExportInfo.addEventListener('click', () => {
                 confirmDialog({ title: 'Grid export eligibility (PTO)', body: PTO_INFO, confirmLabel: 'Got it', danger: false });
+            });
+            const dispatchInfo = document.getElementById('control-dispatch-info');
+            if (dispatchInfo) dispatchInfo.addEventListener('click', () => {
+                confirmDialog({ title: 'Battery dispatch', body: DISPATCH_INFO, confirmLabel: 'Got it', danger: false });
             });
             const tokenInfo = document.getElementById('control-token-info');
             if (tokenInfo) tokenInfo.addEventListener('click', () => {

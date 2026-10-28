@@ -177,9 +177,9 @@ for (const [direction, watts] of [['discharge', 5000], ['charge', -5000]]) {
         await f.fire('form', 'submit');
         assert.deepEqual(f.requests, [{ route: 'dispatch', body: { power_watts: watts, duration_seconds: 30 }, auth: 'test-token' }]);
         assert.equal(f.remembered, 'test-token');
-        assert.match(f.message, /request accepted/);
+        assert.match(f.message, new RegExp(`^${direction === 'charge' ? 'Charge' : 'Discharge'} at 5,000 W accepted, until about `));
         assert.match(f.message, /actual battery power/);
-        assert.equal(f.confirmations.length, direction === 'discharge' ? 1 : 0);
+        assert.equal(f.confirmations.length, 1);
     });
 }
 
@@ -190,8 +190,10 @@ test('zero power remains a dispatch', async () => {
     await f.fire('form', 'submit');
     assert.equal(f.requests[0].route, 'dispatch');
     assert.equal(f.requests[0].body.power_watts, 0);
-    assert.match(f.message, /Zero-power/);
-    assert.equal(f.confirmations.length, 0);
+    assert.match(f.message, /^Hold at 0 W accepted, until about /);
+    assert.equal(f.confirmations.length, 1);
+    assert.match(f.confirmations[0].body, /won't power your home/);
+    assert.match(f.confirmations[0].body, /own risk/);
 });
 
 test('discharge confirmation warns about export and backup reserve; cancelling sends nothing', async () => {
@@ -202,8 +204,12 @@ test('discharge confirmation warns about export and backup reserve; cancelling s
     const dialog = f.confirmations[0];
     assert.match(dialog.body, /5,000 W for 30 seconds/);
     assert.match(dialog.body, /export electricity to the grid/);
-    assert.match(dialog.body, /Solar Only or Never/);
+    assert.match(dialog.body, /Solar or Never/);
     assert.match(dialog.body, /below your Backup Reserve/);
+    assert.match(dialog.body, /for 30 seconds\?/);
+    assert.match(dialog.body, /grid outage is untested/);
+    assert.match(dialog.body, /Use at your own risk/);
+    assert.match(dialog.body, /home, your Powerwall system or the grid/);
     assert.equal(dialog.danger, true);
     assert.equal(f.requests.length, 0);
     assert.equal(f.remembered, '');
@@ -242,7 +248,7 @@ test('losing availability while confirming prevents discharge', async () => {
     assert.equal(f.elements['control-dispatch-form'].attrs['aria-busy'], 'false');
 });
 
-for (const [field, values] of [['power', ['', '-1', 'NaN', 'Infinity']], ['duration', ['', '0', '-1', '1.5', '86401']]]) {
+for (const [field, values] of [['power', ['', '-1', 'NaN', 'Infinity']], ['duration', ['', '0', '-1', '1.5', '14401', '86400']]]) {
     for (const value of values) {
         test(`invalid ${field} ${JSON.stringify(value)} never sends`, async () => {
             const f = fixture();
@@ -304,7 +310,7 @@ test('pending commands block duplicate dispatch and resume requests', async () =
 });
 
 for (const response of [
-    { resp: { ok: false, status: 503 }, payload: { detail: 'Battery dispatch command failed' } },
+    { resp: { ok: false, status: 503 }, payload: { detail: 'Battery dispatch not confirmed by the gateway.' } },
     { resp: { ok: true, status: 200 }, payload: null },
     { resp: { ok: true, status: 200 }, payload: { power_watts: -5000, duration_seconds: 30 } },
 ]) {
@@ -324,4 +330,42 @@ test('network failure permits resume without resending the dispatch', async () =
     assert.match(f.message, /Network unavailable/);
     assert.equal(f.elements['control-dispatch-resume'].disabled, false);
     assert.equal(f.requests.length, 1);
+});
+
+test('charge confirmation warns about grid draw and Grid Charging; cancelling sends nothing', async () => {
+    const f = fixture({ confirm: () => false });
+    f.controller.setAvailable(true);
+    f.setDirection('charge');
+    await f.fire('form', 'submit');
+    const dialog = f.confirmations[0];
+    assert.equal(dialog.title, 'Start battery charge?');
+    assert.match(dialog.body, /5,000 W for 30 seconds/);
+    assert.match(dialog.body, /draw power from the grid/);
+    assert.match(dialog.body, /Grid Charging/);
+    assert.match(dialog.body, /Use at your own risk/);
+    assert.equal(dialog.danger, true);
+    assert.equal(f.requests.length, 0);
+});
+
+test('the Console caps a dispatch at 4 hours', async () => {
+    const f = fixture();
+    f.controller.setAvailable(true);
+    f.elements['control-dispatch-duration'].value = '14400';
+    await f.fire('form', 'submit');
+    assert.equal(f.requests[0].body.duration_seconds, 14400);
+    f.elements['control-dispatch-duration'].value = '14401';
+    await f.fire('form', 'submit');
+    assert.equal(f.requests.length, 1);
+    assert.match(f.message, /14400 seconds \(4 hours\)/);
+});
+
+test('a failed command is reported as unconfirmed, for dispatch and resume', async () => {
+    const f = fixture({ post: async () => ({ resp: { ok: false, status: 503 }, payload: { detail: 'Battery dispatch not confirmed by the gateway.' } }) });
+    f.controller.setAvailable(true);
+    await f.fire('form', 'submit');
+    assert.match(f.message, /^Battery dispatch not confirmed by the gateway/);
+    assert.match(f.message, /before retrying: any dispatch the gateway accepted ends on its own/);
+    await f.fire('resume', 'click');
+    assert.match(f.message, /^Battery dispatch not confirmed by the gateway/);
+    assert.match(f.message, /any dispatch the gateway accepted ends on its own/);
 });

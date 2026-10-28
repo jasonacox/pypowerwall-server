@@ -1,7 +1,44 @@
-/* Battery dispatch controls for the Console. Requests use the shared token
- * and control API helpers; polling and page load never send a command. */
+/* Console battery dispatch controls. Only a user action sends a command
+ * (each dispatch is confirmed first); page load and polling never do. */
 (function () {
     'use strict';
+
+    // The Console caps a dispatch at 4 hours; the API accepts up to 86400 s.
+    const MAX_CONSOLE_SECONDS = 14400;
+    const RISK = 'Use at your own risk: we don\'t know what incorrect use could do to your home, your Powerwall system or the grid, and behavior during a grid outage is untested.';
+
+    function clock(ms) {
+        return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+
+    // End times are estimates: the gateway's timer starts when it accepts.
+    function until(seconds) {
+        return `until about ${clock(Date.now() + seconds * 1000)}`;
+    }
+
+    function confirmation(watts, seconds) {
+        const timing = `for ${seconds} seconds`;
+        const power = Math.abs(watts).toLocaleString();
+        if (watts > 0) {
+            return {
+                title: 'Start battery discharge?',
+                body: `Discharge at ${power} W ${timing}? This can export electricity to the grid even when Grid Export is set to Solar or Never, and drain the battery below your Backup Reserve. ${RISK}`,
+                confirmLabel: 'Start discharge',
+            };
+        }
+        if (watts < 0) {
+            return {
+                title: 'Start battery charge?',
+                body: `Charge at ${power} W ${timing}? This can draw power from the grid at your current rate, and may ignore your Grid Charging setting. ${RISK}`,
+                confirmLabel: 'Start charge',
+            };
+        }
+        return {
+            title: 'Hold the battery at 0 W?',
+            body: `Hold the battery at 0 W ${timing}? It won't power your home or store solar during that time, so your home may draw from the grid. ${RISK}`,
+            confirmLabel: 'Hold at 0 W',
+        };
+    }
 
     function create({ getToken, rememberToken, onUnauthorized, post, errorText, confirmDialog }) {
         const panel = document.getElementById('control-dispatch-section');
@@ -48,8 +85,8 @@
                     power.focus();
                     return;
                 }
-                if (!duration.value.trim() || !Number.isInteger(seconds) || seconds < 1 || seconds > 86400) {
-                    showMessage('Enter a whole duration from 1 to 86400 seconds.', 'error');
+                if (!duration.value.trim() || !Number.isInteger(seconds) || seconds < 1 || seconds > MAX_CONSOLE_SECONDS) {
+                    showMessage(`Enter a whole duration from 1 to ${MAX_CONSOLE_SECONDS} seconds (4 hours).`, 'error');
                     duration.focus();
                     return;
                 }
@@ -65,11 +102,9 @@
             const button = release ? resume : start;
             const label = button.textContent;
             try {
-                if (!release && body.power_watts > 0) {
+                if (!release) {
                     const confirmed = await confirmDialog({
-                        title: 'Start battery discharge?',
-                        body: `Discharge at ${body.power_watts.toLocaleString()} W for ${body.duration_seconds} seconds? This can export electricity to the grid even when Grid Export is set to Solar Only or Never, and drain the battery below your Backup Reserve. Only continue if your utility permits export and you accept using your backup energy.`,
-                        confirmLabel: 'Start discharge',
+                        ...confirmation(body.power_watts, body.duration_seconds),
                         danger: true,
                     });
                     if (!confirmed || !available) {
@@ -93,12 +128,13 @@
                 if (release) {
                     showMessage('Resume accepted. The battery will follow its configured operating mode.', 'success');
                 } else {
-                    const action = body.power_watts === 0 ? 'Zero-power'
-                        : direction === 'charge' ? 'Charging' : 'Discharging';
-                    showMessage(`${action} request accepted: ${Math.abs(body.power_watts).toLocaleString()} W for ${body.duration_seconds} s. Check the power flow for actual battery power.`, 'success');
+                    const action = body.power_watts === 0 ? 'Hold at 0 W'
+                        : direction === 'charge' ? `Charge at ${Math.abs(body.power_watts).toLocaleString()} W`
+                            : `Discharge at ${body.power_watts.toLocaleString()} W`;
+                    showMessage(`${action} accepted, ${until(body.duration_seconds)}. Check the power flow for actual battery power.`, 'success');
                 }
             } catch (error) {
-                showMessage((error.message || 'Request failed.') + ' Check battery power; a dispatch ends when its duration expires.', 'error');
+                showMessage((error.message || 'Request failed.') + ' Check the power flow before retrying: any dispatch the gateway accepted ends on its own when its duration expires.', 'error');
             } finally {
                 busy = false;
                 button.textContent = label;
