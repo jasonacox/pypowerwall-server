@@ -12,7 +12,6 @@ import httpx
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
 from app.core import tls
@@ -78,7 +77,8 @@ def test_each_install_gets_its_own_key(tmp_path):
 def test_an_expired_generated_certificate_is_replaced(tmp_path):
     directory = tmp_path / "tls"
     cert, key = tls.certificate_files(directory=str(directory))
-    private = ec.generate_private_key(ec.SECP256R1())
+    # Sign with the existing key so expiry is the only reason to replace it
+    private = serialization.load_pem_private_key(open(key, "rb").read(), None)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "old")])
     past = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
     expired = (
