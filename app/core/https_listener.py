@@ -24,7 +24,9 @@ class _EmbeddedServer(uvicorn.Server):
         yield
 
 
-async def start_https_listener(app, settings) -> Optional[Tuple[uvicorn.Server, asyncio.Task]]:
+async def start_https_listener(
+    app, settings
+) -> Optional[Tuple[uvicorn.Server, asyncio.Task]]:
     """Start when PW_HTTPS=yes: (server, task), or None if off or failed."""
     if not settings.https_mode:
         return None
