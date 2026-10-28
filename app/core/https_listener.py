@@ -1,11 +1,6 @@
-"""Optional HTTPS listener (PW_HTTPS=yes) alongside the main HTTP one.
-
-Started from the app's lifespan so it works however the server is launched
-(the Docker image runs `uvicorn app.main:app`, the CLI calls uvicorn.run). It
-serves the same app on PW_HTTPS_PORT with lifespan off (startup and shutdown
-run once, in the main server) and leaves signal handling to the main server.
-A failure to start (port in use, bad certificate) is logged and HTTP keeps
-serving.
+"""Optional HTTPS listener (PW_HTTPS=yes): a second uvicorn server for the same
+app, started from the lifespan so it works however the server is launched.
+Startup failures are logged; HTTP keeps serving.
 """
 
 import asyncio
@@ -30,7 +25,7 @@ class _EmbeddedServer(uvicorn.Server):
 
 
 async def start_https_listener(app, settings) -> Optional[Tuple[uvicorn.Server, asyncio.Task]]:
-    """Start the HTTPS listener when PW_HTTPS=yes; None when off or failed."""
+    """Start when PW_HTTPS=yes: (server, task), or None if off or failed."""
     if not settings.https_mode:
         return None
     if settings.https_port == settings.server_port:
@@ -47,7 +42,7 @@ async def start_https_listener(app, settings) -> Optional[Tuple[uvicorn.Server, 
             port=settings.https_port,
             ssl_certfile=certfile,
             ssl_keyfile=keyfile,
-            lifespan="off",
+            lifespan="off",  # startup/shutdown run once, in the main server
             access_log=settings.debug,
             log_config=None,  # keep the logging the main server set up
         )

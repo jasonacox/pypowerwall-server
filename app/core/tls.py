@@ -1,10 +1,5 @@
-"""TLS certificate for the optional HTTPS listener (PW_HTTPS=yes).
-
-Uses PW_HTTPS_CERT / PW_HTTPS_KEY when both are set. Otherwise generates a
-self-signed certificate once, unique to this install, in the data directory
-(/data/tls when the Docker /data volume exists, else data/tls) and reuses it,
-so a browser exception or trust survives restarts. An expired generated
-certificate is replaced. `cryptography` is already a pypowerwall dependency.
+"""Certificate for the optional HTTPS listener: the user's, or a self-signed
+one generated once per install and reused (so browser trust survives restarts).
 """
 
 import datetime
@@ -22,7 +17,7 @@ _VALID_DAYS = 3650
 
 
 def default_tls_dir() -> str:
-    """Where the generated certificate lives (same volume as the history DB)."""
+    """Directory for the generated pair: /data/tls if /data exists, else data/tls."""
     return os.path.join("/data" if os.path.isdir("/data") else "data", "tls")
 
 
@@ -31,11 +26,8 @@ def certificate_files(
     key: Optional[str] = None,
     directory: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """(certfile, keyfile) for the HTTPS listener.
-
-    A user certificate (both cert and key) wins. Otherwise the generated one
-    in `directory` is reused while valid, and created when missing or expired.
-    """
+    """(certfile, keyfile): the user's pair if given (both required), else the
+    generated pair in `directory`, created when missing or expired."""
     if cert or key:
         if not (cert and key):
             raise ValueError("PW_HTTPS_CERT and PW_HTTPS_KEY must be set together")

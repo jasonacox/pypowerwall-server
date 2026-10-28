@@ -495,9 +495,8 @@ class Settings(BaseSettings):
             word = text.lower()
             if word in _TRUE_WORDS:
                 return True
-            # PW_HTTPS=http is the proxy's Secure-cookie mode behind a TLS
-            # proxy; this server needs no such mode (cookies follow the
-            # request's scheme), so it means no HTTPS listener
+            # The proxy's PW_HTTPS=http (Secure cookies behind a TLS proxy)
+            # means no HTTPS listener here: cookies follow the request scheme
             proxy_http = info.field_name == "https_mode" and word == "http"
             if word in _FALSE_WORDS or proxy_http:
                 return False

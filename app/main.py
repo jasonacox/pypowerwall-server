@@ -158,7 +158,7 @@ async def lifespan(app: FastAPI):
             f"MQTT publisher enabled — broker: {settings.mqtt_host}:{settings.mqtt_port}"
         )
 
-    # Optional HTTPS listener (PW_HTTPS=yes) next to the main HTTP one
+    # Optional HTTPS listener (PW_HTTPS=yes)
     from app.core.https_listener import start_https_listener, stop_https_listener
     https_listener = await start_https_listener(app, settings)
 

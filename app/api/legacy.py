@@ -1007,9 +1007,8 @@ _AUTH_COOKIE_MAX_AGE = 10 * 365 * 24 * 60 * 60  # 315360000 seconds
 
 
 def auth_cookie_options(request: Request) -> Dict[str, Any]:
-    """Cookie flags by scheme. Over HTTPS: SameSite=None; Secure, like the
-    proxy's HTTPS mode, so the power-flow page works inside an HTTPS iframe
-    (e.g. a Home Assistant dashboard). Plain HTTP keeps SameSite=Lax."""
+    """Auth cookie flags: SameSite=None; Secure over HTTPS (so power flow works
+    in an HTTPS iframe), SameSite=Lax over HTTP."""
     if request.url.scheme == "https":
         return {"samesite": "none", "secure": True}
     return {"samesite": "lax"}
