@@ -550,9 +550,9 @@ in `/stats`. These actions are independent of Save. The UI validates power and
 duration, prevents duplicate requests while a command is pending, and reports
 acknowledgements with an estimated end time; the power flow shows actual
 battery power. Every dispatch, including 0 W, opens a confirmation with its
-estimated end time and its risks. A success needs the method-specific
-acknowledgement (matching power and duration, or
-`"resume_battery_operation": true`); anything else returns 503.
+risks. A success needs the method-specific acknowledgement (matching power and
+duration, or `"resume_battery_operation": true`); anything else returns 503
+"not confirmed", since the gateway may still have applied it.
 
 Dispatch takes `{"power_watts": -500, "duration_seconds": 30}` and an
 `Authorization: Bearer <PW_CONTROL_SECRET>` header. Resume takes `{}` with the
@@ -578,7 +578,8 @@ limits apply.
 Success returns `{"power_watts": -500.0, "duration_seconds": 30}` or
 `{"resume_battery_operation": true}`. An acknowledgement confirms acceptance;
 observe the polled `/aggregates` to check battery power. Bad input returns
-400; an unsupported connection, gateway rejection or timeout returns 503.
+400; an unsupported connection, a missing or wrong acknowledgement, or a
+timeout returns 503 (outcome unknown: check battery power before retrying).
 JSON errors use `{"detail": ...}`; forms use the proxy's `{"error": ...}`
 and status 400. Both require `PW_CONTROL_SECRET`; an invalid token returns 401.
 Requires pypowerwall 0.22.0 or later. An older library returns a command failure without

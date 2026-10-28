@@ -206,7 +206,8 @@ test('discharge confirmation warns about export and backup reserve; cancelling s
     assert.match(dialog.body, /export electricity to the grid/);
     assert.match(dialog.body, /Solar or Never/);
     assert.match(dialog.body, /below your Backup Reserve/);
-    assert.match(dialog.body, /for 30 seconds \(until about .+\)\?/);
+    assert.match(dialog.body, /for 30 seconds\?/);
+    assert.match(dialog.body, /grid outage is untested/);
     assert.match(dialog.body, /Use at your own risk/);
     assert.match(dialog.body, /home, your Powerwall system or the grid/);
     assert.equal(dialog.danger, true);
@@ -309,7 +310,7 @@ test('pending commands block duplicate dispatch and resume requests', async () =
 });
 
 for (const response of [
-    { resp: { ok: false, status: 503 }, payload: { detail: 'Battery dispatch command failed' } },
+    { resp: { ok: false, status: 503 }, payload: { detail: 'Battery dispatch not confirmed by the gateway.' } },
     { resp: { ok: true, status: 200 }, payload: null },
     { resp: { ok: true, status: 200 }, payload: { power_watts: -5000, duration_seconds: 30 } },
 ]) {
@@ -358,10 +359,13 @@ test('the Console caps a dispatch at 4 hours', async () => {
     assert.match(f.message, /14400 seconds \(4 hours\)/);
 });
 
-test('a failed dispatch says a command that reached the gateway ends on its own', async () => {
-    const f = fixture({ post: async () => ({ resp: { ok: false, status: 503 }, payload: { detail: 'Battery dispatch command failed' } }) });
+test('a failed command is reported as unconfirmed, for dispatch and resume', async () => {
+    const f = fixture({ post: async () => ({ resp: { ok: false, status: 503 }, payload: { detail: 'Battery dispatch not confirmed by the gateway.' } }) });
     f.controller.setAvailable(true);
     await f.fire('form', 'submit');
-    assert.match(f.message, /^Battery dispatch command failed/);
-    assert.match(f.message, /if the command reached the gateway, it ends on its own/);
+    assert.match(f.message, /^Battery dispatch not confirmed by the gateway/);
+    assert.match(f.message, /before retrying: any dispatch the gateway accepted ends on its own/);
+    await f.fire('resume', 'click');
+    assert.match(f.message, /^Battery dispatch not confirmed by the gateway/);
+    assert.match(f.message, /any dispatch the gateway accepted ends on its own/);
 });

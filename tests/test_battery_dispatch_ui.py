@@ -29,6 +29,8 @@ def test_console_serves_accessible_dispatch_form_and_script(client):
     assert "Use at your own risk." in info
     assert "drain the battery below your Backup Reserve" in info
     assert "your home, your Powerwall system or the grid" in info
+    assert "grid outage is untested" in info
+    assert "may draw from the grid" in info
     assert "addEventListener('click'" in info and "body: DISPATCH_INFO" in info
     control_script = next(
         script.text for script in html.find_all("script") if "initControl()" in script.text

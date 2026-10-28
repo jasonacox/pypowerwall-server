@@ -17,8 +17,8 @@
 
 **Added:**
 - **Battery dispatch safeguards in the Console.** Every dispatch (charge,
-  discharge or 0 W) asks for confirmation, showing its estimated end time and
-  its risks, and the result says when it is expected to end. Console durations
+  discharge or 0 W) asks for confirmation, showing its risks, and the result
+  says when it is expected to end. Console durations
   are capped at 4 hours (the API still accepts up to 86400 seconds). The panel
   shows one caution line, with the full risks behind an info icon. (#185)
 

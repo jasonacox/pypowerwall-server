@@ -362,3 +362,22 @@ def test_startup_runs_the_opt_in_warning():
     from app import main
 
     assert "_log_battery_dispatch_opt_in()" in inspect.getsource(main.lifespan)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"power_watts": False, "duration_seconds": 30},  # False == 0 in Python
+        {"power_watts": 0, "duration_seconds": True},  # True == 1
+    ],
+)
+def test_boolean_fields_are_not_an_acknowledgement(
+    client, connected_gateway, mock_pypowerwall, result
+):
+    mock_pypowerwall.dispatch_battery_power.return_value = result
+    seconds = 30 if result["duration_seconds"] is not True else 1
+    r = post(client, "dispatch", {"power_watts": 0, "duration_seconds": seconds})
+    assert r.status_code == 503
+    # The outcome is unknown, not a rejection: say so
+    assert "not confirmed" in r.json()["detail"]
+    assert "before retrying" in r.json()["detail"]

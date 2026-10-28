@@ -206,9 +206,13 @@ def _dispatch_acknowledged(method: str, args: tuple, result: Any) -> bool:
     if not isinstance(result, dict) or is_error_result(result):
         return False
     if method == "dispatch_battery_power":
+        watts, seconds = result.get("power_watts"), result.get("duration_seconds")
+        # bool is an int in Python (False == 0, True == 1): not an ack
         return (
-            result.get("power_watts") == args[0]
-            and result.get("duration_seconds") == args[1]
+            not isinstance(watts, bool)
+            and not isinstance(seconds, bool)
+            and watts == args[0]
+            and seconds == args[1]
         )
     return result.get("resume_battery_operation") is True
 
@@ -675,7 +679,9 @@ async def _control_json(path: str, data: dict):
         )
         if not _dispatch_acknowledged(method, args, result):
             raise HTTPException(
-                status_code=503, detail="Battery dispatch command failed"
+                status_code=503,
+                detail="Battery dispatch not confirmed by the gateway. Check "
+                "battery power before retrying.",
             )
         return result
 

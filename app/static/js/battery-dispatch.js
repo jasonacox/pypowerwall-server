@@ -5,7 +5,7 @@
 
     // The Console caps a dispatch at 4 hours; the API accepts up to 86400 s.
     const MAX_CONSOLE_SECONDS = 14400;
-    const RISK = 'Use at your own risk: we don\'t know what incorrect use could do to your home, your Powerwall system or the grid.';
+    const RISK = 'Use at your own risk: we don\'t know what incorrect use could do to your home, your Powerwall system or the grid, and behavior during a grid outage is untested.';
 
     function clock(ms) {
         return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -17,7 +17,7 @@
     }
 
     function confirmation(watts, seconds) {
-        const timing = `for ${seconds} seconds (${until(seconds)})`;
+        const timing = `for ${seconds} seconds`;
         const power = Math.abs(watts).toLocaleString();
         if (watts > 0) {
             return {
@@ -134,7 +134,7 @@
                     showMessage(`${action} accepted, ${until(body.duration_seconds)}. Check the power flow for actual battery power.`, 'success');
                 }
             } catch (error) {
-                showMessage((error.message || 'Request failed.') + ' Check the power flow: if the command reached the gateway, it ends on its own when its duration expires.', 'error');
+                showMessage((error.message || 'Request failed.') + ' Check the power flow before retrying: any dispatch the gateway accepted ends on its own when its duration expires.', 'error');
             } finally {
                 busy = false;
                 button.textContent = label;
