@@ -12,28 +12,32 @@
         return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     }
 
+    // The gateway starts the timer when it accepts the command, so end times
+    // are estimates ("about").
+    function until(seconds) {
+        return `until about ${clock(Date.now() + seconds * 1000)}`;
+    }
+
     function confirmation(watts, seconds) {
-        // The gateway starts the timer when it accepts the command, so the end
-        // time is an estimate that assumes you confirm right away.
-        const until = `for ${seconds} seconds, ending about ${clock(Date.now() + seconds * 1000)} if you confirm now (the time starts when the gateway accepts the command)`;
+        const timing = `for ${seconds} seconds (${until(seconds)})`;
         const power = Math.abs(watts).toLocaleString();
         if (watts > 0) {
             return {
                 title: 'Start battery discharge?',
-                body: `Discharge at ${power} W ${until}? This can export electricity to the grid even when Grid Export is set to Solar or Never, and drain the battery below your Backup Reserve. ${RISK}`,
+                body: `Discharge at ${power} W ${timing}? This can export electricity to the grid even when Grid Export is set to Solar or Never, and drain the battery below your Backup Reserve. ${RISK}`,
                 confirmLabel: 'Start discharge',
             };
         }
         if (watts < 0) {
             return {
                 title: 'Start battery charge?',
-                body: `Charge at ${power} W ${until}? This can draw power from the grid at your current rate, and may ignore your Grid Charging setting. ${RISK}`,
+                body: `Charge at ${power} W ${timing}? This can draw power from the grid at your current rate, and may ignore your Grid Charging setting. ${RISK}`,
                 confirmLabel: 'Start charge',
             };
         }
         return {
             title: 'Hold the battery at 0 W?',
-            body: `Hold the battery at 0 W ${until}? It won't power your home or store solar during that time, so your home may draw from the grid. ${RISK}`,
+            body: `Hold the battery at 0 W ${timing}? It won't power your home or store solar during that time, so your home may draw from the grid. ${RISK}`,
             confirmLabel: 'Hold at 0 W',
         };
     }
@@ -46,19 +50,8 @@
         const start = document.getElementById('control-dispatch-start');
         const resume = document.getElementById('control-dispatch-resume');
         const message = document.getElementById('control-dispatch-message');
-        const banner = document.getElementById('control-dispatch-active');
         let available = false;
         let busy = false;
-        // The running dispatch this server sent ({power_watts, deadline} with
-        // deadline on this browser's clock) and whether a dispatch command is
-        // still being processed. The banner is outside the panel: it stays
-        // visible when dispatch is unavailable, e.g. after losing v1r.
-        let active = null;
-        let pending = false;
-        let expiryTimer = null;
-        // Bumped on each successful command, so a status response requested
-        // before it can't overwrite the newer banner state.
-        let revision = 0;
 
         function update() {
             panel.style.display = available ? '' : 'none';
@@ -66,44 +59,6 @@
                 input.disabled = !available || busy;
             });
             form.setAttribute('aria-busy', String(busy));
-        }
-
-        function renderBanner() {
-            if (!banner) return;
-            const parts = [];
-            if (active) {
-                const watts = active.power_watts;
-                const action = watts > 0 ? `discharging at ${watts.toLocaleString()} W`
-                    : watts < 0 ? `charging at ${Math.abs(watts).toLocaleString()} W` : 'holding the battery at 0 W';
-                parts.push(active.confirmed
-                    ? `Battery dispatch running: ${action} until about ${clock(active.deadline)}.`
-                    : `A battery dispatch may be running: ${action} until about ${clock(active.deadline)}. The gateway didn't confirm it; check the power flow.`);
-                parts.push(available
-                    ? 'Select Resume normal operation to stop it early.'
-                    : 'Local resume isn\'t available right now; the gateway ends the dispatch on its own.');
-            }
-            if (pending) {
-                parts.push('A battery dispatch command is still being processed. Check the power flow for actual battery power.');
-            }
-            banner.textContent = parts.join(' ');
-            banner.style.display = parts.length ? 'block' : 'none';
-        }
-
-        // remaining: seconds left, counted from now on this browser's clock,
-        // so a skewed clock still ends the banner at the right moment.
-        function setRunning(watts, remaining, confirmed = true) {
-            if (expiryTimer) window.clearTimeout(expiryTimer);
-            expiryTimer = null;
-            active = null;
-            if (Number.isFinite(watts) && Number.isFinite(remaining) && remaining > 0) {
-                active = { power_watts: watts, deadline: Date.now() + remaining * 1000, confirmed };
-                expiryTimer = window.setTimeout(() => {
-                    expiryTimer = null;
-                    active = null;
-                    renderBanner();
-                }, remaining * 1000);
-            }
-            renderBanner();
         }
 
         function showMessage(text, type) {
@@ -172,19 +127,16 @@
                     : payload?.power_watts === body.power_watts
                         && payload?.duration_seconds === body.duration_seconds;
                 if (!acknowledged) throw new Error('The gateway did not acknowledge this request.');
-                revision++;
-                pending = false;
                 if (release) {
-                    setRunning(null, 0);
                     showMessage('Resume accepted. The battery will follow its configured operating mode.', 'success');
                 } else {
-                    setRunning(body.power_watts, body.duration_seconds);
-                    const action = body.power_watts === 0 ? 'Zero-power'
-                        : direction === 'charge' ? 'Charging' : 'Discharging';
-                    showMessage(`${action} request accepted: ${Math.abs(body.power_watts).toLocaleString()} W for ${body.duration_seconds} s. Check the power flow for actual battery power.`, 'success');
+                    const action = body.power_watts === 0 ? 'Hold at 0 W'
+                        : direction === 'charge' ? `Charge at ${Math.abs(body.power_watts).toLocaleString()} W`
+                            : `Discharge at ${body.power_watts.toLocaleString()} W`;
+                    showMessage(`${action} accepted, ${until(body.duration_seconds)}. Check the power flow for actual battery power.`, 'success');
                 }
             } catch (error) {
-                showMessage((error.message || 'Request failed.') + ' Check battery power; a dispatch ends when its duration expires.', 'error');
+                showMessage((error.message || 'Request failed.') + ' Check the power flow: if the command reached the gateway, it ends on its own when its duration expires.', 'error');
             } finally {
                 busy = false;
                 button.textContent = label;
@@ -199,24 +151,9 @@
         resume.addEventListener('click', () => send(true));
         update();
         return {
-            // Read before requesting /control/status; pass it back with the result.
-            revision() { return revision; },
-            // value: dispatch is opted in and available (shows the controls).
-            // dispatch: {active: the server's dispatch_active
-            // ({power_watts, remaining_seconds}) or null, pending: bool}, or
-            // undefined when unknown (the banner is left as it is).
-            // requestedAt: the revision() read before that status request; a
-            // response requested before a newer successful command doesn't
-            // change the banner.
-            setAvailable(value, dispatch, requestedAt) {
+            setAvailable(value) {
                 available = value === true;
                 update();
-                if (dispatch !== undefined && (requestedAt === undefined || requestedAt === revision)) {
-                    pending = dispatch?.pending === true;
-                    setRunning(dispatch?.active?.power_watts, dispatch?.active?.remaining_seconds, dispatch?.active?.confirmed !== false);
-                } else {
-                    renderBanner();
-                }
             },
         };
     }

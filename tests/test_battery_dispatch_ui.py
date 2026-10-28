@@ -30,14 +30,6 @@ def test_console_serves_accessible_dispatch_form_and_script(client):
     assert "drain the battery below your Backup Reserve" in info
     assert "your home, your Powerwall system or the grid" in info
     assert "addEventListener('click'" in info and "body: DISPATCH_INFO" in info
-    # The running-dispatch banner sits outside the panel, so it stays visible
-    # when dispatch becomes unavailable (e.g. after losing v1r)
-    banner = html.find(id="control-dispatch-active")
-    assert panel.find(id="control-dispatch-active") is None
-    assert banner["aria-live"] == "polite"
-    # ...and outside the control card, which a failed status request hides
-    assert html.find(id="control-card").find(id="control-dispatch-active") is None
-    assert banner.find_next_sibling()["id"] == "control-card"
     control_script = next(
         script.text for script in html.find_all("script") if "initControl()" in script.text
     )

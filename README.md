@@ -878,9 +878,7 @@ uses local v1r. Without the opt-in the panel stays hidden and
 power in watts and a duration from 1 to 14400 whole seconds (4 hours; the API
 allows up to 86400), then select **Start dispatch**. Defaults are 500 W for 30
 seconds. Every dispatch, including 0 W, opens a confirmation with its estimated
-end time and its risks. While a dispatch this server sent is running, a banner
-shows its power and estimated end time, even if the v1r connection is lost (it
-isn't shown after a server restart). **Resume normal
+end time and its risks. **Resume normal
 operation** releases a dispatch early, and `POST /control/resume` works even
 without the opt-in, so turning it off never strands a running dispatch. These
 actions are independent of Save and use the same control token. Check the power

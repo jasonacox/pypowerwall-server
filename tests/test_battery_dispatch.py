@@ -11,14 +11,11 @@ TOKEN = "dispatch-test-token"
 
 @pytest.fixture(autouse=True)
 def controls(monkeypatch, mock_pypowerwall):
-    from app.api import legacy
     from app.config import settings
     from app.core.gateway_manager import gateway_manager
 
     monkeypatch.setattr(settings, "control_secret", TOKEN)
     monkeypatch.setattr(settings, "battery_dispatch", True)
-    legacy._dispatch_running.clear()
-    legacy._dispatch_pending.clear()
     mock_pypowerwall.tedapi_mode = "v1r"
     mock_pypowerwall.dispatch_battery_power.return_value = {
         "power_watts": -500.0,
@@ -87,8 +84,6 @@ def test_dispatch_capability_matches_default_gateway_endpoint(
     assert response.json() == {
         "enabled": True,
         "battery_dispatch": available,
-        "dispatch_active": None,
-        "dispatch_pending": False,
     }
     assert all(not connection.method_calls for connection in connections.values())
 
@@ -118,8 +113,6 @@ def test_dispatch_capability_is_false_without_a_gateway_or_live_connection(clien
     assert client.get("/control/status").json() == {
         "enabled": True,
         "battery_dispatch": False,
-        "dispatch_active": None,
-        "dispatch_pending": False,
     }
     _register_gateway("default", "v1r")
     gateway_manager.connections.clear()
@@ -135,8 +128,6 @@ def test_dispatch_capability_is_false_when_control_is_disabled(client, monkeypat
     assert response.json() == {
         "enabled": False,
         "battery_dispatch": False,
-        "dispatch_active": None,
-        "dispatch_pending": False,
     }
     assert not connection.method_calls
 
@@ -283,8 +274,6 @@ def test_dispatch_is_off_without_the_opt_in(
     assert client.get("/control/status").json() == {
         "enabled": True,
         "battery_dispatch": False,
-        "dispatch_active": None,
-        "dispatch_pending": False,
     }
     r = post(client, "dispatch", {"power_watts": 500, "duration_seconds": 30}, form)
     if form:
@@ -307,151 +296,6 @@ def test_resume_works_without_the_opt_in(
     r = post(client, "resume", {}, form)
     assert (r.status_code, r.json()) == (200, {"resume_battery_operation": True})
     mock_pypowerwall.resume_battery_operation.assert_called_once_with()
-
-
-def test_status_reports_the_running_dispatch_until_resume(
-    client, connected_gateway, mock_pypowerwall
-):
-    mock_pypowerwall.dispatch_battery_power.return_value = {
-        "power_watts": -2000,
-        "duration_seconds": 600,
-    }
-    assert post(client, "dispatch", {"power_watts": -2000, "duration_seconds": 600}).status_code == 200
-    status = client.get("/control/status").json()
-    assert status["dispatch_active"]["power_watts"] == -2000
-    # Remaining time, not a wall-clock end: immune to client clock skew
-    assert 598 <= status["dispatch_active"]["remaining_seconds"] <= 600
-    assert status["dispatch_active"]["confirmed"] is True
-    assert status["dispatch_pending"] is False
-    assert post(client, "resume", {}).status_code == 200
-    assert client.get("/control/status").json()["dispatch_active"] is None
-
-
-def test_status_drops_an_expired_dispatch(client, connected_gateway, mock_pypowerwall):
-    import time
-    from app.api import legacy
-
-    mock_pypowerwall.dispatch_battery_power.return_value = {
-        "power_watts": 500,
-        "duration_seconds": 30,
-    }
-    post(client, "dispatch", {"power_watts": 500, "duration_seconds": 30})
-    assert client.get("/control/status").json()["dispatch_active"] is not None
-    gateway_id = next(iter(legacy._dispatch_running))
-    legacy._dispatch_running[gateway_id] = (500, time.monotonic() - 0.01, True)
-    assert client.get("/control/status").json()["dispatch_active"] is None
-    assert gateway_id not in legacy._dispatch_running
-
-
-@pytest.mark.parametrize(
-    "result",
-    [
-        None,  # the library returns None for a lost response and a rejection alike
-        {},
-        {"ERROR": "unsupported"},
-        {"power_watts": 400, "duration_seconds": 30},  # not this command's ack
-        RuntimeError("connection reset"),
-    ],
-)
-def test_unacknowledged_dispatch_warns_that_it_may_be_running(
-    client, connected_gateway, mock_pypowerwall, result
-):
-    """No acknowledgement doesn't prove the gateway rejected it, so the
-    warning stays up (unconfirmed) and the request still reports failure."""
-    if isinstance(result, Exception):
-        mock_pypowerwall.dispatch_battery_power.side_effect = result
-    else:
-        mock_pypowerwall.dispatch_battery_power.return_value = result
-    r = post(client, "dispatch", {"power_watts": 500, "duration_seconds": 30})
-    assert r.status_code in (500, 503)
-    active = client.get("/control/status").json()["dispatch_active"]
-    assert active["power_watts"] == 500 and active["confirmed"] is False
-
-
-def test_running_dispatch_is_reported_while_v1r_is_down(
-    client, connected_gateway, mock_pypowerwall
-):
-    """The gateway keeps running a timed dispatch after the client loses v1r,
-    exactly when local resume isn't possible, so the warning stays."""
-    mock_pypowerwall.dispatch_battery_power.return_value = {
-        "power_watts": 500,
-        "duration_seconds": 300,
-    }
-    post(client, "dispatch", {"power_watts": 500, "duration_seconds": 300})
-    mock_pypowerwall.tedapi_mode = "cloud"
-    status = client.get("/control/status").json()
-    assert status["battery_dispatch"] is False
-    assert status["dispatch_active"]["power_watts"] == 500
-
-
-@pytest.mark.asyncio
-async def test_timed_out_dispatch_is_recorded_when_its_worker_finishes(
-    connected_gateway, mock_pypowerwall
-):
-    """A request can time out while the worker still delivers the command:
-    status shows it pending, then records the real outcome."""
-    import time
-    from app.api import legacy
-    from app.core.gateway_manager import gateway_manager
-
-    started, release = threading.Event(), threading.Event()
-
-    def slow_dispatch(watts, seconds):
-        started.set()
-        release.wait(2)
-        return {"power_watts": watts, "duration_seconds": seconds}
-
-    mock_pypowerwall.dispatch_battery_power.side_effect = slow_dispatch
-    method, args = "dispatch_battery_power", (700, 120)
-    submitted = time.monotonic()
-    try:
-        result = await gateway_manager.local_control(
-            "test-gateway", method, *args, timeout=0.05,
-            on_submit=legacy._track_dispatch("test-gateway", method, args),
-        )
-        assert result is None and started.is_set()
-        status = legacy._dispatch_status("test-gateway")
-        assert status == {"dispatch_active": None, "dispatch_pending": True}
-        await asyncio.sleep(0.3)  # the gateway takes a while to answer
-    finally:
-        release.set()
-    for _ in range(100):
-        if not legacy._dispatch_status("test-gateway")["dispatch_pending"]:
-            break
-        await asyncio.sleep(0.01)
-    status = legacy._dispatch_status("test-gateway")
-    assert status["dispatch_pending"] is False
-    assert status["dispatch_active"]["power_watts"] == 700
-    assert status["dispatch_active"]["confirmed"] is True
-    # Conservative: the gateway accepted it at or before completion, so the
-    # warning counts from completion and never ends before the gateway stops
-    _, deadline, _ = legacy._dispatch_running["test-gateway"]
-    assert deadline >= submitted + 0.3 + 120
-
-
-@pytest.mark.asyncio
-async def test_unaccepted_or_failed_command_keeps_the_previous_state(
-    connected_gateway, mock_pypowerwall
-):
-    from app.api import legacy
-    from app.core.gateway_manager import gateway_manager
-
-    legacy._dispatch_running["test-gateway"] = (300, 1e12, True)
-    for outcome in (
-        {"ERROR": "rejected"},
-        {"resume_battery_operation": False},  # not an acknowledgement
-        RuntimeError("boom"),
-    ):
-        if isinstance(outcome, Exception):
-            mock_pypowerwall.resume_battery_operation.side_effect = outcome
-        else:
-            mock_pypowerwall.resume_battery_operation.return_value = outcome
-        await gateway_manager.local_control(
-            "test-gateway", "resume_battery_operation", timeout=1,
-            on_submit=legacy._track_dispatch("test-gateway", "resume_battery_operation", ()),
-        )
-        await asyncio.sleep(0)
-        assert legacy._dispatch_running["test-gateway"][0] == 300
 
 
 @pytest.mark.parametrize("value", [True, False])
@@ -506,38 +350,6 @@ def test_lifespan_stays_an_async_context_manager():
     assert hasattr(manager, "__aenter__") and hasattr(manager, "__aexit__")
 
 
-@pytest.mark.asyncio
-async def test_pending_until_the_outcome_is_recorded():
-    """A future can be done before its callbacks run: status keeps reporting
-    pending until the callback has recorded the outcome."""
-    from app.api import legacy
-
-    future = asyncio.get_running_loop().create_future()
-    legacy._track_dispatch("gw", "dispatch_battery_power", (500, 60))(future)
-    future.set_result({"power_watts": 500, "duration_seconds": 60})
-    assert legacy._dispatch_status("gw") == {"dispatch_active": None, "dispatch_pending": True}
-    await asyncio.sleep(0)
-    status = legacy._dispatch_status("gw")
-    assert status["dispatch_pending"] is False
-    assert status["dispatch_active"]["confirmed"] is True
-
-
-@pytest.mark.asyncio
-async def test_a_command_that_expired_before_sending_changes_nothing():
-    """_locked_call drops a write whose time ran out before a worker started
-    it (asyncio.TimeoutError): it never reached the gateway."""
-    from app.api import legacy
-
-    legacy._dispatch_running["gw"] = (300, 1e12, True)
-    for method, args in (("dispatch_battery_power", (900, 60)), ("resume_battery_operation", ())):
-        future = asyncio.get_running_loop().create_future()
-        legacy._track_dispatch("gw", method, args)(future)
-        future.set_exception(asyncio.TimeoutError("expired before a worker started it"))
-        await asyncio.sleep(0)
-        assert legacy._dispatch_running["gw"] == (300, 1e12, True)
-        assert "gw" not in legacy._dispatch_pending
-
-
 def test_endpoint_requires_the_method_specific_acknowledgement(
     client, connected_gateway, mock_pypowerwall
 ):
@@ -545,3 +357,10 @@ def test_endpoint_requires_the_method_specific_acknowledgement(
     assert post(client, "resume", {}).status_code == 503
     mock_pypowerwall.dispatch_battery_power.return_value = {"power_watts": 400, "duration_seconds": 30}
     assert post(client, "dispatch", {"power_watts": 500, "duration_seconds": 30}).status_code == 503
+
+
+def test_startup_runs_the_opt_in_warning():
+    import inspect
+    from app import main
+
+    assert "_log_battery_dispatch_opt_in()" in inspect.getsource(main.lifespan)
