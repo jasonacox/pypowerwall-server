@@ -21,9 +21,10 @@
   its risks. Console durations are capped at 4 hours (the API still accepts up
   to 86400 seconds). While a dispatch this server sent is running, a banner
   shows its power and estimated end time, even if the v1r connection is lost,
-  from the new `dispatch_active` (`remaining_seconds`) and `dispatch_pending`
-  fields in `/control/status`. The outcome is recorded when the command
-  actually finishes, even after a request timeout. (#185)
+  from the new `dispatch_active` (`remaining_seconds`, `confirmed`) and
+  `dispatch_pending` fields in `/control/status`. The outcome is recorded when
+  the command actually finishes, even after a request timeout, and a dispatch
+  the gateway didn't acknowledge is shown as "may be running". (#185)
 - **"Use at your own risk" warning** for battery dispatch in README and API.md. (#185)
 
 ### [0.13.0] - 2026-10-26

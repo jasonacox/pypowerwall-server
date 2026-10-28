@@ -335,7 +335,7 @@ for the request format and write path.
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
-| GET | `/control/status` | | `{"enabled": bool, "battery_dispatch": bool, "dispatch_active": {"power_watts", "remaining_seconds"} \| null, "dispatch_pending": bool}`: whether `PW_CONTROL_SECRET` is set; whether battery dispatch is opted in (`PW_BATTERY_DISPATCH`) and available on the default gateway's live v1r connection; the dispatch this server sent while it runs, with an estimated time left (counted from when the command was submitted; reported even while v1r is down; not kept across restarts); and whether a dispatch or resume command is still being processed. No credentials or gateway identifiers are exposed. |
+| GET | `/control/status` | | `{"enabled": bool, "battery_dispatch": bool, "dispatch_active": {"power_watts", "remaining_seconds", "confirmed"} \| null, "dispatch_pending": bool}`: whether `PW_CONTROL_SECRET` is set; whether battery dispatch is opted in (`PW_BATTERY_DISPATCH`) and available on the default gateway's live v1r connection; the dispatch this server sent, while it may still be running (reported even while v1r is down; not kept across restarts); and whether a dispatch or resume command's outcome is still unknown. `remaining_seconds` counts from when the command finished, so it never ends before the gateway does. `confirmed` is `false` when the gateway didn't acknowledge the dispatch: a lost response looks like a rejection, so it may be running. No credentials or gateway identifiers are exposed. |
 | GET | `/control/reserve` | | `{"reserve"}`, as in the proxy. Error when control is off. |
 | GET | `/control/mode` | | `{"mode"}` (`"unknown"` when not known), as in the proxy. |
 | GET | `/control/grid_charging` | | `{"grid_charging": true \| false}`, as in the proxy. |
@@ -551,11 +551,13 @@ duration, prevents duplicate requests while a command is pending, and reports
 acknowledgements; the power flow shows actual battery power. Every dispatch,
 including 0 W, opens a confirmation with its estimated end time and its risks.
 While a dispatch this server sent is running, `/control/status` reports it as
-`dispatch_active` and the Console shows a banner until its estimated end, even
-when the v1r connection is lost (local resume isn't possible then; the gateway
-ends the dispatch on its own). The server records each command's outcome when
-the library call finishes, even if the HTTP request timed out, and reports
-`dispatch_pending` while it is still being processed.
+`dispatch_active` and the Console shows a banner above the Control card until
+its estimated end, even when the v1r connection is lost or a status request
+fails. The server records each command's outcome when the library call
+finishes, even if the HTTP request timed out, and reports `dispatch_pending`
+until then. A dispatch the gateway didn't acknowledge is still shown, as "may
+be running" (`confirmed: false`), because a lost response looks the same as a
+rejection.
 
 Dispatch takes `{"power_watts": -500, "duration_seconds": 30}` and an
 `Authorization: Bearer <PW_CONTROL_SECRET>` header. Resume takes `{}` with the

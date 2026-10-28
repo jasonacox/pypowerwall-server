@@ -321,6 +321,7 @@ def test_status_reports_the_running_dispatch_until_resume(
     assert status["dispatch_active"]["power_watts"] == -2000
     # Remaining time, not a wall-clock end: immune to client clock skew
     assert 598 <= status["dispatch_active"]["remaining_seconds"] <= 600
+    assert status["dispatch_active"]["confirmed"] is True
     assert status["dispatch_pending"] is False
     assert post(client, "resume", {}).status_code == 200
     assert client.get("/control/status").json()["dispatch_active"] is None
@@ -337,17 +338,34 @@ def test_status_drops_an_expired_dispatch(client, connected_gateway, mock_pypowe
     post(client, "dispatch", {"power_watts": 500, "duration_seconds": 30})
     assert client.get("/control/status").json()["dispatch_active"] is not None
     gateway_id = next(iter(legacy._dispatch_running))
-    legacy._dispatch_running[gateway_id] = (500, time.monotonic() - 0.01)
+    legacy._dispatch_running[gateway_id] = (500, time.monotonic() - 0.01, True)
     assert client.get("/control/status").json()["dispatch_active"] is None
     assert gateway_id not in legacy._dispatch_running
 
 
-def test_failed_dispatch_is_not_reported_as_running(
-    client, connected_gateway, mock_pypowerwall
+@pytest.mark.parametrize(
+    "result",
+    [
+        None,  # the library returns None for a lost response and a rejection alike
+        {},
+        {"ERROR": "unsupported"},
+        {"power_watts": 400, "duration_seconds": 30},  # not this command's ack
+        RuntimeError("connection reset"),
+    ],
+)
+def test_unacknowledged_dispatch_warns_that_it_may_be_running(
+    client, connected_gateway, mock_pypowerwall, result
 ):
-    mock_pypowerwall.dispatch_battery_power.return_value = None
-    assert post(client, "dispatch", {"power_watts": 500, "duration_seconds": 30}).status_code == 503
-    assert client.get("/control/status").json()["dispatch_active"] is None
+    """No acknowledgement doesn't prove the gateway rejected it, so the
+    warning stays up (unconfirmed) and the request still reports failure."""
+    if isinstance(result, Exception):
+        mock_pypowerwall.dispatch_battery_power.side_effect = result
+    else:
+        mock_pypowerwall.dispatch_battery_power.return_value = result
+    r = post(client, "dispatch", {"power_watts": 500, "duration_seconds": 30})
+    assert r.status_code in (500, 503)
+    active = client.get("/control/status").json()["dispatch_active"]
+    assert active["power_watts"] == 500 and active["confirmed"] is False
 
 
 def test_running_dispatch_is_reported_while_v1r_is_down(
@@ -404,9 +422,11 @@ async def test_timed_out_dispatch_is_recorded_when_its_worker_finishes(
     status = legacy._dispatch_status("test-gateway")
     assert status["dispatch_pending"] is False
     assert status["dispatch_active"]["power_watts"] == 700
-    # The deadline counts from submission, not from the late acknowledgement
-    _, deadline = legacy._dispatch_running["test-gateway"]
-    assert deadline <= submitted + 120 + 0.2
+    assert status["dispatch_active"]["confirmed"] is True
+    # Conservative: the gateway accepted it at or before completion, so the
+    # warning counts from completion and never ends before the gateway stops
+    _, deadline, _ = legacy._dispatch_running["test-gateway"]
+    assert deadline >= submitted + 0.3 + 120
 
 
 @pytest.mark.asyncio
@@ -416,8 +436,12 @@ async def test_unaccepted_or_failed_command_keeps_the_previous_state(
     from app.api import legacy
     from app.core.gateway_manager import gateway_manager
 
-    legacy._dispatch_running["test-gateway"] = (300, 1e12)
-    for outcome in ({"ERROR": "rejected"}, RuntimeError("boom")):
+    legacy._dispatch_running["test-gateway"] = (300, 1e12, True)
+    for outcome in (
+        {"ERROR": "rejected"},
+        {"resume_battery_operation": False},  # not an acknowledgement
+        RuntimeError("boom"),
+    ):
         if isinstance(outcome, Exception):
             mock_pypowerwall.resume_battery_operation.side_effect = outcome
         else:
@@ -480,3 +504,44 @@ def test_lifespan_stays_an_async_context_manager():
 
     manager = main.lifespan(main.app)  # creating it doesn't run startup
     assert hasattr(manager, "__aenter__") and hasattr(manager, "__aexit__")
+
+
+@pytest.mark.asyncio
+async def test_pending_until_the_outcome_is_recorded():
+    """A future can be done before its callbacks run: status keeps reporting
+    pending until the callback has recorded the outcome."""
+    from app.api import legacy
+
+    future = asyncio.get_running_loop().create_future()
+    legacy._track_dispatch("gw", "dispatch_battery_power", (500, 60))(future)
+    future.set_result({"power_watts": 500, "duration_seconds": 60})
+    assert legacy._dispatch_status("gw") == {"dispatch_active": None, "dispatch_pending": True}
+    await asyncio.sleep(0)
+    status = legacy._dispatch_status("gw")
+    assert status["dispatch_pending"] is False
+    assert status["dispatch_active"]["confirmed"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_command_that_expired_before_sending_changes_nothing():
+    """_locked_call drops a write whose time ran out before a worker started
+    it (asyncio.TimeoutError): it never reached the gateway."""
+    from app.api import legacy
+
+    legacy._dispatch_running["gw"] = (300, 1e12, True)
+    for method, args in (("dispatch_battery_power", (900, 60)), ("resume_battery_operation", ())):
+        future = asyncio.get_running_loop().create_future()
+        legacy._track_dispatch("gw", method, args)(future)
+        future.set_exception(asyncio.TimeoutError("expired before a worker started it"))
+        await asyncio.sleep(0)
+        assert legacy._dispatch_running["gw"] == (300, 1e12, True)
+        assert "gw" not in legacy._dispatch_pending
+
+
+def test_endpoint_requires_the_method_specific_acknowledgement(
+    client, connected_gateway, mock_pypowerwall
+):
+    mock_pypowerwall.resume_battery_operation.return_value = {"resume_battery_operation": False}
+    assert post(client, "resume", {}).status_code == 503
+    mock_pypowerwall.dispatch_battery_power.return_value = {"power_watts": 400, "duration_seconds": 30}
+    assert post(client, "dispatch", {"power_watts": 500, "duration_seconds": 30}).status_code == 503

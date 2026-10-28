@@ -483,3 +483,12 @@ test('a status response requested before a successful command is ignored for the
     assert.match(f.banner, /charging at 1,000 W/);
 });
 
+
+test('an unconfirmed dispatch says it may be running', () => {
+    const f = fixture();
+    f.controller.setAvailable(true, { active: { power_watts: 500, remaining_seconds: 60, confirmed: false }, pending: false });
+    assert.match(f.banner, /may be running: discharging at 500 W/);
+    assert.match(f.banner, /didn't confirm it/);
+    f.controller.setAvailable(true, { active: { power_watts: 500, remaining_seconds: 60, confirmed: true }, pending: false });
+    assert.match(f.banner, /^Battery dispatch running/);
+});

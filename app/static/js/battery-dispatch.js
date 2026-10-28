@@ -75,7 +75,9 @@
                 const watts = active.power_watts;
                 const action = watts > 0 ? `discharging at ${watts.toLocaleString()} W`
                     : watts < 0 ? `charging at ${Math.abs(watts).toLocaleString()} W` : 'holding the battery at 0 W';
-                parts.push(`Battery dispatch running: ${action} until about ${clock(active.deadline)}.`);
+                parts.push(active.confirmed
+                    ? `Battery dispatch running: ${action} until about ${clock(active.deadline)}.`
+                    : `A battery dispatch may be running: ${action} until about ${clock(active.deadline)}. The gateway didn't confirm it; check the power flow.`);
                 parts.push(available
                     ? 'Select Resume normal operation to stop it early.'
                     : 'Local resume isn\'t available right now; the gateway ends the dispatch on its own.');
@@ -89,12 +91,12 @@
 
         // remaining: seconds left, counted from now on this browser's clock,
         // so a skewed clock still ends the banner at the right moment.
-        function setRunning(watts, remaining) {
+        function setRunning(watts, remaining, confirmed = true) {
             if (expiryTimer) window.clearTimeout(expiryTimer);
             expiryTimer = null;
             active = null;
             if (Number.isFinite(watts) && Number.isFinite(remaining) && remaining > 0) {
-                active = { power_watts: watts, deadline: Date.now() + remaining * 1000 };
+                active = { power_watts: watts, deadline: Date.now() + remaining * 1000, confirmed };
                 expiryTimer = window.setTimeout(() => {
                     expiryTimer = null;
                     active = null;
@@ -211,7 +213,7 @@
                 update();
                 if (dispatch !== undefined && (requestedAt === undefined || requestedAt === revision)) {
                     pending = dispatch?.pending === true;
-                    setRunning(dispatch?.active?.power_watts, dispatch?.active?.remaining_seconds);
+                    setRunning(dispatch?.active?.power_watts, dispatch?.active?.remaining_seconds, dispatch?.active?.confirmed !== false);
                 } else {
                     renderBanner();
                 }

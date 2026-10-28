@@ -636,7 +636,8 @@
             margin-bottom: 16px;
         }
         #control-dispatch-active {
-            margin: 0 0 12px;
+            grid-column: span 12;
+            margin: 0;
         }
         .control-dispatch-caution {
             margin-bottom: 12px;
@@ -1927,6 +1928,9 @@
                 </div>
             </div>
 
+            <!-- Running battery dispatch warning: outside the control card, so a
+                 failed status request (which hides the card) can't hide it -->
+            <div class="control-warning" id="control-dispatch-active" role="status" aria-live="polite"></div>
             <!-- Powerwall Control (hidden until GET /control/status → enabled) -->
             <div class="card control-card" id="control-card" style="display:none">
                 <div class="card-header">
@@ -2007,7 +2011,6 @@
                     </div>
                 </div>
 
-                <div class="control-warning" id="control-dispatch-active" role="status" aria-live="polite"></div>
                 <section class="control-section" id="control-dispatch-section" aria-labelledby="control-dispatch-title" style="display:none">
                     <div class="control-section-title" id="control-dispatch-title">Battery Dispatch</div>
                     <form class="control-section-body" id="control-dispatch-form" novalidate>

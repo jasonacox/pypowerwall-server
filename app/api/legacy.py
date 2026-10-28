@@ -201,37 +201,54 @@ def powerwall_unit_labels(
 
 
 # Battery dispatches this server sent, so the Console can warn while one runs.
-# gateway_id -> (power_watts, estimated end on time.monotonic()). Updated by
-# done-callbacks on the event loop when the library call actually finishes,
-# in write order (the write lock serializes commands), even if the HTTP
-# request timed out. In memory only: a dispatch sent before a restart, or by
-# another client, is not shown.
-_dispatch_running: Dict[str, Tuple[float, float]] = {}
-# gateway_id -> the future of a dispatch/resume command still being processed
+# gateway_id -> (power_watts, estimated end on time.monotonic(), confirmed).
+# Updated by done-callbacks on the event loop when the library call actually
+# finishes, in write order (the write lock serializes commands), even if the
+# HTTP request timed out. In memory only: a dispatch sent before a restart, or
+# by another client, is not shown.
+_dispatch_running: Dict[str, Tuple[float, float, bool]] = {}
+# gateway_id -> the future of a dispatch/resume command whose outcome isn't
+# recorded yet (removed by its done-callback, not when the future finishes)
 _dispatch_pending: Dict[str, "asyncio.Future"] = {}
+
+
+def _dispatch_acknowledged(method: str, args: tuple, result: Any) -> bool:
+    """True only for the gateway's method-specific acknowledgement."""
+    if not isinstance(result, dict) or is_error_result(result):
+        return False
+    if method == "dispatch_battery_power":
+        return (
+            result.get("power_watts") == args[0]
+            and result.get("duration_seconds") == args[1]
+        )
+    return result.get("resume_battery_operation") is True
 
 
 def _track_dispatch(gateway_id: str, method: str, args: tuple):
     """local_control on_submit hook: record the command's real outcome."""
 
     def on_submit(future: "asyncio.Future") -> None:
-        # The gateway's timer starts when it accepts the command; submission
-        # (under the write lock) is the closest time we know.
-        submitted = time.monotonic()
         _dispatch_pending[gateway_id] = future
 
         def on_done(done: "asyncio.Future") -> None:
             if _dispatch_pending.get(gateway_id) is done:
                 del _dispatch_pending[gateway_id]
-            if done.cancelled() or done.exception() is not None:
-                return  # outcome unknown: keep the last known state
-            result = done.result()
-            if not isinstance(result, dict) or not result or is_error_result(result):
-                return  # not accepted: the previous dispatch (if any) still runs
-            if method == "dispatch_battery_power":
-                _dispatch_running[gateway_id] = (args[0], submitted + args[1])
-            else:
-                _dispatch_running.pop(gateway_id, None)
+            error = None if done.cancelled() else done.exception()
+            if isinstance(error, asyncio.TimeoutError):
+                return  # expired before a worker started it: never sent
+            result = None if done.cancelled() or error else done.result()
+            acknowledged = _dispatch_acknowledged(method, args, result)
+            if method != "dispatch_battery_power":
+                if acknowledged:
+                    _dispatch_running.pop(gateway_id, None)
+                return  # unconfirmed resume: the dispatch may still run
+            # The gateway starts its timer when it accepts the command, at or
+            # before this point, so counting from completion never ends the
+            # warning early. No acknowledgement doesn't prove a rejection (a
+            # lost response looks the same), so warn that it may be running.
+            _dispatch_running[gateway_id] = (
+                args[0], time.monotonic() + args[1], acknowledged
+            )
 
         future.add_done_callback(on_done)
 
@@ -239,24 +256,25 @@ def _track_dispatch(gateway_id: str, method: str, args: tuple):
 
 
 def _dispatch_status(gateway_id: str) -> Dict[str, Any]:
-    """dispatch_active ({power_watts, remaining_seconds} or None) and
-    dispatch_pending for gateway_id. Remaining time, not a wall-clock end,
+    """dispatch_active ({power_watts, remaining_seconds, confirmed} or None)
+    and dispatch_pending for gateway_id. Remaining time, not a wall-clock end,
     so a client with a skewed clock still counts down correctly."""
     running = _dispatch_running.get(gateway_id)
     active = None
     if running is not None:
-        remaining = running[1] - time.monotonic()
+        watts, end, confirmed = running
+        remaining = end - time.monotonic()
         if remaining > 0:
             active = {
-                "power_watts": running[0],
+                "power_watts": watts,
                 "remaining_seconds": math.ceil(remaining),
+                "confirmed": confirmed,
             }
         else:
             del _dispatch_running[gateway_id]
-    pending = _dispatch_pending.get(gateway_id)
     return {
         "dispatch_active": active,
-        "dispatch_pending": pending is not None and not pending.done(),
+        "dispatch_pending": gateway_id in _dispatch_pending,
     }
 
 
@@ -738,7 +756,7 @@ async def _control_json(path: str, data: dict):
             timeout=max(10.0, settings.timeout + 5.0),
             on_submit=_track_dispatch(gateway_id, method, args),
         )
-        if not isinstance(result, dict) or not result or is_error_result(result):
+        if not _dispatch_acknowledged(method, args, result):
             raise HTTPException(
                 status_code=503, detail="Battery dispatch command failed"
             )
