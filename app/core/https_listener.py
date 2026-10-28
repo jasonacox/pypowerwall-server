@@ -30,6 +30,8 @@ async def start_https_listener(
     """Start when PW_HTTPS=yes: (server, task), or None if off or failed."""
     if not settings.https_mode:
         return None
+    # PW_PORT is the HTTP port for Docker and the CLI. Running uvicorn by hand
+    # with --port needs PW_PORT set to match: the app can't see --port.
     if settings.https_port == settings.server_port:
         logger.error(
             "HTTPS not started: PW_HTTPS_PORT (%s) is the same as PW_PORT",

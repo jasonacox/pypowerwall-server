@@ -89,7 +89,8 @@ def _generate(cert_path: str, key_path: str) -> None:
     # The private key is readable by the owner only, from before anything is
     # written, including when an older key file is being replaced
     fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(fd, 0o600)
+    if hasattr(os, "fchmod"):  # POSIX; Windows has no owner-only mode bits
+        os.fchmod(fd, 0o600)
     with os.fdopen(fd, "wb") as file:
         file.write(
             key.private_bytes(

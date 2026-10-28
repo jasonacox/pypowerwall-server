@@ -502,8 +502,10 @@ Encrypt), set `PW_HTTPS_CERT` and `PW_HTTPS_KEY` to PEM files. Over HTTPS the
 power-flow page's cookies are `SameSite=None; Secure`, so it works inside an
 HTTPS iframe such as a Home Assistant dashboard.
 
-For access from outside your network, a reverse proxy with a real certificate
-(below) is still the better choice.
+If you start uvicorn yourself with `--port`, set `PW_PORT` to the same port so
+the two listeners can't collide (the Docker image and the `pypowerwall-server`
+command already match). For access from outside your network, a reverse proxy
+with a real certificate (below) is still the better choice.
 
 ### Reverse Proxy / HTTPS Proxy
 

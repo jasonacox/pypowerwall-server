@@ -176,3 +176,10 @@ def test_stats_reports_the_https_settings(client, monkeypatch):
     monkeypatch.setattr(settings, "https_port", 8775)
     config = client.get("/stats").json()["config"]
     assert (config["PW_HTTPS"], config["PW_HTTPS_PORT"]) == ("yes", 8775)
+
+
+def test_generates_without_fchmod(tmp_path, monkeypatch):
+    """Windows has no os.fchmod: generation still works."""
+    monkeypatch.delattr(tls.os, "fchmod")
+    cert, key = tls.certificate_files(directory=str(tmp_path / "tls"))
+    assert os.path.isfile(cert) and os.path.isfile(key)
