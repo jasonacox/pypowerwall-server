@@ -27,11 +27,18 @@ def certificate_files(
     key: Optional[str] = None,
     directory: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """(certfile, keyfile): the user's pair if given (both required), else the
-    generated pair in `directory`, regenerated when missing, broken or expired."""
+    """(certfile, keyfile): the user's pair if given (both required, and it must
+    load), else the generated pair in `directory`, regenerated when missing,
+    broken or expired."""
     if cert or key:
         if not (cert and key):
             raise ValueError("PW_HTTPS_CERT and PW_HTTPS_KEY must be set together")
+        try:
+            _load(cert, key)
+        except OSError as e:
+            raise ValueError(
+                f"PW_HTTPS_CERT/PW_HTTPS_KEY can't be loaded (encrypted keys aren't supported): {e}"
+            ) from e
         return cert, key
     directory = directory or default_tls_dir()
     cert_path = os.path.join(directory, _CERT_NAME)
@@ -42,15 +49,22 @@ def certificate_files(
     return cert_path, key_path
 
 
+def _load(cert_path: str, key_path: str) -> None:
+    """Load the pair as the server will, without prompting. Raises OSError
+    (ssl.SSLError) for a missing, broken, mismatched or encrypted key."""
+    # uvicorn passes no password callback, so OpenSSL would block startup
+    # prompting for an encrypted key's passphrase
+    ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(
+        cert_path, key_path, password=lambda: b""
+    )
+
+
 def _usable(cert_path: str, key_path: str) -> bool:
     """True when the pair loads together and the certificate hasn't expired."""
     from cryptography import x509
 
     try:
-        # Catches an empty, truncated or mismatched key; the password callback
-        # stops an encrypted key from prompting. ssl.SSLError is an OSError.
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(cert_path, key_path, password=lambda: b"")
+        _load(cert_path, key_path)
         with open(cert_path, "rb") as file:
             certificate = x509.load_pem_x509_certificate(file.read())
     except (OSError, ValueError):

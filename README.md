@@ -499,7 +499,7 @@ self-signed certificate once, unique to this install, and keeps it in
 again. Browsers warn about a self-signed certificate until you accept or trust
 it. To use your own certificate (for example from your home CA or Let's
 Encrypt), set `PW_HTTPS_CERT` and `PW_HTTPS_KEY` to the paths of its PEM
-certificate and key files. Over HTTPS the power-flow page's cookies are
+certificate and unencrypted key files. Over HTTPS the power-flow page's cookies are
 `SameSite=None; Secure`, so it works inside an HTTPS iframe such as a Home
 Assistant dashboard.
 

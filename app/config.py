@@ -53,7 +53,7 @@ Environment Variables (Proxy Compatible):
         PW_HTTPS_PORT        - HTTPS port when PW_HTTPS=yes (default: 8775)
         PW_HTTPS_CERT        - Path to a PEM certificate file for HTTPS (default: a
                                self-signed one generated once in the data dir)
-        PW_HTTPS_KEY         - Path to the PEM private key file for PW_HTTPS_CERT
+        PW_HTTPS_KEY         - Path to the PEM private key file for PW_HTTPS_CERT (unencrypted)
 
     Performance Settings:
         PW_CACHE_EXPIRE      - Polling frequency in seconds (default: 5)
@@ -367,7 +367,7 @@ class Settings(BaseSettings):
     )  # Path to a PEM certificate file
     https_key: Optional[str] = Field(
         default=None, alias="PW_HTTPS_KEY"
-    )  # Path to the PEM private key file
+    )  # Path to the PEM private key file (unencrypted)
 
     # Network robustness settings
     suppress_network_errors: bool = Field(

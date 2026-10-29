@@ -95,10 +95,26 @@ def test_an_expired_generated_certificate_is_replaced(tmp_path):
 
 
 def test_user_certificate_wins_and_needs_both_files(tmp_path):
-    assert tls.certificate_files("my.crt", "my.key", directory=str(tmp_path)) == ("my.crt", "my.key")
-    assert not (tmp_path / "server.crt").exists()
+    cert, key = tls.certificate_files(directory=str(tmp_path / "mine"))
+    other = str(tmp_path / "unused")
+    assert tls.certificate_files(cert, key, directory=other) == (cert, key)
+    assert not os.path.exists(other)
     with pytest.raises(ValueError):
-        tls.certificate_files("my.crt", None)
+        tls.certificate_files(cert, None)
+
+
+def test_an_encrypted_user_key_is_rejected_without_prompting(tmp_path):
+    """uvicorn would wait for a passphrase on the terminal, blocking startup."""
+    cert, key = tls.certificate_files(directory=str(tmp_path / "tls"))
+    private = serialization.load_pem_private_key(open(key, "rb").read(), None)
+    encrypted = str(tmp_path / "encrypted.key")
+    with open(encrypted, "wb") as f:
+        f.write(private.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+            serialization.BestAvailableEncryption(b"secret"),
+        ))
+    with pytest.raises(ValueError, match="encrypted"):
+        tls.certificate_files(cert, encrypted)
 
 
 def test_default_directory_is_the_data_volume(monkeypatch):
