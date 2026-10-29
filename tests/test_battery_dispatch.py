@@ -318,6 +318,7 @@ def test_opt_in_defaults_off(monkeypatch):
     "opted_in, secret, expected",
     [
         (True, TOKEN, "USE AT YOUR OWN RISK"),
+        (True, TOKEN, "could void your Tesla warranty"),
         (True, None, "no effect without PW_CONTROL_SECRET"),
         (False, TOKEN, None),
     ],

@@ -82,7 +82,7 @@ Environment Variables (Proxy Compatible):
         PW_ISLANDING_COOLDOWN - Seconds between islanding commands per gateway
                                (default: 30; 0 disables)
         PW_BATTERY_DISPATCH  - Enable battery dispatch "yes"/"no" (default: "no");
-                               use at your own risk
+                               use at your own risk (could void your warranty)
         PW_LOCAL_FIRST       - Prefer local v1r writes "yes"/"no" (default: "no")
         PW_CLOUD_HYBRID      - Start the hybrid cloud connection for a local gateway
                                with PW_EMAIL even without PW_CONTROL_SECRET, for its

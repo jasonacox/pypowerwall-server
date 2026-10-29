@@ -209,6 +209,7 @@ test('discharge confirmation warns about export and backup reserve; cancelling s
     assert.match(dialog.body, /for 30 seconds\?/);
     assert.match(dialog.body, /grid outage is untested/);
     assert.match(dialog.body, /Use at your own risk/);
+    assert.match(dialog.body, /void or limit your Tesla warranty/);
     assert.match(dialog.body, /home, your Powerwall system or the grid/);
     assert.equal(dialog.danger, true);
     assert.equal(f.requests.length, 0);
@@ -343,6 +344,7 @@ test('charge confirmation warns about grid draw and Grid Charging; cancelling se
     assert.match(dialog.body, /draw power from the grid/);
     assert.match(dialog.body, /Grid Charging/);
     assert.match(dialog.body, /Use at your own risk/);
+    assert.match(dialog.body, /void or limit your Tesla warranty/);
     assert.equal(dialog.danger, true);
     assert.equal(f.requests.length, 0);
 });

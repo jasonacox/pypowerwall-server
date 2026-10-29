@@ -5,7 +5,7 @@
 
     // The Console caps a dispatch at 4 hours; the API accepts up to 86400 s.
     const MAX_CONSOLE_SECONDS = 14400;
-    const RISK = 'Use at your own risk: we don\'t know what incorrect use could do to your home, your Powerwall system or the grid, and behavior during a grid outage is untested.';
+    const RISK = 'Use at your own risk: it could void or limit your Tesla warranty, and we don\'t know what incorrect use could do to your home, your Powerwall system or the grid, and behavior during a grid outage is untested.';
 
     function clock(ms) {
         return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });

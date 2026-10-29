@@ -128,8 +128,8 @@ def _log_battery_dispatch_opt_in() -> None:
         logger.warning(
             "Battery dispatch is ON (PW_BATTERY_DISPATCH=yes). USE AT YOUR OWN "
             "RISK: a dispatch overrides the backup reserve and grid export "
-            "settings, and its effects on your home, system and the grid are "
-            "not fully known."
+            "settings, could void your Tesla warranty, and its effects on your "
+            "home, system and the grid are not fully known."
         )
     else:
         logger.warning(

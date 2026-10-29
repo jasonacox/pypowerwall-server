@@ -640,7 +640,7 @@ async def _control_json(path: str, data: dict):
             raise HTTPException(
                 status_code=403,
                 detail="Battery dispatch is off. Set PW_BATTERY_DISPATCH=yes "
-                "to enable it (use at your own risk).",
+                "to enable it (use at your own risk; it could void your warranty).",
             )
         args = ()
         method = "resume_battery_operation"

@@ -18,7 +18,7 @@ The **Energy** panel toggles between **Energy Summary** (current kW totals) and 
 
 <img alt="PyPowerwall Server Console - Trend" src="https://github.com/user-attachments/assets/3fac475e-aebd-46a8-8c2d-8c4d294b2360" />
 
-The **Control** panel allows you to manage the Powerwall's operation mode, reserve percentage, grid charging (with eligibility warnings) and grid export (with PTO confirmation). Requires setting the `PW_CONTROL_SECRET` environment variable. Battery dispatch is a separate opt-in (`PW_BATTERY_DISPATCH=yes`): **use at your own risk**, and read the [warning](#battery-dispatch-opt-in) first.
+The **Control** panel allows you to manage the Powerwall's operation mode, reserve percentage, grid charging (with eligibility warnings) and grid export (with PTO confirmation). Requires setting the `PW_CONTROL_SECRET` environment variable. Battery dispatch is a separate opt-in (`PW_BATTERY_DISPATCH=yes`): **use at your own risk; it could void your warranty**. Read the [warning](#battery-dispatch-opt-in) first.
 
 <img alt="PyPowerwall Server Console - Control" src="https://github.com/user-attachments/assets/2f33dc25-8f9c-412c-893f-087d6ba9c57d" />
 
@@ -848,11 +848,17 @@ grid charging or export changed. Controls the default gateway.
 
 #### Battery Dispatch (opt-in)
 
-> **⚠️ WARNING: USE AT YOUR OWN RISK**
+> **⚠️ WARNING: USE AT YOUR OWN RISK. IT COULD VOID YOUR WARRANTY.**
 >
 > Battery dispatch takes direct control of your Powerwall's battery through an
 > undocumented Tesla command. It is meant only for people who know what they
 > are doing.
+>
+> **Battery dispatch could void or limit your Tesla Powerwall warranty.** The
+> Powerwall warranty quoted in [pypowerwall#450](https://github.com/jasonacox/pypowerwall/issues/450) gives unlimited
+> cycles only for solar self-consumption, time-based control and backup; any
+> other use is limited to 37.8 MWh of total energy throughput. Check your
+> warranty first.
 >
 > - A **discharge** overrides the backup reserve and the grid export setting.
 >   It can drain the battery below your reserve, leaving you **without backup

@@ -136,7 +136,7 @@ PW_GATEWAYS='[
 |----------|---------|------------|:-----:|-------------|
 | `PW_CONTROL_SECRET` | none | All | ✓ | Enables all write routes; clients send it as the control token (see [Control and security](#control-and-security)). Unset means read-only. The proxy's form-encoded `token` requests work too. |
 | `PW_ISLANDING_COOLDOWN` | `30` | v1r | | Minimum seconds between islanding commands per gateway; `0` disables the cooldown. |
-| `PW_BATTERY_DISPATCH` | `no` | v1r | | `yes` enables timed battery dispatch (`POST /control/dispatch` and the Console panel). Needs `PW_CONTROL_SECRET`. **Use at your own risk: read the [warning](#timed-battery-dispatch-post-controldispatch-and-post-controlresume) first.** `POST /control/resume` works without it. |
+| `PW_BATTERY_DISPATCH` | `no` | v1r | | `yes` enables timed battery dispatch (`POST /control/dispatch` and the Console panel). Needs `PW_CONTROL_SECRET`. **Use at your own risk; it could void your warranty. Read the [warning](#timed-battery-dispatch-post-controldispatch-and-post-controlresume) first.** `POST /control/resume` works without it. |
 | `PW_CLOUD_HYBRID` | `no` | Local with `PW_EMAIL` | | `yes` starts the hybrid cloud connection without `PW_CONTROL_SECRET`, for its read-only values (Basic LAN mode and reserve, grid charging/export settings). With `PW_CONTROL_SECRET` set it starts anyway. Like the proxy, `PW_EMAIL` alone doesn't start it. |
 | `PW_LOCAL_FIRST` | `no` | v1r, Hybrid | | `yes` sends reserve, mode and grid writes over a confirmed local v1r connection first, even when a hybrid cloud connection exists (see [write path](#post-controlpath)). |
 
@@ -343,7 +343,7 @@ for the request format and write path.
 | GET | `/control/max_backup` | | Current backup events (TEDAPI v1r), as in the proxy, cached 30 seconds. With a valid token (the `Authorization` header, preferred, or `?token=`, which can end up in access logs), an expired manual backup event is cancelled, decided on fresh data. |
 | POST | `/control/{path}` | token | Set `reserve`, `mode`, `grid_charging`, `grid_export`, `reserve_hold` or `max_backup`; returns the library result. Also takes the proxy's form-encoded requests (below). |
 | POST | `/control/islanding` | token | Go off grid or reconnect (TEDAPI v1r only). |
-| POST | `/control/dispatch` | token | Timed local battery power setpoint (TEDAPI v1r only). Off unless `PW_BATTERY_DISPATCH=yes`; **use at your own risk**. |
+| POST | `/control/dispatch` | token | Timed local battery power setpoint (TEDAPI v1r only). Off unless `PW_BATTERY_DISPATCH=yes`; **use at your own risk; could void your warranty**. |
 | POST | `/control/resume` | token | Release a local battery dispatch. Works without `PW_BATTERY_DISPATCH`. |
 | GET | `/api/tesla/tariff_rate` | | The site's Tesla tariff from the cloud. Cached 5 minutes; the last good value is served if a refresh fails. |
 | POST | `/api/tesla/time_of_use_settings` | token | Update the Time-of-Use tariff. Body `{"tou_settings": {..., "tariff_content_v2": {...}}}`; only `tou_settings` is sent to Tesla. |
@@ -511,11 +511,17 @@ path above applies. Islanding is unaffected.
 
 ### Timed battery dispatch: `POST /control/dispatch` and `POST /control/resume`
 
-> **⚠️ WARNING: USE AT YOUR OWN RISK**
+> **⚠️ WARNING: USE AT YOUR OWN RISK. IT COULD VOID YOUR WARRANTY.**
 >
 > Battery dispatch takes direct control of your Powerwall's battery through an
 > undocumented Tesla command. It is meant only for people who know what they
 > are doing.
+>
+> **Battery dispatch could void or limit your Tesla Powerwall warranty.** The
+> Powerwall warranty quoted in [pypowerwall#450](https://github.com/jasonacox/pypowerwall/issues/450) gives unlimited
+> cycles only for solar self-consumption, time-based control and backup; any
+> other use is limited to 37.8 MWh of total energy throughput. Check your
+> warranty first.
 >
 > - A **discharge** overrides the backup reserve and the grid export setting.
 >   It can drain the battery below your reserve, leaving you **without backup

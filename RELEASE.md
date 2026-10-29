@@ -2,6 +2,20 @@
 
 ## Version History
 
+### [0.14.0] - Upcoming
+
+#### Changed
+
+- **Battery dispatch now boldly warns that it could void or limit your Tesla
+  Powerwall warranty.** The Powerwall warranty quoted in
+  [pypowerwall#450](https://github.com/jasonacox/pypowerwall/issues/450) gives
+  unlimited cycles only for solar self-consumption, time-based control and
+  backup; any other use is limited to 37.8 MWh of total energy throughput.
+  Added to the README and API.md warnings, the Console caution line, info popup
+  and confirmations, the 403 message and the startup warning. Thanks
+  @longzheng for spotting this and @BJReplay for working out what the limit
+  means in daily use.
+
 ### [0.13.1] - 2026-10-27
 
 Battery dispatch becomes a separate opt-in, with a clear "use at your own risk"

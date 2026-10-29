@@ -22,11 +22,12 @@ def test_console_serves_accessible_dispatch_form_and_script(client):
     # A short caution line on the panel; the full risks are behind its info icon
     caution = panel.find(id="control-dispatch-caution")
     assert caution.get_text(" ", strip=True) == (
-        "Battery dispatch takes direct control of your Powerwall. Use with caution."
+        "Battery dispatch takes direct control of your Powerwall and could void your warranty. Use with caution."
     )
     assert caution.find(id="control-dispatch-info")["aria-label"] == "About battery dispatch"
     info = next(s.text for s in html.find_all("script") if "DISPATCH_INFO" in s.text)
     assert "Use at your own risk." in info
+    assert "warranty" in info
     assert "drain the battery below your Backup Reserve" in info
     assert "your home, your Powerwall system or the grid" in info
     assert "grid outage is untested" in info
