@@ -48,7 +48,12 @@ Environment Variables (Proxy Compatible):
         PW_BIND_ADDRESS      - Server bind address (default: "0.0.0.0")
         PW_PORT              - Server port (default: 8675)
         PW_DEBUG             - Enable debug logging "yes"/"no" (default: "no")
-        PW_HTTPS             - Enable HTTPS mode (default: "no")
+        PW_HTTPS             - "yes" also serves HTTPS on PW_HTTPS_PORT; HTTP on
+                               PW_PORT is unchanged (default: "no")
+        PW_HTTPS_PORT        - HTTPS port when PW_HTTPS=yes (default: 8775)
+        PW_HTTPS_CERT        - Path to a PEM certificate file for HTTPS (default: a
+                               self-signed one generated once in the data dir)
+        PW_HTTPS_KEY         - Path to the PEM private key file for PW_HTTPS_CERT (unencrypted)
 
     Performance Settings:
         PW_CACHE_EXPIRE      - Polling frequency in seconds (default: 5)
@@ -356,6 +361,13 @@ class Settings(BaseSettings):
         default=15, alias="PW_POOL_MAXSIZE"
     )  # Connection pool size
     https_mode: bool = Field(default=False, alias="PW_HTTPS")
+    https_port: int = Field(default=8775, alias="PW_HTTPS_PORT")
+    https_cert: Optional[str] = Field(
+        default=None, alias="PW_HTTPS_CERT"
+    )  # Path to a PEM certificate file
+    https_key: Optional[str] = Field(
+        default=None, alias="PW_HTTPS_KEY"
+    )  # Path to the PEM private key file (unencrypted)
 
     # Network robustness settings
     suppress_network_errors: bool = Field(
@@ -492,8 +504,8 @@ class Settings(BaseSettings):
             word = text.lower()
             if word in _TRUE_WORDS:
                 return True
-            # PW_HTTPS=http is the proxy's Secure-cookie mode behind a TLS
-            # proxy; this server always serves plain HTTP
+            # The proxy's PW_HTTPS=http (Secure cookies behind a TLS proxy)
+            # means no HTTPS listener here: cookies follow the request scheme
             proxy_http = info.field_name == "https_mode" and word == "http"
             if word in _FALSE_WORDS or proxy_http:
                 return False

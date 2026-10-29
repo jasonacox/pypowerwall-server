@@ -1032,8 +1032,16 @@ def get_default_gateway():
 _AUTH_COOKIE_MAX_AGE = 10 * 365 * 24 * 60 * 60  # 315360000 seconds
 
 
+def auth_cookie_options(request: Request) -> Dict[str, Any]:
+    """Auth cookie flags: SameSite=None; Secure over HTTPS (so power flow works
+    in an HTTPS iframe), SameSite=Lax over HTTP."""
+    if request.url.scheme == "https":
+        return {"samesite": "none", "secure": True}
+    return {"samesite": "lax"}
+
+
 @router.post("/api/login/Basic")
-async def post_login_basic(response: Response):
+async def post_login_basic(request: Request, response: Response):
     """Fake login endpoint for powerflow web app compatibility (issue #7).
 
     The Tesla Gateway web app (served from /powerflow) stores auth state in
@@ -1044,19 +1052,20 @@ async def post_login_basic(response: Response):
     We return a synthetic success payload and set long-lived AuthCookie /
     UserRecord cookies so the browser never hits the login screen again.
     """
+    cookie = auth_cookie_options(request)
     response.set_cookie(
         key="AuthCookie",
         value="1234567890",
         max_age=_AUTH_COOKIE_MAX_AGE,
         path="/",
-        samesite="lax",
+        **cookie,
     )
     response.set_cookie(
         key="UserRecord",
         value="1234567890",
         max_age=_AUTH_COOKIE_MAX_AGE,
         path="/",
-        samesite="lax",
+        **cookie,
     )
     return {
         "email": "",
@@ -2922,6 +2931,7 @@ async def get_stats():
         "PW_TIMEOUT": settings.timeout,
         "PW_POOL_MAXSIZE": settings.pool_maxsize,
         "PW_HTTPS": "yes" if settings.https_mode else "no",
+        "PW_HTTPS_PORT": settings.https_port,
         "PW_PORT": settings.server_port,
         "PW_STYLE": settings.style,
         "PW_SITEID": "**********" if settings.siteid else None,

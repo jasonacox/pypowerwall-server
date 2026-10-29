@@ -176,12 +176,17 @@ async def lifespan(app: FastAPI):
             f"MQTT publisher enabled — broker: {settings.mqtt_host}:{settings.mqtt_port}"
         )
 
+    # Optional HTTPS listener (PW_HTTPS=yes)
+    from app.core.https_listener import start_https_listener, stop_https_listener
+    https_listener = await start_https_listener(app, settings)
+
     yield
 
-    # Shutdown.  Order matters: stop polling first (so nothing new is
-    # scheduled), then flush per-gateway offline states while the MQTT
-    # connection is still alive, then disconnect from the broker.
+    # Shutdown.  Order matters: stop the HTTPS listener and polling first (so
+    # nothing new is scheduled), then flush per-gateway offline states while
+    # the MQTT connection is still alive, then disconnect from the broker.
     logger.info("Shutting down PyPowerwall Server...")
+    await stop_https_listener(https_listener)
     await gateway_manager.shutdown()
     await mqtt_publisher.publish_offline(list(gateway_manager.gateways))
     await mqtt_publisher.stop()
@@ -372,19 +377,20 @@ async def track_requests(request: Request, call_next):
                 if k.lower() == "set-cookie" and "AuthCookie" in v
             ]
             if not existing_set_cookie:
+                cookie = legacy.auth_cookie_options(request)
                 response.set_cookie(
                     key="AuthCookie",
                     value="1234567890",
                     max_age=_AUTH_COOKIE_MAX_AGE,
                     path="/",
-                    samesite="lax",
+                    **cookie,
                 )
                 response.set_cookie(
                     key="UserRecord",
                     value="1234567890",
                     max_age=_AUTH_COOKIE_MAX_AGE,
                     path="/",
-                    samesite="lax",
+                    **cookie,
                 )
 
         return response
@@ -818,6 +824,8 @@ Environment Variables:
   PW_DEBUG           Enable debug logging (default: false)
   PW_PORT            Server port (default: 8675)
   PW_BIND_ADDRESS    Server bind address (default: 0.0.0.0)
+  PW_HTTPS           Also serve HTTPS on PW_HTTPS_PORT (default: no)
+  PW_HTTPS_PORT      HTTPS port (default: 8775)
   PW_CONFIG          Path to YAML/JSON configuration file
   PW_RATE_LIMIT_ENABLED         Enable per-IP rate limiting (default: false)
   PW_RATE_LIMIT_MAX_REQUESTS    Requests per window per IP (default: 1000)
@@ -954,6 +962,8 @@ For more information, visit: https://github.com/jasonacox/pypowerwall-server
     print(f"Console UI: http://{settings.server_host}:{settings.server_port}/console")
     print(f"History:    http://{settings.server_host}:{settings.server_port}/history")
     print(f"API Docs: http://{settings.server_host}:{settings.server_port}/docs")
+    if settings.https_mode:
+        print(f"HTTPS:    https://{settings.server_host}:{settings.https_port}/console")
     print()
 
     try:

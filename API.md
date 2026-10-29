@@ -103,6 +103,10 @@ PW_GATEWAYS='[
 |----------|---------|:-----:|-------------|
 | `PW_BIND_ADDRESS` | `0.0.0.0` | ✓ | Address to listen on. Also `server.host` in the config file. |
 | `PW_PORT` | `8675` | ✓ | Port to listen on. Also `server.port` in the config file. |
+| `PW_HTTPS` | `no` | ✓ | `yes` also serves HTTPS on `PW_HTTPS_PORT`; HTTP on `PW_PORT` keeps working for existing clients and health checks. Unlike the proxy (which switches its one port to HTTPS), the server adds a second port. The proxy's `http` reads as `no`: cookies follow each request's scheme. See [HTTPS](README.md#https-optional). |
+| `PW_HTTPS_PORT` | `8775` | | HTTPS port when `PW_HTTPS=yes`. Not 8676, which Powerwall-Dashboard's weather service uses. |
+| `PW_HTTPS_CERT` | none | | Path to a PEM certificate file for HTTPS, with `PW_HTTPS_KEY` (both or neither). Without them the server generates a self-signed certificate once, unique to this install, in `/data/tls` (else `data/tls`), and reuses it. |
+| `PW_HTTPS_KEY` | none | | Path to the PEM private key file for `PW_HTTPS_CERT` (unencrypted). |
 
 `PW_BIND_ADDRESS` and `PW_PORT` apply when the server is started with the
 `pypowerwall-server` command. The Docker image starts uvicorn directly on
@@ -215,7 +219,7 @@ clients share the proxy's IP.
 
 These proxy variables are accepted (and some echoed in `/stats`) so an existing
 proxy environment starts cleanly, but they change nothing in the server:
-`PW_BROWSER_CACHE` (default `0`), `PW_HTTPS` (`no`; the proxy's `http` is accepted and reads as `no`, since the server always serves plain HTTP), `PW_AUTH_MODE` (`cookie`),
+`PW_BROWSER_CACHE` (default `0`), `PW_AUTH_MODE` (`cookie`),
 `PW_SUPPRESS_NETWORK_ERRORS` (`no`), `PW_NETWORK_ERROR_RATE_LIMIT` (`5`),
 `PW_FAIL_FAST` (`no`) and `PW_HEALTH_CHECK` (`yes`).
 

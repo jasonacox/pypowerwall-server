@@ -483,6 +483,33 @@ gateways:
 - `rsa_key_path`: RSA-4096 private key PEM path for TEDAPI v1r LAN authentication (requires `gw_pwd` — see above)
 - `wifi_host`: the gateway's WiFi access point for TEDAPI v1r (normally `192.168.91.1`, or the address that forwards to it, e.g. behind a travel router; not set by default). Follower Powerwalls are queried over it
 
+### HTTPS (optional)
+
+Set `PW_HTTPS=yes` to also serve HTTPS on port **8775** (`PW_HTTPS_PORT`). HTTP
+on 8675 keeps working, so Powerwall-Dashboard, Home Assistant, scripts and
+health checks need no changes.
+
+```bash
+docker run -d -p 8675:8675 -p 8775:8775 -e PW_HTTPS=yes ... jasonacox/pypowerwall-server
+```
+
+Then open `https://<server>:8775/console`. By default the server generates a
+self-signed certificate once, unique to this install, and keeps it in
+`/data/tls`. Mount `/data` so it survives container updates, or the browser asks
+again. Browsers warn about a self-signed certificate until you accept or trust
+it. To use your own certificate (for example from your home CA or Let's
+Encrypt), set `PW_HTTPS_CERT` and `PW_HTTPS_KEY` to the paths of its PEM
+certificate and unencrypted key files. Over HTTPS the power-flow page's cookies are
+`SameSite=None; Secure`, so it works inside an HTTPS iframe such as a Home
+Assistant dashboard.
+
+HTTPS uses `PW_PORT` and `PW_BIND_ADDRESS`, not uvicorn's own options. If you
+start uvicorn yourself with `--port` or `--host`, set `PW_PORT` and
+`PW_BIND_ADDRESS` to match, so the listeners can't collide and a loopback-only
+setup stays loopback-only (the Docker image and the `pypowerwall-server` command
+already match). For access from outside your network, a reverse proxy with a
+real certificate (below) is still the better choice.
+
 ### Reverse Proxy / HTTPS Proxy
 
 You can serve pypowerwall-server from a sub-path alongside other services (e.g. Grafana on `/`) using `PROXY_BASE_URL`. This is the recommended setup for HTTPS via nginx.
