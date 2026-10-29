@@ -2,7 +2,10 @@
 
 ## Version History
 
-### [0.14.0] - Upcoming
+### [0.14.0] - 2026-10-28
+
+Optional HTTPS on port 8775, and battery dispatch now warns that it could void
+or limit your Tesla warranty. Nothing changes unless you set `PW_HTTPS=yes`.
 
 **Added:**
 - **HTTPS (optional): `PW_HTTPS=yes` also serves HTTPS on port 8775**
