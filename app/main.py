@@ -741,23 +741,29 @@ async def health_check():
     # Count online gateways
     online_count = 0
     gateway_details = []
+    local_degraded = False
 
     for gateway_id in gateway_manager.gateways.keys():
         status = gateway_manager.get_gateway(gateway_id)
         is_online = status.online if status else False
         if is_online:
             online_count += 1
+        if status and status.online and status.local_online is False:
+            local_degraded = True
 
         detail = {
             "id": gateway_id,
             "online": is_online,
+            "data_source": status.data_source if status else None,
+            "local_online": status.local_online if status else None,
             "error": status.error if status and status.error else None,
         }
 
         gateway_details.append(detail)
 
-    # Determine overall health
-    if online_count == total:
+    # Determine overall health. Cloud read fallback keeps data available but
+    # the local link is still down, so report the gateway as degraded.
+    if online_count == total and not local_degraded:
         health_status = "healthy"
     elif online_count > 0:
         health_status = "degraded"
@@ -766,6 +772,7 @@ async def health_check():
 
     # SolarOnly fallback state per tracked gateway (upstream proxy t97 format)
     fallback_summary = gateway_manager.get_all_fallback_states()
+    cloud_read_summary = gateway_manager.get_all_cloud_read_states()
 
     return {
         "status": health_status,
@@ -776,6 +783,7 @@ async def health_check():
         "gateway_ids": list(gateway_manager.gateways.keys()),
         "gateway_details": gateway_details,
         "fallback_mode": fallback_summary,
+        "cloud_read_fallback": cloud_read_summary,
     }
 
 

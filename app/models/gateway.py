@@ -214,6 +214,8 @@ class GatewayStatus(BaseModel):
     online: bool
     last_updated: Optional[float] = None
     error: Optional[str] = None
+    data_source: Optional[str] = None  # local, cloud or cache
+    local_online: Optional[bool] = None  # False while cloud read fallback is active
 
 
 class AggregateData(BaseModel):

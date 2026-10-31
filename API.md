@@ -142,6 +142,7 @@ PW_GATEWAYS='[
 | `PW_ISLANDING_COOLDOWN` | `30` | v1r | | Minimum seconds between islanding commands per gateway; `0` disables the cooldown. |
 | `PW_BATTERY_DISPATCH` | `no` | v1r | | `yes` enables timed battery dispatch (`POST /control/dispatch` and the Console panel). Needs `PW_CONTROL_SECRET`. **Use at your own risk; it could void your warranty. Read the [warning](#timed-battery-dispatch-post-controldispatch-and-post-controlresume) first.** `POST /control/resume` works without it. |
 | `PW_CLOUD_HYBRID` | `no` | Local with `PW_EMAIL` | | `yes` starts the hybrid cloud connection without `PW_CONTROL_SECRET`, for its read-only values (Basic LAN mode and reserve, grid charging/export settings). With `PW_CONTROL_SECRET` set it starts anyway. Like the proxy, `PW_EMAIL` alone doesn't start it. |
+| `PW_CLOUD_READ_FALLBACK` | `no` | Local with Cloud/FleetAPI auth | | `yes` uses the bound Cloud/FleetAPI connection for the normal Cloud-Mode read set when the local poll fails three consecutive times. Requires `.pypowerwall.site`/`PW_SITEID` and internet; `PW_FAILOVER=no` disables it. Data is marked `data_source=cloud` and `local_online=false`; `online` remains true so HA keeps the values. `online=true` with cloud data does not mean the local gateway is reachable; check `data_source`/`local_online`. Cloud reads use the normal `PW_CACHE_EXPIRE` cadence (5 s default); FleetAPI uses a 30 s minimum. Local retries keep the exponential backoff (5, 10, 30, 60, then 120 s), and a cloud read does not reset it. |
 | `PW_LOCAL_FIRST` | `no` | v1r, Hybrid | | `yes` sends reserve, mode and grid writes over a confirmed local v1r connection first, even when a hybrid cloud connection exists (see [write path](#post-controlpath)). |
 
 `MQTT_CONTROLS` (below) separately enables control over MQTT.
@@ -365,7 +366,7 @@ HTTP `200`, with an `{"error": ...}` body when they can't.
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
-| GET | `/api/gateways/` | | Status of every gateway, keyed by id: `gateway` (config without secrets), `data`, `online`, `last_updated`, `error`. `data.connection_mode` is the connection in use (`TEDAPI v1r`, `TEDAPI`, `Local`, `Basic LAN`, `Cloud`, `FleetAPI`), which failover can move off the configured mode. |
+| GET | `/api/gateways/` | | Status of every gateway, keyed by id: `gateway` (config without secrets), `data`, `online`, `data_source`, `local_online`, `last_updated`, `error`. `data.connection_mode` is the connection in use (`TEDAPI v1r`, `TEDAPI`, `Local`, `Basic LAN`, `Cloud`, `FleetAPI`), which failover can move off the configured mode. |
 | GET | `/api/gateways/{gateway_id}` | | That gateway's status. |
 | GET | `/api/gateways/{gateway_id}/vitals` | | That gateway's vitals. |
 | GET | `/api/gateways/{gateway_id}/strings` | | That gateway's strings. |
@@ -422,9 +423,9 @@ Each pushes one JSON message per second.
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
-| GET | `/health` | | `status` (`healthy`, `degraded`, `unhealthy` or `no_gateways`), server version, online/offline counts, per-gateway errors and SolarOnly fallback state. Also `HEAD`. |
+| GET | `/health` | | `status` (`healthy`, `degraded`, `unhealthy` or `no_gateways`), server version, online/offline counts, per-gateway errors, `data_source`/`local_online` and SolarOnly/cloud-read fallback state. Also `HEAD`. |
 | POST | `/health/reset` | token | Clears the SolarOnly fallback state for all gateways. |
-| GET | `/stats` | | Proxy-style server stats: versions, mode (the live connection once polled), request counters, uptime, memory, connection flags, masked `config`, connection health, hybrid cloud link, per-gateway status. |
+| GET | `/stats` | | Proxy-style server stats: versions, mode (the live connection once polled), request counters, uptime, memory, connection flags, masked `config`, connection health, hybrid cloud link, cloud-read fallback state, per-gateway status including `data_source`/`local_online`. |
 | GET | `/api/mqtt/status` | | MQTT enabled/connected state and broker settings (no credentials). |
 
 ### UI pages and static files
@@ -511,7 +512,7 @@ up and a local connection, writes over that local connection first, even when
 a hybrid cloud connection exists. A write that was sent is final: there's no
 second attempt through the cloud, even after a timeout, since it may already
 have been applied. When the LAN is down (the library's LAN failover tripped, or the last poll failed) or there's no local connection, the
-path above applies. Islanding is unaffected.
+path above applies. With `PW_LOCAL_FIRST=yes` alone, islanding is unaffected.
 
 ### Timed battery dispatch: `POST /control/dispatch` and `POST /control/resume`
 

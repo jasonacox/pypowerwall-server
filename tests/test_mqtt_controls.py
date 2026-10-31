@@ -831,6 +831,7 @@ async def test_no_site_check_without_mqtt_controls(env, monkeypatch, caplog):
     """The binding is only for MQTT controls: with them off, no cloud call
     and no warning, even on an ambiguous multi-site account."""
     monkeypatch.setattr(settings, "mqtt_controls", 0)
+    monkeypatch.setattr(settings, "cloud_read_fallback", False)
     monkeypatch.setattr(settings, "siteid", None)
     client = MagicMock(sitefile=None)
     monkeypatch.setattr(gateway_manager, "_cloud_control", MagicMock(client=client))
