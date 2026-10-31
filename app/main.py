@@ -724,8 +724,9 @@ async def health_check():
     """Health check endpoint with actual gateway status.
 
     Returns:
-        - healthy: All gateways online
-        - degraded: Some gateways online, some offline
+        - healthy: All gateways online on their local link
+        - degraded: Some gateways offline, or a local gateway served from
+          cloud (cloud read fallback or the library's failover to cloud)
         - unhealthy: All gateways offline
     """
     total = len(gateway_manager.gateways)

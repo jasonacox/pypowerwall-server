@@ -2970,7 +2970,7 @@ class GatewayManager:
         """Write a reserve/mode/grid control locally when PW_LOCAL_FIRST is on.
 
         Returns ``(path_label, result)`` when this helper takes the write,
-        else ``(None, None)`` - the caller then runs its historical dispatch
+        else ``(None, None)`` — the caller then runs its historical dispatch
         verbatim. The helper only takes the write with
         ``PW_LOCAL_FIRST=yes`` on a confirmed v1r transport whose LAN is up
         and which has a local connection object; in every other case (flag
@@ -2983,9 +2983,9 @@ class GatewayManager:
         Local v1r writes are LAN-only, so with the library's LAN to WiFi
         failover tripped (``lan_failed``, e.g. the ESP32 bridge serving) or
         no local connection object there is nothing this helper could
-        dispatch - it declines and the historical dispatch (cloud first
-        when configured) runs unchanged. Any dispatched attempt - success,
-        timeout (None) or a library error dict - is final and never
+        dispatch — it declines and the historical dispatch (cloud first
+        when configured) runs unchanged. Any dispatched attempt — success,
+        timeout (None) or a library error dict — is final and never
         followed by a second write: a timed-out write may still have been
         applied, and blindly failing over would risk double-applying or
         racing two async command paths (issue #149). A failed write returns

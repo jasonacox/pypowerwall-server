@@ -509,6 +509,27 @@ async def test_local_gateway_internal_cloud_failover_is_reported_as_cloud(monkey
 
 
 @pytest.mark.asyncio
+async def test_internal_cloud_failover_reported_without_the_flag(monkeypatch):
+    """data_source/local_online and /health follow the live connection even
+    with PW_CLOUD_READ_FALLBACK off (documented in RELEASE.md)."""
+    import app.main as main
+
+    gm = _manager(monkeypatch, flag=False)
+    data = _data()
+    data.connection_mode = "Cloud"
+    _install_fetch(gm, local_data=data, calls=[])
+    gm._next_poll_time["v1r"] = 0
+    monkeypatch.setattr(main, "gateway_manager", gm)
+
+    await gm._poll_gateway("v1r")
+    result = await main.health_check()
+
+    assert gm.cache["v1r"].data_source == "cloud"
+    assert gm.cache["v1r"].local_online is False
+    assert result["status"] == "degraded"
+
+
+@pytest.mark.asyncio
 async def test_internal_cloud_failover_does_not_clear_fallback_state(monkeypatch):
     gm = _manager(monkeypatch)
     gm._cloud_read_state["v1r"] = gm._new_cloud_read_state()

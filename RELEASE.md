@@ -6,19 +6,19 @@
 
 **Added:**
 - **Cloud read fallback (`PW_CLOUD_READ_FALLBACK`)** - opt-in (`no` by
-  default). After three consecutive local poll failures, a local gateway uses
-  its bound Cloud/FleetAPI connection for the same read schema and live
-  Cloud-Mode fields (aggregates, SoC, vitals/strings/temps and other
-  cloud-supported fields). Cloud fallback reads use the normal
-  `PW_CACHE_EXPIRE` cadence (5 s default), with a 30 s minimum for FleetAPI;
-  local retries keep the exponential backoff and a cloud read does not reset
-  it. Requires cloud auth,
-  `.pypowerwall.site`/`PW_SITEID`, internet and `PW_FAILOVER=yes`; writes and
-  local-first control paths are unchanged. Responses are marked
-  `data_source=cloud`, `local_online=false`, while `online` remains true so
-  Home Assistant keeps the values. `online=true` with cloud data does not mean
-  the local gateway is reachable; check `data_source`/`local_online`. No
-  behavior change without the flag.
+  default). After three consecutive failed local polls, a local gateway reads
+  the Cloud-Mode data set from its bound Cloud/FleetAPI connection, every
+  `PW_CACHE_EXPIRE` (5 s default; at least 30 s for FleetAPI), while local
+  retries keep their backoff. Needs cloud auth, an unambiguous site
+  (`.pypowerwall.site` or `PW_SITEID`) and `PW_FAILOVER=yes`. Read-only:
+  writes are unchanged. `online` stays true so Home Assistant keeps the
+  values; check `data_source`/`local_online` for where they come from.
+  Validated on a Powerwall 2 with Tesla cloud. Thanks @erikgieseler! (#187)
+- **`data_source` and `local_online`** on each gateway status (`/api/gateways`,
+  `/health`, `/stats`): `local`, `cloud` or `cache`, and whether the local link
+  is up. These follow the live connection with or without the flag, so
+  `/health` now reports `degraded` (still HTTP 200) while the library's own
+  failover serves a local gateway from cloud.
 
 ### [0.14.0] - 2026-10-28
 
@@ -131,6 +131,7 @@ behavior changes.
   - FleetAPI: concurrent identical requests share one in-flight request, and
     Tesla's 429 retry guidance opens a shared backoff window instead of a
     request storm (jasonacox/pypowerwall#436).
+
 ### [0.12.0] - 2026-10-19
 
 The server now answers the legacy proxy's API the way the proxy does, so a
