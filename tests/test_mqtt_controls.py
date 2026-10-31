@@ -476,6 +476,20 @@ async def test_wifi_v1r_fallback_probe_false_falls_back_to_cloud(
 
 
 @pytest.mark.asyncio
+async def test_wifi_v1r_probe_false_warns_before_historical_path(
+    env, monkeypatch, caplog
+):
+    """A failed probe sends the write to the historical path; say so."""
+    bind_hybrid_wifi(monkeypatch, preflight=False)
+    with caplog.at_level(logging.WARNING):
+        assert await gateway_manager.control_write("v1r", "set_mode", "backup") == (
+            None,
+            None,
+        )
+    assert "WiFi v1r probe failed; using the historical write path" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_wifi_v1r_fallback_islanding_probe_false_rejected(
     env, gm, monkeypatch, caplog
 ):
@@ -519,7 +533,7 @@ async def test_wifi_v1r_fallback_islanding_probe_true_dispatches(
         )
     assert gm.local_control.await_count == 1
     assert gm.cloud_control.await_count == 0
-    assert "applied (action=off_grid via local v1r)" in caplog.text
+    assert "applied (action=off_grid via local v1r (wifi))" in caplog.text
 
 
 @pytest.mark.parametrize("control, value, ok", [

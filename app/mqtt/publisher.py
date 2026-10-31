@@ -1179,7 +1179,12 @@ class MqttPublisher:
                 except Exception as e:  # cooldown or a command in progress
                     logger.warning(f"{label} action={action} failed: {e}")
                     return
-                audit = f"action={action} via local v1r"
+                route = (
+                    "local v1r (wifi)"
+                    if gateway_manager._is_lan_failed(gateway_id)
+                    else "local v1r"
+                )
+                audit = f"action={action} via {route}"
                 ok = _island_ack_ok(result)
             else:
                 if control == "reserve_hold":

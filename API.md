@@ -143,7 +143,7 @@ PW_GATEWAYS='[
 | `PW_BATTERY_DISPATCH` | `no` | v1r | | `yes` enables timed battery dispatch (`POST /control/dispatch` and the Console panel). Needs `PW_CONTROL_SECRET`. **Use at your own risk; it could void your warranty. Read the [warning](#timed-battery-dispatch-post-controldispatch-and-post-controlresume) first.** `POST /control/resume` works without it. |
 | `PW_CLOUD_HYBRID` | `no` | Local with `PW_EMAIL` | | `yes` starts the hybrid cloud connection without `PW_CONTROL_SECRET`, for its read-only values (Basic LAN mode and reserve, grid charging/export settings). With `PW_CONTROL_SECRET` set it starts anyway. Like the proxy, `PW_EMAIL` alone doesn't start it. |
 | `PW_LOCAL_FIRST` | `no` | v1r, Hybrid | | `yes` sends reserve, mode and grid writes over a confirmed local v1r connection first, even when a hybrid cloud connection exists (see [write path](#post-controlpath)). |
-| `PW_WIFI_V1R_FALLBACK` | `no` | v1r, Hybrid with `PW_WIFI_HOST` | | `yes` makes signed WiFi-v1r the strict route after the library's LAN failover is tripped. All leader v1r reads and reserve/mode/grid, max backup and islanding writes use it; there is no legacy WiFi TEDAPI fallback. A read-only config probe gates writes; a failed probe uses the historical write dispatch (cloud or `503`). A failed read produces no fresh data for that poll; normal poll failure/backoff and cached-data behavior applies, with no legacy WiFi retry. Requires pypowerwall 0.22.2 or newer. |
+| `PW_WIFI_V1R_FALLBACK` | `no` | v1r with `PW_WIFI_HOST` | | `yes` makes signed WiFi-v1r the only leader route after the library's LAN failover trips, for reads and for reserve/mode/grid, max backup and islanding writes; there is no legacy WiFi TEDAPI fallback. Independent of `PW_LOCAL_FIRST`. See [write path](#post-controlpath). |
 
 `MQTT_CONTROLS` (below) separately enables control over MQTT.
 
@@ -515,15 +515,14 @@ have been applied. When the LAN is down (the library's LAN failover tripped, or 
 path above applies. With `PW_LOCAL_FIRST=yes` alone, islanding is unaffected.
 
 With `PW_WIFI_V1R_FALLBACK=yes`, a gateway with `PW_WIFI_HOST` and an RSA key
-uses signed WiFi-v1r as its only leader transport after the LAN failover is
-tripped. Reads use it directly; a failed read returns no data for that request
-and follows the normal poll failure/backoff path rather than retrying the
-legacy WiFi TEDAPI path. Before a write, the server
-performs one read-only signed config read over the WiFi bridge. On success,
-reserve/mode/grid, max backup and islanding writes use the signed WiFi-v1r
-transport. A failed probe uses the normal write path above (cloud for value
-controls, `503` for max backup and islanding); there is no legacy WiFi fallback.
-An already dispatched write is still final and never retried.
+uses signed WiFi-v1r as its only leader transport after the LAN failover trips.
+A failed read is a normal poll failure (backoff, cached data); there is no
+legacy WiFi TEDAPI retry. Before each write, the server makes one read-only
+signed config read over WiFi. If it succeeds, reserve/mode/grid, max backup and
+islanding writes go over signed WiFi-v1r. If it fails, value controls use the
+write path above (cloud, which during a LAN outage may accept a write without
+applying it, #149) and max backup and islanding return `503`. A dispatched write
+is final and never retried.
 
 ### Timed battery dispatch: `POST /control/dispatch` and `POST /control/resume`
 

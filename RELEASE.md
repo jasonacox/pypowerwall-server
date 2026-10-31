@@ -5,24 +5,18 @@
 ### [0.15.0] - Upcoming
 
 **Added:**
-- **Signed WiFi-v1r transport (`PW_WIFI_V1R_FALLBACK`)** - opt-in (`no`
-  by default) extension of `PW_LOCAL_FIRST`. When the library's v1r LAN
-  failover is tripped, a gateway with `PW_WIFI_HOST` and an RSA key uses signed
-  WiFi-v1r as its only leader transport: all v1r reads, reserve/mode/grid,
-  max backup and islanding use it. There is no fallback to the legacy WiFi
-  TEDAPI path; a failed read follows the normal poll failure/backoff path.
-  Before a write, the server performs one read-only signed config read over the
-  WiFi bridge; a false write gate uses the historical write dispatch (cloud for
-  value controls, `503` for max backup/islanding), and an already dispatched
-  write stays final. If signed WiFi-v1r is unavailable, value controls still
-  use the historical cloud path; during a LAN outage Tesla may accept such a
-  write without applying it (#149), while max backup/islanding return `503`.
-  Requires pypowerwall 0.22.2 or newer. No behavior changes without the flag;
-  existing `PW_LOCAL_FIRST`/#161 paths are unchanged. Read-only validation and
-  reserve `0 -> 5 -> 0` were exercised on a Powerwall 2 over an ESP32 bridge,
-  including the signed WiFi route. Powerwall 3 cold-failover read-only
-  validation was run by @jasonacox-sam. Max backup/islanding use the same
-  transport but were not separately exercised.
+- **Signed WiFi-v1r transport (`PW_WIFI_V1R_FALLBACK`)** - opt-in (`no` by
+  default), independent of `PW_LOCAL_FIRST`. After the library's v1r LAN
+  failover trips, a gateway with `PW_WIFI_HOST` and an RSA key uses signed
+  WiFi-v1r as its only leader route: reads, and reserve/mode/grid, max backup
+  and islanding writes, with no fallback to legacy WiFi TEDAPI. Each write
+  first runs a read-only probe; if it fails, value controls use their
+  historical path (cloud, which during a LAN outage may accept a write without
+  applying it, #149) and max backup/islanding return `503`. A dispatched write
+  stays final. No change without the flag. Reserve writes validated on a
+  Powerwall 2 over an ESP32 bridge, and read-only cold failover on 2x
+  Powerwall 3 (@jasonacox-sam); max backup and islanding were not exercised on
+  hardware. Thanks @erikgieseler! (#186)
 
 ### [0.14.0] - 2026-10-28
 

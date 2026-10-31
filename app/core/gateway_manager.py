@@ -2774,6 +2774,10 @@ class GatewayManager:
             return None, None
 
         if not await self.wifi_v1r_write_allowed(gateway_id):
+            logger.warning(
+                f"[{gateway_id}] control_write({method}): WiFi v1r probe "
+                "failed; using the historical write path"
+            )
             return None, None
         if self._is_lan_failed(gateway_id):
             if not settings.wifi_v1r_fallback:
