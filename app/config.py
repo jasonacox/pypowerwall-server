@@ -89,6 +89,8 @@ Environment Variables (Proxy Compatible):
         PW_BATTERY_DISPATCH  - Enable battery dispatch "yes"/"no" (default: "no");
                                use at your own risk (could void your warranty)
         PW_LOCAL_FIRST       - Prefer local v1r writes "yes"/"no" (default: "no")
+        PW_WIFI_V1R_FALLBACK  - Allow signed WiFi-v1r writes after the v1r LAN
+                               failover is tripped "yes"/"no" (default: "no")
         PW_CLOUD_HYBRID      - Start the hybrid cloud connection for a local gateway
                                with PW_EMAIL even without PW_CONTROL_SECRET, for its
                                read-only values "yes"/"no" (default: "no")
@@ -414,6 +416,9 @@ class Settings(BaseSettings):
     local_first: bool = Field(
         default=False, alias="PW_LOCAL_FIRST"
     )  # Try local v1r writes before cloud (default: no = cloud first)
+    wifi_v1r_fallback: bool = Field(
+        default=False, alias="PW_WIFI_V1R_FALLBACK"
+    )  # Use signed WiFi v1r after the LAN failover (default: no)
     islanding_cooldown: int = Field(
         default=30, alias="PW_ISLANDING_COOLDOWN"
     )  # Server-enforced seconds between islanding commands per gateway (0 disables)

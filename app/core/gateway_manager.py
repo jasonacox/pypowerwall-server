@@ -527,6 +527,20 @@ class GatewayManager:
 
         from app.config import settings
 
+        if settings.wifi_v1r_fallback:
+            if not settings.failover:
+                logger.warning(
+                    "PW_WIFI_V1R_FALLBACK is ignored because PW_FAILOVER=no"
+                )
+            if not any(
+                config.wifi_host and config.rsa_key_path
+                for config in gateway_configs
+            ):
+                logger.warning(
+                    "PW_WIFI_V1R_FALLBACK is set but no gateway has both "
+                    "wifi_host and rsa_key_path; the flag has no effect"
+                )
+
         # Size thread pool based on gateway count
         # Formula: max(10, num_gateways * 3) to support concurrent API calls
         num_gateways = len(gateway_configs)
@@ -1996,6 +2010,8 @@ class GatewayManager:
             tedapi_kwargs["rsa_key_path"] = config.rsa_key_path
         if config.wifi_host:
             tedapi_kwargs["wifi_host"] = config.wifi_host
+        if settings.wifi_v1r_fallback:
+            tedapi_kwargs["wifi_v1r_fallback"] = True
         return tedapi_kwargs
 
     async def _create_local_connection(
@@ -2541,6 +2557,34 @@ class GatewayManager:
             self._cloud_failures += 1
             return None
 
+    def check_islanding_safety(self, gateway_id: str) -> None:
+        """Reject overlapping islanding commands and server-side cooldown hits.
+
+        Callers that perform an async preflight/probe before dispatch must run
+        this check before that await, then local_control() checks it again
+        immediately before dispatch.
+        """
+        # "In progress" means the dispatched future hasn't finished. Check
+        # done() rather than relying on the clear-on-completion callback below:
+        # asyncio runs done-callbacks on a later loop iteration, and on Python
+        # 3.13 local_control() returns before that has happened.
+        in_flight = self._islanding_futures.get(gateway_id)
+        if in_flight is not None and not in_flight.done():
+            raise IslandingCommandInProgressError(
+                "An islanding command is still in progress"
+            )
+        # Server-enforced cooldown between contactor commands.
+        from app.config import settings
+
+        cooldown = settings.islanding_cooldown
+        last_dispatch = self._islanding_last_dispatch.get(gateway_id)
+        if cooldown > 0 and last_dispatch is not None:
+            elapsed = time.monotonic() - last_dispatch
+            if elapsed < cooldown:
+                raise IslandingCooldownError(
+                    retry_after=max(1, math.ceil(cooldown - elapsed))
+                )
+
     async def local_control(
         self,
         gateway_id: str,
@@ -2566,27 +2610,7 @@ class GatewayManager:
             Result of the method call, or None on error/timeout
         """
         if method in _ISLANDING_METHODS:
-            # "In progress" means the dispatched future hasn't finished. Check
-            # done() rather than relying on the clear-on-completion callback
-            # below: asyncio runs done-callbacks on a later loop iteration, and
-            # on Python 3.13 local_control() returns before that has happened.
-            in_flight = self._islanding_futures.get(gateway_id)
-            if in_flight is not None and not in_flight.done():
-                raise IslandingCommandInProgressError(
-                    "An islanding command is still in progress"
-                )
-            # Server-enforced cooldown between contactor commands. Late
-            # import per repo convention (avoids circular dependency).
-            from app.config import settings
-
-            cooldown = settings.islanding_cooldown
-            last_dispatch = self._islanding_last_dispatch.get(gateway_id)
-            if cooldown > 0 and last_dispatch is not None:
-                elapsed = time.monotonic() - last_dispatch
-                if elapsed < cooldown:
-                    raise IslandingCooldownError(
-                        retry_after=max(1, math.ceil(cooldown - elapsed))
-                    )
+            self.check_islanding_safety(gateway_id)
 
         pw = self.connections.get(gateway_id)
         if not pw:
@@ -2682,53 +2706,96 @@ class GatewayManager:
         except Exception:
             return False
 
+    async def wifi_v1r_write_allowed(self, gateway_id: str) -> bool:
+        """Whether a write may go out now under the strict WiFi v1r rule.
+
+        A plain bool for callers. True means either the strict route is not
+        applicable (flag/failover off or LAN up), or the strict signed WiFi
+        probe succeeded. False means the strict route applies and its probe
+        failed, so islanding/max backup must return 503 and value controls use
+        their historical path.
+        """
+        from app.config import settings
+
+        if not settings.wifi_v1r_fallback or not settings.failover:
+            return True
+        if not self._is_lan_failed(gateway_id):
+            return True
+        pw = self.connections.get(gateway_id)
+        tedapi = getattr(pw, "tedapi", None)
+        if not getattr(tedapi, "v1r", False):
+            return True
+        probe = getattr(pw, "wifi_v1r_ready", None)
+        if not callable(probe) or getattr(tedapi, "wifi_v1r_transport", None) is None:
+            return False
+        timeout = max(5.0, settings.timeout + 2.0)
+        try:
+            loop = asyncio.get_running_loop()
+            return bool(
+                await asyncio.wait_for(
+                    loop.run_in_executor(self._executor, probe), timeout=timeout
+                )
+            )
+        except Exception as e:
+            logger.debug(f"[{gateway_id}] WiFi v1r probe failed: {e}")
+            return False
+
     async def control_write(
         self, gateway_id: str, method: str, *args, timeout: float = 10.0, **kwargs
     ) -> Tuple[Optional[str], Optional[Any]]:
-        """Write a reserve/mode/grid control locally when PW_LOCAL_FIRST is on.
+        """Write a reserve/mode/grid control locally when local-first is on.
 
         Returns ``(path_label, result)`` when this helper takes the write,
         else ``(None, None)`` — the caller then runs its historical dispatch
-        verbatim. The helper only takes the write with
-        ``PW_LOCAL_FIRST=yes`` on a confirmed v1r transport whose LAN is up
-        and which has a local connection object; in every other case (flag
-        off, non-v1r, LAN failed, no local connection) behavior is
-        byte-identical to before, because the historical HTTP and MQTT
-        dispatch rules genuinely differ (HTTP: any cloud connection wins,
-        even an ambiguous-site one; MQTT: strict ``_write_path`` order) and
-        no single shared default could reproduce both.
+        verbatim.
 
-        Local v1r writes are LAN-only, so with the library's LAN to WiFi
-        failover tripped (``lan_failed``, e.g. the ESP32 bridge serving) or
-        no local connection object there is nothing this helper could
-        dispatch — it declines and the historical dispatch (cloud first
-        when configured) runs unchanged. Any dispatched attempt — success,
-        timeout (None) or a library error dict — is final and never
-        followed by a second write: a timed-out write may still have been
-        applied, and blindly failing over would risk double-applying or
-        racing two async command paths (issue #149). A failed write returns
-        HTTP 503 (or an MQTT failed-warning) so the caller can retry
-        deliberately. Absolute-value controls (reserve, mode, grid
-        settings) converge on the same target state either way.
+        ``PW_LOCAL_FIRST=yes`` takes the LAN write while the LAN is up.
+        ``PW_WIFI_V1R_FALLBACK=yes`` additionally takes the signed WiFi-v1r
+        write when the library's LAN failover is tripped and a read-only
+        probe (``wifi_v1r_write_allowed``) succeeds. The two flags are
+        independent; neither changes the LAN-up priority of the other. Any
+        dispatched attempt — success, timeout (None) or a library error dict
+        — is final and never followed by a second write: a timed-out write
+        may still have been applied, and blindly failing over would risk
+        double-applying or racing two async command paths (issue #149). A
+        failed write returns HTTP 503 (or an MQTT failed-warning) so the
+        caller can retry deliberately. Absolute-value controls (reserve,
+        mode, grid settings) converge on the same target state either way.
 
-        Islanding methods must not go through here (always local v1r).
+        Islanding and max backup use the same public write gate; value
+        controls fall back to their historical dispatch when it returns false.
         """
         # Late import per repo convention (avoids circular dependency).
         from app.config import settings
 
+        if not settings.local_first and not settings.wifi_v1r_fallback:
+            return None, None
+        if self.connections.get(gateway_id) is None:
+            return None, None
+
+        if not await self.wifi_v1r_write_allowed(gateway_id):
+            return None, None
+        if self._is_lan_failed(gateway_id):
+            if not settings.wifi_v1r_fallback:
+                # Historical #161 behavior: cloud is the LAN-down fallback.
+                return None, None
+            logger.info(
+                f"[{gateway_id}] control_write({method}): LAN failed, "
+                "trying WiFi v1r"
+            )
+            result = await self.local_control(
+                gateway_id, method, *args, timeout=timeout, **kwargs
+            )
+            return "local v1r (wifi)", result
+
         if not settings.local_first or not self._is_confirmed_v1r(gateway_id):
             return None, None
+        # A failed last poll means the LAN write would only time out; keep the
+        # historical #174 guard for the LAN path. The WiFi branch above is
+        # gated by its live probe instead, so it still works when the last
+        # poll failed but the bridge is serving v1r.
         status = self.cache.get(gateway_id)
-        if (
-            self._is_lan_failed(gateway_id)
-            or self.connections.get(gateway_id) is None
-            # lan_failed only trips with a WiFi host and failover on; a
-            # failed last poll covers a dead LAN without them (cached state)
-            or status is None
-            or not status.online
-        ):
-            # Nothing dispatchable locally (local v1r writes are LAN-only):
-            # decline and let the caller's historical dispatch run unchanged.
+        if status is None or not status.online:
             return None, None
         logger.info(
             f"[{gateway_id}] control_write({method}): trying local v1r first"
@@ -2736,9 +2803,6 @@ class GatewayManager:
         result = await self.local_control(
             gateway_id, method, *args, timeout=timeout, **kwargs
         )
-        # Final, whatever came back: a timeout (None) may still have been
-        # applied, and an error dict means the gateway answered. Either
-        # way a second write on another path could race it.
         return "local v1r", result
 
     async def call_tedapi(
