@@ -2,6 +2,11 @@
 
 ## Version History
 
+### [0.15.0] - Upcoming
+
+**Added:**
+- **`/json` `soe_scaled`** - additive Tesla-app-scaled battery percentage next to the legacy raw `soe`/`soe_raw` values; existing clients keep the same behavior.
+
 ### [0.14.0] - 2026-10-28
 
 Optional HTTPS on port 8775, and battery dispatch now warns that it could void

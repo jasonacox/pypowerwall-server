@@ -1738,6 +1738,7 @@ async def get_json():
             "battery": None,
             "soe": None,
             "soe_raw": None,
+            "soe_scaled": None,
             "grid_status": None,
             "reserve": None,
             "time_remaining_hours": None,
@@ -1753,6 +1754,7 @@ async def get_json():
     # Battery level: the raw gateway level, like the proxy's pw.level()
     soe_raw = status.data.soe_raw if status.data.soe_raw is not None else 0
     soe = soe_raw
+    soe_scaled = status.data.soe
 
     # Convert grid_status to numeric (1=UP, 0=DOWN)
     grid_status_str = status.data.grid_status or "DOWN"
@@ -1779,6 +1781,7 @@ async def get_json():
         "battery": battery,
         "soe": soe,
         "soe_raw": soe_raw,
+        "soe_scaled": soe_scaled,
         "grid_status": grid_status,
         "reserve": reserve,
         "time_remaining_hours": time_remaining,
