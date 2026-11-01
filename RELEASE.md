@@ -2,6 +2,16 @@
 
 ## Version History
 
+### [0.15.0] - Upcoming
+
+**Fixed:**
+- **Console narrow-screen layout** - the Daily Energy table compacts at
+  380 px instead of spilling out of its card (width stays the same, height
+  follows the content); long alert names wrap and the mobile alert card grows
+  with its content; the Operating Mode / Battery panels fit at 320 px.
+- **Multi-gateway Console separators** - section headers now use the defined
+  `--border-color` token instead of the undefined `--border`.
+
 ### [0.14.0] - 2026-10-28
 
 Optional HTTPS on port 8775, and battery dispatch now warns that it could void
