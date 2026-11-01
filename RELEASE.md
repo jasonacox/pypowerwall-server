@@ -2,6 +2,11 @@
 
 ## Version History
 
+### [0.15.0] - Upcoming
+
+**Fixed:**
+- **Console Authorization Token spacing** - the collapsed token panel now keeps equal top and bottom padding; the expanded layout is unchanged.
+
 ### [0.14.0] - 2026-10-28
 
 Optional HTTPS on port 8775, and battery dispatch now warns that it could void
