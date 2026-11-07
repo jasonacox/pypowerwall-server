@@ -108,6 +108,7 @@ Topic layout
     TEDAPI modes; Basic LAN skips vitals) - absent when no remote meter.
 """
 import asyncio
+import contextvars
 import json
 import logging
 import ssl
@@ -125,6 +126,21 @@ MAX_CONTROL_PAYLOAD_BYTES = 1024
 MAX_QUEUED_CONTROL_MESSAGES = 100
 CONTROL_COALESCE_WINDOW_S = 0.05
 CONTROL_MAX_BATCH = 100
+
+# Stale retained topics (#101): a gated topic (published only while its value
+# is present) that stops being published while the gateway stays online is
+# cleared from the broker with one empty retained payload, so subscribers stop
+# seeing the last value as live. A topic must be missing from this many
+# consecutive complete publishes first: a single poll that misses a value
+# (e.g. a timed-out fetch) must not blank it for a cycle.
+STALE_TOPIC_CLEAR_POLLS = 3
+
+# Topics sent during the current publish_gateway() call. A context variable,
+# not an attribute, so concurrent publishes for different gateways (separate
+# tasks, separate contexts) can't record into each other's set.
+_published_topics: contextvars.ContextVar = contextvars.ContextVar(
+    "mqtt_published_topics", default=None
+)
 
 
 class MqttPublisher:
@@ -150,6 +166,10 @@ class MqttPublisher:
         self._discovery_controls_state: Dict[str, tuple] = {}
         self._backoff: int = 2           # current reconnect backoff in seconds
         self._controls_warn_done: bool = False  # half-configured controls warning
+        # Per gateway: retained data topics published by recent publishes,
+        # mapped to how many consecutive complete publishes have missed them
+        # (0 = sent last time). See STALE_TOPIC_CLEAR_POLLS (#101).
+        self._retained_topics: Dict[str, Dict[str, int]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -405,6 +425,8 @@ class MqttPublisher:
             self._discovery_sent[gateway_id] = (announced or frozenset()) | signature
             self._discovery_controls_state[gateway_id] = controls_state
 
+        published: set = set()
+        token = _published_topics.set(published)
         try:
             from app.config import settings  # late import
             prefix = f"{settings.mqtt_topic_prefix}/{gateway_id}"
@@ -814,13 +836,51 @@ class MqttPublisher:
                 retain, qos,
             )
 
+            # Only a complete publish of an online gateway with data says
+            # which topics are really gone: offline is covered by
+            # availability, and a publish cut short by a broker error saw
+            # only part of the topics.
+            if retain and status.online and data is not None and self._connected:
+                await self._clear_stale_retained(gateway_id, prefix, published, qos)
+
         except Exception as e:
             # Catch-all: MQTT must never raise into the poll loop
             logger.debug(f"MQTT publish_gateway error for {gateway_id}: {e}")
+        finally:
+            _published_topics.reset(token)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    async def _clear_stale_retained(
+        self, gateway_id: str, prefix: str, published: set, qos: int
+    ) -> None:
+        """Clear retained data topics this gateway no longer publishes (#101).
+
+        Every retained topic under the gateway's prefix is tracked. One missed
+        by STALE_TOPIC_CLEAR_POLLS consecutive complete publishes gets a
+        single empty retained payload, which deletes it from the broker, and
+        is then forgotten until it is published again. Tracking is in memory:
+        topics left by a previous server run are not cleared.
+        """
+        topic_root = f"{prefix}/"
+        current = {t for t in published if t.startswith(topic_root)}
+        tracked = self._retained_topics.setdefault(gateway_id, {})
+        for topic in list(tracked):
+            if topic in current:
+                continue
+            tracked[topic] += 1
+            if tracked[topic] >= STALE_TOPIC_CLEAR_POLLS:
+                await self._safe_publish(topic, "", True, qos)
+                if not self._connected:
+                    return  # broker error: retry the clear next time
+                del tracked[topic]
+                logger.info(
+                    "MQTT: cleared retained topic %s (no longer published)", topic
+                )
+        for topic in current:
+            tracked[topic] = 0
 
     async def _safe_publish(
         self, topic: str, payload: str, retain: bool, qos: int
@@ -828,6 +888,9 @@ class MqttPublisher:
         """Publish a single message, marking disconnected on failure."""
         if not self._connected or self._client is None:
             return
+        published = _published_topics.get()
+        if published is not None and retain:
+            published.add(topic)
         try:
             await self._client.publish(topic, payload, qos=qos, retain=retain)
         except Exception as e:

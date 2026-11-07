@@ -2,6 +2,17 @@
 
 ## Version History
 
+### [Unreleased]
+
+**Fixed:**
+- **MQTT: retained topics no longer linger after a value goes away.** A topic
+  published only while its value is present (mode, reserve, version, per-battery,
+  string, remote-meter and per-unit topics) used to keep its last retained
+  value on the broker forever if the gateway stayed online but stopped
+  reporting it. After 3 consecutive publishes without it, the server now sends
+  one empty retained payload to clear it. Offline gateways and `MQTT_RETAIN=no`
+  are unchanged. (#101)
+
 ### [0.14.0] - 2026-10-28
 
 Optional HTTPS on port 8775, and battery dispatch now warns that it could void
