@@ -2,6 +2,16 @@
 
 ## Version History
 
+### [Unreleased]
+
+**Fixed:**
+- **`/pod` no longer returns HTTP 500 when `battery_blocks` is null.** A TEDAPI
+  config or system status with `"battery_blocks": null` (which pypowerwall
+  itself tolerates), or a null entry in either
+  list, raised `TypeError`/`AttributeError`. `/pod` now treats them as empty or
+  skips the entry, like the rest of the server's battery-block code. `/freq`
+  likewise skips a config battery block with a null `vin`.
+
 ### [0.14.0] - 2026-10-28
 
 Optional HTTPS on port 8775, and battery dispatch now warns that it could void

@@ -1204,7 +1204,9 @@ async def get_freq():
     tedapi_config = status.data.tedapi_config
     if isinstance(tedapi_config, dict):
         for cb in (tedapi_config.get("battery_blocks") or []):
-            vin = cb.get("vin", "")
+            if not isinstance(cb, dict):
+                continue
+            vin = cb.get("vin") or ""
             if "--" in vin:
                 part, serial = vin.rsplit("--", 1)
                 if serial and serial not in pw_serials:
@@ -1597,10 +1599,13 @@ async def get_pod():
     # TEDAPI config battery_blocks carry a human-readable "type" field
     # ("Powerwall3", "Powerwall3Follower", etc.) that system_status does not.
     # VIN format: "PARTNUM--SERIAL" (e.g. "1707000-11-M--TG1253370033TB" → "TG1253370033TB")
+    # battery_blocks may be null (as pypowerwall allows), entries too.
     tedapi_type_map: dict = {}
-    if status.data.tedapi_config:
-        for cfg_block in status.data.tedapi_config.get("battery_blocks", []):
-            vin = cfg_block.get("vin", "")
+    if isinstance(status.data.tedapi_config, dict):
+        for cfg_block in status.data.tedapi_config.get("battery_blocks") or []:
+            if not isinstance(cfg_block, dict):
+                continue
+            vin = cfg_block.get("vin") or ""
             block_type = cfg_block.get("type")
             if vin and block_type and "--" in vin:
                 serial = vin.rsplit("--", 1)[1]
@@ -1611,9 +1616,15 @@ async def get_pod():
     expansion_parent_indexes = _expansion_parent_indexes(
         system_status, status.data.tedapi_config
     )
-    if system_status and "battery_blocks" in system_status:
-        idx = 1
-        for block in system_status["battery_blocks"]:
+    battery_blocks = []
+    if isinstance(system_status, dict):
+        battery_blocks = system_status.get("battery_blocks") or []
+    if battery_blocks:
+        # PW{idx} is the block's position in battery_blocks, as in
+        # powerwall_unit_labels() and _expansion_parent_indexes()
+        for idx, block in enumerate(battery_blocks, 1):
+            if not isinstance(block, dict):
+                continue
             # Initialize with None placeholders
             pod[f"PW{idx}_name"] = None
             pod[f"PW{idx}_POD_ActiveHeating"] = None
@@ -1664,7 +1675,6 @@ async def get_pod():
             pod[f"PW{idx}_backup_ready"] = int(block.get("backup_ready") or 0)
             pod[f"PW{idx}_OpSeqState"] = block.get("OpSeqState")
             pod[f"PW{idx}_version"] = block.get("version")
-            idx += 1
 
     # Augment with Vitals Data if available - match POD data to battery blocks by serial number
     if status.data.vitals:
@@ -1685,8 +1695,10 @@ async def get_pod():
                     tepod_map[serial] = (device, v)
         
         # Match TEPOD vitals to battery blocks by serial number
-        if system_status and "battery_blocks" in system_status:
-            for idx, block in enumerate(system_status["battery_blocks"], 1):
+        if battery_blocks:
+            for idx, block in enumerate(battery_blocks, 1):
+                if not isinstance(block, dict):
+                    continue
                 serial = block.get("PackageSerialNumber")
                 if serial and serial in tepod_map:
                     device_name, v = tepod_map[serial]
