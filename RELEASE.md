@@ -2,6 +2,16 @@
 
 ## Version History
 
+### [Unreleased]
+
+**Added:**
+- **MQTT: active gateway alerts.** New retained topics `{gw}/alerts` (sorted
+  JSON list, the same alerts as `GET /alerts`) and `{gw}/alert_count`, plus a
+  Home Assistant "Active Alerts" diagnostic sensor whose state is the count and
+  whose `alerts` attribute holds the list, for automations on specific alerts.
+  Not published when the alert fetch fails, so a failed poll never reads as
+  "no alerts". (#178)
+
 ### [0.14.0] - 2026-10-28
 
 Optional HTTPS on port 8775, and battery dispatch now warns that it could void

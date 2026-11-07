@@ -161,6 +161,8 @@ Base path: `{MQTT_TOPIC_PREFIX}/{gateway_id}/`
 | `pypowerwall/{gw}/grid_charging` | `true` or `false` | — (grid charging allowed) |
 | `pypowerwall/{gw}/grid_export` | `battery_ok`/`pv_only`/`never` | — (grid export policy) |
 | `pypowerwall/{gw}/time_remaining` | `5.50` | `h` (backup time remaining, rounded 2 dp; `status` JSON keeps raw precision) |
+| `pypowerwall/{gw}/alerts` | `["FWUpdateSucceeded","SystemConnectedToGrid"]` | — (active gateway alerts, sorted JSON list; same alerts as `/alerts`) |
+| `pypowerwall/{gw}/alert_count` | `2` | — (number of active alerts; HA sensor "Active Alerts" with the list as its `alerts` attribute) |
 | `pypowerwall/{gw}/online` | `true` or `false` | — |
 
 Optional topics are published only when the source value is available; the
