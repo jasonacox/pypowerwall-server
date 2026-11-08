@@ -1,5 +1,6 @@
 """Stale retained MQTT topics (#101): a gated topic that stops being
 published while the gateway stays online is cleared from the broker."""
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -97,6 +98,61 @@ class TestStaleRetainedTopics:
             pub._client.publish.side_effect = [None, Exception("broker gone")]
             await pub.publish_gateway("test-gw", make_status())
         assert self._clears(pub) == []
+
+    @pytest.mark.asyncio
+    async def test_interrupted_publish_records_only_sent_topics(self, monkeypatch):
+        """Topics the broker accepted before an error are still tracked."""
+        pub = self._make_publisher(monkeypatch)
+        pub._client.publish.side_effect = [None, None, Exception("broker gone")]
+        await pub.publish_gateway("test-gw", make_status())
+        calls = [c.args[0] for c in pub._client.publish.call_args_list]
+        assert set(pub._retained_topics["test-gw"]) == {
+            t for t in calls[:2] if t.startswith("pypowerwall/test-gw/")
+        }
+        assert calls[2] not in pub._retained_topics["test-gw"]
+
+    @staticmethod
+    def _fail_clears(exc):
+        def publish(topic, payload, **kwargs):
+            if payload == "":
+                raise exc
+        return publish
+
+    @pytest.mark.asyncio
+    async def test_failed_clear_retried_next_poll(self, monkeypatch):
+        from app.mqtt.publisher import STALE_TOPIC_CLEAR_POLLS
+
+        pub = self._make_publisher(monkeypatch)
+        await pub.publish_gateway("test-gw", make_status())
+        await self._publish_without_mode(pub, STALE_TOPIC_CLEAR_POLLS - 1)
+        pub._client.publish.side_effect = self._fail_clears(Exception("broker gone"))
+        await self._publish_without_mode(pub, 1)
+        assert pub._retained_topics["test-gw"]["pypowerwall/test-gw/mode"] >= STALE_TOPIC_CLEAR_POLLS
+
+        pub._client.publish.side_effect = None
+        pub._connected = True
+        await self._publish_without_mode(pub, 1)
+        assert self._clears(pub)[-1] == "pypowerwall/test-gw/mode"
+        assert "pypowerwall/test-gw/mode" not in pub._retained_topics["test-gw"]
+
+    @pytest.mark.asyncio
+    async def test_cancelled_clear_keeps_counters(self, monkeypatch):
+        """A publish task replaced mid-clear (latest-wins) loses no counts."""
+        from app.mqtt.publisher import STALE_TOPIC_CLEAR_POLLS
+
+        pub = self._make_publisher(monkeypatch)
+        await pub.publish_gateway("test-gw", make_status())
+        await self._publish_without_mode(pub, STALE_TOPIC_CLEAR_POLLS - 1)
+        pub._client.publish.side_effect = self._fail_clears(asyncio.CancelledError())
+        with pytest.raises(asyncio.CancelledError):
+            await self._publish_without_mode(pub, 1)
+        tracked = pub._retained_topics["test-gw"]
+        assert tracked["pypowerwall/test-gw/mode"] == STALE_TOPIC_CLEAR_POLLS
+        assert tracked["pypowerwall/test-gw/battery"] == 0
+
+        pub._client.publish.side_effect = None
+        await self._publish_without_mode(pub, 1)
+        assert self._clears(pub)[-1] == "pypowerwall/test-gw/mode"
 
     @pytest.mark.asyncio
     async def test_removed_battery_and_string_topics_cleared(self, monkeypatch):

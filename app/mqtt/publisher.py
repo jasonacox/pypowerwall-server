@@ -112,7 +112,7 @@ import contextvars
 import json
 import logging
 import ssl
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 from app.utils.control import is_error_result, is_v1r_gateway  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -138,7 +138,7 @@ STALE_TOPIC_CLEAR_POLLS = 3
 # Topics sent during the current publish_gateway() call. A context variable,
 # not an attribute, so concurrent publishes for different gateways (separate
 # tasks, separate contexts) can't record into each other's set.
-_published_topics: contextvars.ContextVar = contextvars.ContextVar(
+_published_topics: contextvars.ContextVar[Optional[Set[str]]] = contextvars.ContextVar(
     "mqtt_published_topics", default=None
 )
 
@@ -425,7 +425,7 @@ class MqttPublisher:
             self._discovery_sent[gateway_id] = (announced or frozenset()) | signature
             self._discovery_controls_state[gateway_id] = controls_state
 
-        published: set = set()
+        published: Set[str] = set()
         token = _published_topics.set(published)
         try:
             from app.config import settings  # late import
@@ -836,12 +836,15 @@ class MqttPublisher:
                 retain, qos,
             )
 
-            # Only a complete publish of an online gateway with data says
-            # which topics are really gone: offline is covered by
-            # availability, and a publish cut short by a broker error saw
-            # only part of the topics.
-            if retain and status.online and data is not None and self._connected:
-                await self._clear_stale_retained(gateway_id, prefix, published, qos)
+            if retain:
+                # Only a complete publish of an online gateway with data says
+                # which topics are really gone: offline is covered by
+                # availability, and a publish cut short by a broker error saw
+                # only part of the topics.
+                complete = status.online and data is not None and self._connected
+                await self._clear_stale_retained(
+                    gateway_id, prefix, published, qos, complete
+                )
 
         except Exception as e:
             # Catch-all: MQTT must never raise into the poll loop
@@ -854,33 +857,42 @@ class MqttPublisher:
     # ------------------------------------------------------------------
 
     async def _clear_stale_retained(
-        self, gateway_id: str, prefix: str, published: set, qos: int
+        self, gateway_id: str, prefix: str, published: Set[str], qos: int,
+        complete: bool,
     ) -> None:
         """Clear retained data topics this gateway no longer publishes (#101).
 
         Every retained topic under the gateway's prefix is tracked. One missed
         by STALE_TOPIC_CLEAR_POLLS consecutive complete publishes gets a
         single empty retained payload, which deletes it from the broker, and
-        is then forgotten until it is published again. Tracking is in memory:
-        topics left by a previous server run are not cleared.
+        is then forgotten until it is published again. An incomplete publish
+        only records the topics it sent. Tracking is in memory: topics left
+        by a previous server run are not cleared.
+
+        The counters are updated before the first await, so a publish task
+        cancelled mid-clear (latest-wins) never leaves them half-updated; a
+        topic whose clear did not go out stays due and is retried next time.
         """
         topic_root = f"{prefix}/"
         current = {t for t in published if t.startswith(topic_root)}
-        tracked = self._retained_topics.setdefault(gateway_id, {})
-        for topic in list(tracked):
-            if topic in current:
-                continue
-            tracked[topic] += 1
-            if tracked[topic] >= STALE_TOPIC_CLEAR_POLLS:
-                await self._safe_publish(topic, "", True, qos)
-                if not self._connected:
-                    return  # broker error: retry the clear next time
-                del tracked[topic]
-                logger.info(
-                    "MQTT: cleared retained topic %s (no longer published)", topic
-                )
-        for topic in current:
-            tracked[topic] = 0
+        previous = self._retained_topics.get(gateway_id, {})
+        if not complete:
+            self._retained_topics[gateway_id] = {**previous, **dict.fromkeys(current, 0)}
+            return
+        tracked = dict.fromkeys(current, 0)
+        stale = []
+        for topic, misses in previous.items():
+            if topic not in current:
+                tracked[topic] = misses + 1
+                if tracked[topic] >= STALE_TOPIC_CLEAR_POLLS:
+                    stale.append(topic)
+        self._retained_topics[gateway_id] = tracked
+        for topic in stale:
+            await self._safe_publish(topic, "", True, qos)
+            if not self._connected:
+                return  # broker error: the rest stay due for next time
+            tracked.pop(topic, None)
+            logger.info("MQTT: cleared retained topic %s (no longer published)", topic)
 
     async def _safe_publish(
         self, topic: str, payload: str, retain: bool, qos: int
@@ -888,15 +900,16 @@ class MqttPublisher:
         """Publish a single message, marking disconnected on failure."""
         if not self._connected or self._client is None:
             return
-        published = _published_topics.get()
-        if published is not None and retain:
-            published.add(topic)
         try:
             await self._client.publish(topic, payload, qos=qos, retain=retain)
         except Exception as e:
             logger.debug(f"MQTT publish failed on {topic}: {e}")
             # Signal the connection loop to reconnect
             self._connected = False
+            return
+        published = _published_topics.get()
+        if published is not None and retain:
+            published.add(topic)
 
     async def _connection_loop(self) -> None:
         """Maintain a persistent MQTT connection with exponential-backoff reconnect.
