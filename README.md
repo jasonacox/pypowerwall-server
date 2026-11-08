@@ -570,7 +570,7 @@ server {
 
 | Browser URL | Forwarded to pypowerwall as |
 |---|---|
-| `https://lab.lan/pypowerwall/` | `GET /` — Power Flow animation |
+| `https://lab.lan/pypowerwall/` | `GET /` — Power Flow animation in an iframe, else redirects to the console |
 | `https://lab.lan/pypowerwall/console` | `GET /console` — Management console |
 | `https://lab.lan/pypowerwall/api/...` | `GET /api/...` — API endpoints |
 | `https://lab.lan/pypowerwall/static/...` | `GET /static/...` — Static assets |
@@ -605,7 +605,10 @@ The default budget (1000 requests / 60s per IP) is set well above a normal dashb
 
 ## Console
 
-The management console is at `/console` (the Power Flow animation is at `/`).
+The management console is at `/console`, and opening the server's root `/` in a
+browser also lands there. `/` serves the Power Flow animation for embedding
+in an iframe (for example `/?style=clear`, as the Console's Power Flow card
+does); see `/example.html` for a working embed example.
 The **History** link in the console header (and on the Daily Energy card)
 opens the History page at `/history` (see **History page** under Environment Variables).
 
