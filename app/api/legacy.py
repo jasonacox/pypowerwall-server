@@ -481,6 +481,13 @@ async def control_islanding(
     method = "go_off_grid" if value == "off_grid" else "reconnect_grid"
     kwargs = {"confirm": True} if value == "off_grid" else {}
     try:
+        # Check the shared islanding safety state before awaiting the probe:
+        # an in-flight command may finish during the probe otherwise.
+        gateway_manager.check_islanding_safety(gateway_id)
+        if not await gateway_manager.wifi_v1r_write_allowed(gateway_id):
+            raise HTTPException(
+                status_code=503, detail="WiFi v1r unavailable for islanding"
+            )
         result = await gateway_manager.local_control(
             gateway_id, method, timeout=10.0, **kwargs
         )
@@ -861,6 +868,11 @@ async def _control_json(path: str, data: dict):
         else:
             method, args = "schedule_max_backup", (value,)
         async with _max_backup_lock:
+            if not await gateway_manager.wifi_v1r_write_allowed(gateway_id):
+                raise HTTPException(
+                    status_code=503,
+                    detail="WiFi v1r unavailable for max backup",
+                )
             result = await gateway_manager.local_control(
                 gateway_id, method, *args, timeout=_max_backup_timeout()
             )
@@ -1738,6 +1750,7 @@ async def get_json():
             "battery": None,
             "soe": None,
             "soe_raw": None,
+            "soe_scaled": None,
             "grid_status": None,
             "reserve": None,
             "time_remaining_hours": None,
@@ -1753,6 +1766,7 @@ async def get_json():
     # Battery level: the raw gateway level, like the proxy's pw.level()
     soe_raw = status.data.soe_raw if status.data.soe_raw is not None else 0
     soe = soe_raw
+    soe_scaled = status.data.soe  # Tesla App scale: the value /api/system_status/soe returns
 
     # Convert grid_status to numeric (1=UP, 0=DOWN)
     grid_status_str = status.data.grid_status or "DOWN"
@@ -1779,6 +1793,7 @@ async def get_json():
         "battery": battery,
         "soe": soe,
         "soe_raw": soe_raw,
+        "soe_scaled": soe_scaled,
         "grid_status": grid_status,
         "reserve": reserve,
         "time_remaining_hours": time_remaining,
@@ -2886,6 +2901,8 @@ async def get_stats():
                 "name": gw.name,
                 "host": gw.host,
                 "online": status.online if status else False,
+                "data_source": status.data_source if status else None,
+                "local_online": status.local_online if status else None,
                 "last_error": status.error if status and status.error else None,
                 "last_updated": status.last_updated
                 if status and status.last_updated
@@ -2954,6 +2971,8 @@ async def get_stats():
         "PW_BATTERY_DISPATCH": settings.battery_dispatch,
         "PW_CLOUD_HYBRID": settings.cloud_hybrid,
         "PW_LOCAL_FIRST": settings.local_first,
+        "PW_CLOUD_READ_FALLBACK": settings.cloud_read_fallback,
+        "PW_WIFI_V1R_FALLBACK": settings.wifi_v1r_fallback,
     }
 
     # Build connection health section
@@ -3020,6 +3039,7 @@ async def get_stats():
 
     # Add SolarOnly fallback mode state for each tracked gateway
     stats["fallback_mode"] = gateway_manager.get_all_fallback_states()
+    stats["cloud_read_fallback"] = gateway_manager.get_all_cloud_read_states()
 
     # Add default gateway info for backward compatibility
     if gateway_manager.gateways:
