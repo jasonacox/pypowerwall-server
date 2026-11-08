@@ -161,10 +161,15 @@ Base path: `{MQTT_TOPIC_PREFIX}/{gateway_id}/`
 | `pypowerwall/{gw}/grid_charging` | `true` or `false` | — (grid charging allowed) |
 | `pypowerwall/{gw}/grid_export` | `battery_ok`/`pv_only`/`never` | — (grid export policy) |
 | `pypowerwall/{gw}/time_remaining` | `5.50` | `h` (backup time remaining, rounded 2 dp; `status` JSON keeps raw precision) |
+| `pypowerwall/{gw}/alerts` | `["FWUpdateSucceeded","SystemConnectedToGrid"]` | — (active gateway alerts, sorted JSON list; same alerts as `/alerts`) |
+| `pypowerwall/{gw}/alert_count` | `2` | — (number of active alerts; HA sensor "Active Alerts" with the list as its `alerts` attribute) |
 | `pypowerwall/{gw}/online` | `true` or `false` | — |
 
-Optional topics are published only when the source value is available; the
-last retained value persists until the gateway's `availability` goes `offline`.
+Optional topics are published only when the source value is available. If a
+retained topic stops being published while the gateway stays online (say, a
+mode without that value, or a removed battery or string), the server deletes it
+after 3 consecutive publishes without it. Nothing is cleared while the gateway
+is offline, and topics from before a server restart aren't tracked.
 
 ### Control command topics (opt-in `MQTT_CONTROLS`)
 
@@ -398,6 +403,7 @@ Sensors to auto-discover per gateway:
 | Battery Energy Discharged | `energy` | `Wh` | `mdi:battery-minus` |
 | Grid Export | — | — | `mdi:transmission-tower-export` |
 | Time Remaining | `duration` | `h` | `mdi:timer-outline` |
+| Active Alerts (diagnostic; alert names in its `alerts` attribute) | — | — | `mdi:alert-circle-outline` |
 
 Binary sensors:
 | Sensor | HA device_class |

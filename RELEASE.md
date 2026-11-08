@@ -2,7 +2,33 @@
 
 ## Version History
 
-### [0.15.0] - Upcoming
+### [0.15.0] - 2026-11-08
+
+Opt-in cloud read fallback and signed WiFi-v1r, MQTT active alerts, cleanup of
+stale retained MQTT topics, and pypowerwall 0.24.0. Read **Changed** if you use
+MQTT or Home Assistant.
+
+**Changed:**
+- **Retained MQTT topics that stop being published are now cleared.** When a
+  retained topic stops being published while the gateway stays online (say, a
+  mode without that value, or a removed battery or string), the server deletes
+  it from the broker after 3 consecutive publishes without it, so Home
+  Assistant stops showing the last value as live. Nothing is cleared while the
+  gateway is offline or with `MQTT_RETAIN=no`, and topics from before a server
+  restart aren't tracked. Thanks @kochj23! (#197, #101)
+- **pypowerwall upgraded to 0.24.0** (from 0.22.2; `requirements.txt` pin and
+  `pyproject.toml` minimum). Library changes that reach server users:
+  - Lifetime `energy_imported` / `energy_exported` in `/api/meters/aggregates`
+    (and the MQTT grid energy sensors) no longer drop to 0 for one poll when a
+    fetch of the gateway's local API fails. Home Assistant read the dip as a
+    meter reset (jasonacox/pypowerwall#463).
+  - A TEDAPI read that times out waiting for its API lock serves cached data
+    only while it is recent (60 s with default settings), then fails. A
+    stalled gateway now shows as failed polls, so the server's backoff and
+    fallback can act, instead of frozen values (jasonacox/pypowerwall#468).
+  - The final connection error says why the configured mode failed
+    (jasonacox/pypowerwall#457), and Tesla auth on macOS uses TLS 1.2, which
+    fixes a `403` at site discovery (jasonacox/pypowerwall#455).
 
 **Added:**
 - **Cloud read fallback (`PW_CLOUD_READ_FALLBACK`)** - opt-in (`no` by
@@ -39,8 +65,18 @@
 - **`/json` `soe_scaled`** - the Tesla-app-scaled battery level, the same value
   as `/api/system_status/soe`, next to the raw `soe`/`soe_raw`, which are
   unchanged. Thanks @erikgieseler! (#192)
+- **MQTT active alerts** - `{prefix}/{gw}/alerts` (a sorted JSON list of the
+  active alert names, the same list `/alerts` serves) and
+  `{prefix}/{gw}/alert_count`, plus a Home Assistant "Active Alerts"
+  diagnostic sensor: the count is its state, the names its `alerts`
+  attribute. Skipped when alerts couldn't be fetched, so a failed fetch never
+  reads as "no alerts". Thanks @kochj23! (#196, #178)
 
 **Fixed:**
+- **`/pod`, `/freq` and `/pw/battery_blocks` no longer return HTTP 500** when
+  `battery_blocks` is null or holds a null entry, or a config block has a null
+  `vin` (pypowerwall allows these). They're treated as empty or skipped, and
+  Powerwalls keep their PW numbers. Thanks @kochj23! (#198)
 - **MQTT controls no longer bind to the wrong Tesla site** after a configured
   FleetAPI connection fails over to Cloud on a multi-site account. The
   FleetAPI exemption now checks the live connection; the Cloud client would

@@ -1707,3 +1707,60 @@ class TestMqttDeviceSignalTopics:
             if c.args[0].startswith("homeassistant/") and "_device_" in c.args[0]
         ]
         assert second == first  # no duplicates
+
+
+# ---------------------------------------------------------------------------
+# Active alerts (#178)
+# ---------------------------------------------------------------------------
+
+
+class TestAlertTopics:
+    def _publisher(self, monkeypatch) -> MqttPublisher:
+        from app.config import settings
+        monkeypatch.setattr(settings, "mqtt_host", "localhost")
+        monkeypatch.setattr(settings, "mqtt_topic_prefix", "pypowerwall")
+        monkeypatch.setattr(settings, "mqtt_qos", 1)
+        monkeypatch.setattr(settings, "mqtt_retain", True)
+        monkeypatch.setattr(settings, "mqtt_ha_discovery", False)
+        pub = MqttPublisher()
+        pub._client = AsyncMock()
+        pub._connected = True
+        return pub
+
+    @staticmethod
+    def _published(pub) -> dict:
+        return {c.args[0]: c.args[1] for c in pub._client.publish.call_args_list}
+
+    @pytest.mark.asyncio
+    async def test_alerts_published_sorted_and_counted(self, monkeypatch):
+        pub = self._publisher(monkeypatch)
+        status = make_status()
+        status.data.alerts = ["SystemConnectedToGrid", "FWUpdateSucceeded",
+                              "SystemConnectedToGrid"]
+        await pub.publish_gateway("test-gw", status)
+        published = self._published(pub)
+        assert json.loads(published["pypowerwall/test-gw/alerts"]) == [
+            "FWUpdateSucceeded", "SystemConnectedToGrid"
+        ]
+        assert published["pypowerwall/test-gw/alert_count"] == "2"
+
+    @pytest.mark.asyncio
+    async def test_empty_alert_list_published(self, monkeypatch):
+        pub = self._publisher(monkeypatch)
+        status = make_status()
+        status.data.alerts = []
+        await pub.publish_gateway("test-gw", status)
+        published = self._published(pub)
+        assert published["pypowerwall/test-gw/alerts"] == "[]"
+        assert published["pypowerwall/test-gw/alert_count"] == "0"
+
+    @pytest.mark.asyncio
+    async def test_unfetched_alerts_not_published(self, monkeypatch):
+        """None means the fetch failed - never publish it as 'no alerts'."""
+        pub = self._publisher(monkeypatch)
+        status = make_status()
+        status.data.alerts = None
+        await pub.publish_gateway("test-gw", status)
+        published = self._published(pub)
+        assert "pypowerwall/test-gw/alerts" not in published
+        assert "pypowerwall/test-gw/alert_count" not in published
