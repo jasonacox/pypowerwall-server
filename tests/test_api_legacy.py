@@ -221,7 +221,11 @@ def test_pod_tolerates_null_battery_blocks(
     if blocks:
         # Numbered by position, like the Console labels: a null entry keeps
         # its slot so later Powerwalls keep their PW numbers
-        pw = f"PW{blocks.index({'PackageSerialNumber': 'LEADER'}) + 1}"
+        leader = next(
+            i for i, b in enumerate(blocks, 1)
+            if isinstance(b, dict) and b.get("PackageSerialNumber") == "LEADER"
+        )
+        pw = f"PW{leader}"
         assert data[f"{pw}_PackageSerialNumber"] == "LEADER"
     else:
         assert not any(key.startswith("PW") for key in data)
@@ -238,6 +242,23 @@ def test_null_system_status_block_entry(client, connected_gateway, endpoint):
     response = client.get(endpoint)
 
     assert response.status_code == 200
+
+
+def test_battery_blocks_skips_block_without_serial(client, connected_gateway):
+    """/pw/battery_blocks is keyed by serial: a block without one is skipped."""
+    connected_gateway.data.system_status = {
+        "battery_blocks": [
+            {"nominal_energy_remaining": 1},
+            {"PackageSerialNumber": "", "nominal_energy_remaining": 2},
+            {"PackageSerialNumber": "LEADER", "nominal_energy_remaining": 3},
+        ]
+    }
+    connected_gateway.data.vitals = {}
+
+    response = client.get("/pw/battery_blocks")
+
+    assert response.status_code == 200
+    assert response.json() == {"LEADER": {"nominal_energy_remaining": 3}}
 
 
 @pytest.mark.parametrize("endpoint", ["/pod", "/freq"])

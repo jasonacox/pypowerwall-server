@@ -2538,9 +2538,9 @@ async def pw_battery_blocks():
 
     result: dict = {}
     for bat in status.data.system_status.get("battery_blocks") or []:
-        if not isinstance(bat, dict):
-            continue
-        sn = bat.get("PackageSerialNumber")
+        sn = bat.get("PackageSerialNumber") if isinstance(bat, dict) else None
+        if not sn:
+            continue  # keyed by serial: a block without one has no slot
         result[sn] = {k: v for k, v in bat.items() if k != "PackageSerialNumber"}
 
     # Merge TETHC temperature/state from vitals (pw.battery_blocks behavior)
