@@ -214,6 +214,8 @@ class GatewayStatus(BaseModel):
     online: bool
     last_updated: Optional[float] = None
     error: Optional[str] = None
+    data_source: Optional[str] = None  # local, cloud or cache
+    local_online: Optional[bool] = None  # local link up; None for Cloud/FleetAPI gateways
 
 
 class AggregateData(BaseModel):
