@@ -48,6 +48,13 @@
 - **Console Authorization Token spacing** - the collapsed token panel keeps
   equal top and bottom padding; the expanded layout is unchanged. Thanks
   @erikgieseler! (#193)
+- **Console narrow-screen layout** - the Daily Energy table compacts at
+  380 px instead of spilling out of its card; long alert names wrap and the
+  mobile alert card grows with its content; the Operating Mode / Battery
+  panels fit at 320 px. (#194)
+- **Multi-gateway Console separators** - section headers use the defined
+  `--border-color` token instead of the undefined `--border`, so they show
+  again. Thanks @erikgieseler! (#194)
 
 ### [0.14.0] - 2026-10-28
 

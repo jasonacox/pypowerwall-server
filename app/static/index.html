@@ -457,6 +457,11 @@
             font-size: 0.85em;
         }
         
+        .alert-item > span:last-child {
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
         .alert-item.notice {
             border-left: 3px solid #10b981;
         }
@@ -617,7 +622,7 @@
            Grid spans the full width below them. */
         .control-section-columns {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
             gap: 16px;
             margin-bottom: 16px;
         }
@@ -764,6 +769,7 @@
         }
         .control-reserve-row input[type="range"] {
             flex: 1;
+            min-width: 0;
             accent-color: var(--accent-green);
         }
         .control-reserve-row input[type="number"] {
@@ -1570,6 +1576,24 @@
             }
         }
 
+        /* Compact the seven-column daily table before it can overflow the
+           card. The card keeps its width and follows its content height. */
+        @media (max-width: 380px) {
+            .daily-table {
+                width: 100%;
+                table-layout: fixed;
+                font-size: 10px;
+            }
+            .daily-table th,
+            .daily-table td {
+                padding: 3px 2px;
+            }
+            .daily-table th:first-child,
+            .daily-table td:first-child {
+                width: 18%;
+            }
+        }
+
         /* When Solar Strings is hidden, Alerts + System Health share the row.
            Desktop only: at 900px and below every card spans the full width.
            NOTE: do not reuse the .no-strings class name here — that rule
@@ -1628,12 +1652,12 @@
             color: var(--text-secondary);
             text-transform: uppercase;
             letter-spacing: 0.06em;
-            border-top: 1px solid var(--border);
+            box-shadow: inset 0 1px 0 var(--border-color);
             margin-top: 8px;
             padding: 6px 0 3px 0;
         }
         .gateway-section-header:first-child {
-            border-top: none;
+            box-shadow: none;
             margin-top: 0;
             padding-top: 0;
         }
