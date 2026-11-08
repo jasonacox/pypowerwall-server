@@ -45,6 +45,9 @@
   FleetAPI connection fails over to Cloud on a multi-site account. The
   FleetAPI exemption now checks the live connection; the Cloud client would
   use the account's first site. Set `PW_SITEID` in that case. (#187)
+- **Console Authorization Token spacing** - the collapsed token panel keeps
+  equal top and bottom padding; the expanded layout is unchanged. Thanks
+  @erikgieseler! (#193)
 - **Console narrow-screen layout** - the Daily Energy table compacts at
   380 px instead of spilling out of its card; long alert names wrap and the
   mobile alert card grows with its content; the Operating Mode / Battery
