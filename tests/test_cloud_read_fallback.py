@@ -516,6 +516,14 @@ async def test_failed_cloud_fallback_read_counts_as_cloud_link_failure(monkeypat
     assert gm._cloud_read_state_for("v1r")["failures"] == 1
     assert gm._cloud_failures == 1
 
+    # A read that returns no aggregates is a failed attempt too
+    _install_fetch(gm, cloud_data=PowerwallData(timestamp=time.time()), calls=[])
+    gm._next_poll_time["v1r"] = 0
+    gm._next_cloud_read_time["v1r"] = 0
+    await gm._poll_gateway("v1r")
+    assert gm._cloud_read_state_for("v1r")["failures"] == 2
+    assert gm._cloud_failures == 2
+
 
 def test_cloud_fallback_allows_local_gateway_with_fleetapi_hybrid(monkeypatch):
     gm = _manager(monkeypatch)
@@ -643,6 +651,30 @@ async def test_local_and_cloud_failure_preserves_offline_snapshot(monkeypatch):
     assert status.data_source == "cache"
     assert status.local_online is False
     assert status.data is None
+
+
+@pytest.mark.asyncio
+async def test_local_retry_between_cloud_refreshes_keeps_offline_snapshot(monkeypatch):
+    """A failed local retry before the next cloud read keeps the snapshot the
+    failed cloud refresh left (data_source, local_online)."""
+    gm = _manager(monkeypatch)
+    calls = []
+    _install_fetch(gm, cloud_data=_data(), calls=calls)
+    for _ in range(3):
+        gm._next_poll_time["v1r"] = 0
+        await gm._poll_gateway("v1r")
+    _install_fetch(gm, cloud_data=None, calls=calls)
+    gm._next_poll_time["v1r"] = 0
+    gm._next_cloud_read_time["v1r"] = 0
+    await gm._poll_gateway("v1r")
+    assert gm.cache["v1r"].data_source == "cache"
+
+    gm._next_poll_time["v1r"] = 0   # local retry due, cloud read not due
+    await gm._poll_gateway("v1r")
+    status = gm.cache["v1r"]
+    assert status.online is False
+    assert status.data_source == "cache"
+    assert status.local_online is False
 
 
 @pytest.mark.asyncio

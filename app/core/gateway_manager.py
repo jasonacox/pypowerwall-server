@@ -1665,6 +1665,7 @@ class GatewayManager:
         if not data or not data.aggregates:
             state["failures"] += 1
             state["last_error"] = "cloud fallback returned no aggregates"
+            self._cloud_failures += 1
             logger.debug(
                 "Cloud read fallback for %s returned no aggregates", gateway_id
             )
@@ -2004,24 +2005,18 @@ class GatewayManager:
                 cloud_result = await self._maybe_cloud_read(gateway_id)
                 if cloud_result is True:
                     return
-                if cloud_result is None:
-                    cached = self.cache.get(gateway_id)
-                    if cached is not None and cached.data_source == "cloud":
-                        logger.debug(
-                            "Local retry for %s failed; keeping cloud fallback "
-                            "cache until the next cloud read",
-                            gateway_id,
-                        )
-                        return
-                elif cloud_result is False:
-                    cached = self.cache.get(gateway_id)
-                    if cached is not None and cached.data_source == "cache":
-                        logger.debug(
-                            "Local retry and cloud refresh failed for %s; "
-                            "keeping offline cache snapshot",
-                            gateway_id,
-                        )
-                        return
+                # Keep the cloud data, or the offline snapshot a failed cloud
+                # refresh left, until the next cloud read: the generic status
+                # below would drop its data_source and local-outage indicator.
+                cached = self.cache.get(gateway_id)
+                if cached is not None and cached.data_source in ("cloud", "cache"):
+                    logger.debug(
+                        "Local retry for %s failed; keeping %s fallback status "
+                        "until the next cloud read",
+                        gateway_id,
+                        cached.data_source,
+                    )
+                    return
 
             logger.debug(
                 f"Exponential backoff for {gateway_id}: failure #{failure_count}, waiting {backoff_seconds}s before retry"
