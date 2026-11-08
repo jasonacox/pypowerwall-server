@@ -4,6 +4,7 @@ import pytest
 
 from app.config import settings
 from app.core.gateway_manager import gateway_manager
+from app.core.scaling import raw_to_tesla_battery_percent
 from app.models.gateway import Gateway
 
 
@@ -13,10 +14,24 @@ def test_soe_returns_raw_gateway_level(client, connected_gateway):
     assert data == {"percentage": 85.5, "raw_percentage": 85.5}
 
 
+def test_json_soe_scaled_matches_system_status_soe(client, connected_gateway):
+    json_data = client.get("/json").json()
+    system_soe = client.get("/api/system_status/soe").json()
+    assert json_data["soe_scaled"] == system_soe["percentage"]
+
+
+def test_json_soe_scaled_null_when_system_status_soe_is_null(client, connected_gateway):
+    connected_gateway.data.soe = None
+    connected_gateway.data.soe_raw = None
+    assert client.get("/json").json()["soe_scaled"] is None
+    assert client.get("/api/system_status/soe").json()["percentage"] is None
+
+
 def test_json_soe_is_raw_gateway_level(client, connected_gateway):
     data = client.get("/json").json()
     assert data["soe"] == 85.5
     assert data["soe_raw"] == 85.5
+    assert data["soe_scaled"] == pytest.approx(raw_to_tesla_battery_percent(85.5))
 
 
 @pytest.mark.parametrize("grid_status, expected", [

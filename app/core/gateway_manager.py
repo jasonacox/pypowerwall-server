@@ -249,6 +249,9 @@ class GatewayManager:
 
     # Consecutive TEDAPI probe failures before entering fallback mode.
     _TEDAPI_FALLBACK_THRESHOLD = 3
+    # Consecutive local poll failures before switching to the cloud read
+    # fallback. Matches the other failover/fallback thresholds.
+    _CLOUD_READ_FALLBACK_THRESHOLD = 3
     # Recovery retry intervals (seconds) — exponential backoff.
     _TEDAPI_RECOVERY_INITIAL_INTERVAL = 60
     _TEDAPI_RECOVERY_MAX_INTERVAL = 300
@@ -278,6 +281,9 @@ class GatewayManager:
         # One independent poll task per gateway so a slow/degraded gateway
         # never delays polling of the healthy ones.
         self._poll_tasks: Dict[str, asyncio.Task] = {}
+        # PW_CLOUD_READ_FALLBACK: one cloud-read task per local gateway, so a
+        # slow local retry never pauses cloud refreshes.
+        self._cloud_read_tasks: Dict[str, asyncio.Task] = {}
         self._poll_interval = 5  # Default, will be set from config during initialize()
 
         # Strong references to in-flight MQTT publish tasks (one per gateway).
@@ -299,7 +305,10 @@ class GatewayManager:
         self._hw_pw3: Dict[str, bool] = {}
         self._last_successful_data: Dict[
             str, PowerwallData
-        ] = {}  # Keep last good data for graceful degradation
+        ] = {}  # Keep last good local data for graceful degradation
+        # Last cloud read fallback data, kept apart so History's Powerwall
+        # numbering and the multi-Powerwall guard only ever see local data.
+        self._last_cloud_data: Dict[str, PowerwallData] = {}
         self._firmware_seen: Dict[
             str, str
         ] = {}  # Last logged firmware per gateway (#854) — survives transient fetch misses
@@ -355,10 +364,25 @@ class GatewayManager:
         # alongside a TEDAPI gateway. This enables hybrid operation:
         # TEDAPI for fast local reads, cloud for control writes.
         self._cloud_control: Optional[pypowerwall.Powerwall] = None
-        # Gateway the shared cloud connection writes for, set only when its
+        # Gateway the shared cloud connection is bound to, set only when its
         # Tesla site is unambiguous (see _cloud_site_unambiguous). MQTT
-        # controls use the shared connection for this gateway and no other.
+        # controls and the cloud read fallback use the shared connection for
+        # this gateway and no other.
         self._cloud_control_gateway_id: Optional[str] = None
+        # Opt-in cloud read fallback state and the lock that serializes its
+        # full cloud reads. Cloud writes keep their existing finality path.
+        self._cloud_read_state: Dict[str, Dict] = {}
+        self._next_cloud_read_time: Dict[str, float] = {}
+        # True when PW_CLOUD_READ_FALLBACK is the only reason the shared cloud
+        # connection exists (no PW_CONTROL_SECRET, no PW_CLOUD_HYBRID).
+        self._cloud_for_fallback_only = False
+        # Gateways with a cloud read in flight: a second caller skips instead
+        # of queuing behind it, so reads never start closer than the interval.
+        self._cloud_read_inflight: Set[str] = set()
+        # Bumped when a fallback ends, so a read that spans a local recovery
+        # (and a new outage) is dropped instead of published.
+        self._cloud_read_generation: Dict[str, int] = {}
+        self._cloud_read_lock: asyncio.Lock = asyncio.Lock()
 
         # Hybrid cloud-link health (issue #87): the shared cloud connection
         # is a second link with its own failure profile, tracked separately
@@ -527,6 +551,20 @@ class GatewayManager:
 
         from app.config import settings
 
+        if settings.wifi_v1r_fallback:
+            if not settings.failover:
+                logger.warning(
+                    "PW_WIFI_V1R_FALLBACK is ignored because PW_FAILOVER=no"
+                )
+            if not any(
+                config.wifi_host and config.rsa_key_path
+                for config in gateway_configs
+            ):
+                logger.warning(
+                    "PW_WIFI_V1R_FALLBACK is set but no gateway has both "
+                    "wifi_host and rsa_key_path; the flag has no effect"
+                )
+
         # Size thread pool based on gateway count
         # Formula: max(10, num_gateways * 3) to support concurrent API calls
         num_gateways = len(gateway_configs)
@@ -643,9 +681,11 @@ class GatewayManager:
         # Runs as a background task so a slow/flaky Tesla cloud connection (up
         # to 15s) doesn't block server startup and container health checks.
         # Like the proxy, the cloud login starts only when it is wanted:
-        # PW_CONTROL_SECRET (writes need it) or PW_CLOUD_HYBRID=yes (read-only
-        # values such as Basic LAN mode/reserve). PW_EMAIL alone isn't enough:
-        # PW2 local logins need an email and never asked for a cloud session.
+        # PW_CONTROL_SECRET (writes need it), PW_CLOUD_HYBRID=yes (read-only
+        # values such as Basic LAN mode/reserve), or PW_CLOUD_READ_FALLBACK=yes
+        # (full cloud read set when the local poll fails). PW_EMAIL alone isn't
+        # enough: PW2 local logins need an email and never asked for a cloud
+        # session.
         local_with_email = [
             config
             for config in gateway_configs
@@ -659,15 +699,27 @@ class GatewayManager:
             and config.email
             and not config.cloud_mode
         ]
+        hybrid_wanted = settings.control_enabled or settings.cloud_hybrid
+        read_fallback = settings.cloud_read_fallback and settings.failover
         hybrid_configs = (
-            local_with_email
-            if settings.control_enabled or settings.cloud_hybrid
-            else []
+            local_with_email if hybrid_wanted or read_fallback else []
         )
+        self._cloud_for_fallback_only = read_fallback and not hybrid_wanted
+        if settings.cloud_read_fallback:
+            if not settings.failover:
+                logger.warning(
+                    "PW_CLOUD_READ_FALLBACK is ignored because PW_FAILOVER=no"
+                )
+            if not local_with_email:
+                logger.warning(
+                    "PW_CLOUD_READ_FALLBACK is set but no local gateway has "
+                    "PW_EMAIL/cloud credentials; the flag has no effect"
+                )
         if local_with_email and not hybrid_configs:
             logger.info(
                 "Hybrid cloud connection off: PW_EMAIL is set for a local gateway, "
-                "but neither PW_CONTROL_SECRET nor PW_CLOUD_HYBRID=yes is"
+                "but neither PW_CONTROL_SECRET, PW_CLOUD_HYBRID=yes nor "
+                "PW_CLOUD_READ_FALLBACK=yes is"
             )
         # Hybrid configured => the cloud link exists as a tracked link even
         # while the connection itself is down (issue #87 per-link health).
@@ -685,6 +737,13 @@ class GatewayManager:
             self._poll_tasks[gateway_id] = asyncio.create_task(
                 self._poll_gateway_loop(gateway_id), name=f"poll-{gateway_id}"
             )
+        if settings.cloud_read_fallback and settings.failover:
+            for gateway_id, gw in self.gateways.items():
+                if not self._is_cloud_gateway(gw):
+                    self._cloud_read_tasks[gateway_id] = asyncio.create_task(
+                        self._cloud_read_loop(gateway_id),
+                        name=f"cloud-read-{gateway_id}",
+                    )
 
         # Start TEDAPI probe/recovery tasks for TEDAPI gateways.
         # Probes pw.version() on an interval; after N consecutive failed
@@ -776,10 +835,10 @@ class GatewayManager:
                             f"(mode={getattr(pw, 'mode', 'unknown')})"
                         )
                     self._cloud_control = pw
-                    if await self._cloud_site_unambiguous(config.fleetapi):
+                    if await self._cloud_site_unambiguous():
                         self._cloud_control_gateway_id = config.id
                     logger.info(
-                        "Cloud control connection established for write operations"
+                        "Cloud connection established (control/read bindings available)"
                     )
                     return  # Only need one cloud control connection
                 except Exception as e:
@@ -795,22 +854,28 @@ class GatewayManager:
                 retry_interval * 2, self._CLOUD_CONTROL_RETRY_MAX
             )
 
-    async def _cloud_site_unambiguous(self, fleetapi: bool) -> bool:
+    async def _cloud_site_unambiguous(self) -> bool:
         """True when the shared cloud connection's Tesla site is certain.
 
         That is when PW_SITEID is set, a site was chosen with pypowerwall
-        setup (the site file in the auth path), the connection is FleetAPI
-        (its site comes from its own setup), or the account has one site.
+        setup (the site file in the auth path), the live connection is
+        FleetAPI (its site comes from its own setup; a configured FleetAPI
+        gateway can fail over to Cloud, which has no such setup), or the
+        account has one site.
         Otherwise the cloud client defaults to the account's first site,
-        which may not be this gateway's, so MQTT controls don't use it.
-        Only MQTT controls use the binding, so without them nothing is checked.
+        which may not be this gateway's, so the binding is unsafe.
+
+        The binding is needed by MQTT controls and by the opt-in cloud read
+        fallback. When neither can use it, skip the check entirely.
         """
         from app.config import settings
 
-        if not settings.mqtt_controls_available:
+        read_fallback = settings.cloud_read_fallback and settings.failover
+        if not settings.mqtt_controls_available and not read_fallback:
             return False
         client = getattr(self._cloud_control, "client", None)
         sitefile = getattr(client, "sitefile", None)
+        fleetapi = getattr(self._cloud_control, "mode", None) == "fleetapi"
         if settings.siteid or fleetapi or (sitefile and os.path.exists(sitefile)):
             return True
         getsites = getattr(client, "getsites", None)
@@ -827,8 +892,8 @@ class GatewayManager:
             return True
         logger.warning(
             "Hybrid cloud connection: the Tesla account has %s sites and no "
-            "site is selected, so MQTT controls won't use it. Set PW_SITEID "
-            "to this gateway's energy site id.",
+            "site is selected, so MQTT controls and the cloud read fallback "
+            "won't use it. Set PW_SITEID to this gateway's energy site id.",
             len(sites) if isinstance(sites, list) else "an unknown number of",
         )
         return False
@@ -878,6 +943,9 @@ class GatewayManager:
         # then cancel any in-flight publish tasks.
         named_tasks = [(t, f"poll-{gid}") for gid, t in self._poll_tasks.items()]
         named_tasks.extend(
+            (t, f"cloud-read-{gid}") for gid, t in self._cloud_read_tasks.items()
+        )
+        named_tasks.extend(
             (t, f"tedapi-probe-{gid}") for gid, t in self._probe_tasks.items()
         )
         if self._cloud_control_task:
@@ -897,6 +965,7 @@ class GatewayManager:
         )
 
         self._poll_tasks.clear()
+        self._cloud_read_tasks.clear()
         self._probe_tasks.clear()
         self._mqtt_tasks.clear()
 
@@ -933,8 +1002,34 @@ class GatewayManager:
                 logger.error(f"Error in polling task for {gateway_id}: {e}")
                 await asyncio.sleep(self._poll_interval)
 
-    async def _fetch_gateway_data(self, gateway_id: str, pw) -> PowerwallData:
+    async def _cloud_read_loop(self, gateway_id: str):
+        """Cloud read fallback cadence for one gateway (PW_CLOUD_READ_FALLBACK).
+
+        Runs beside the poll loop so a slow local retry (up to its poll
+        budget) never pauses cloud refreshes. _maybe_cloud_read() decides
+        whether a read is due; between reads this sleeps until the next
+        deadline, at most one poll interval.
+        """
+        while True:
+            try:
+                await self._maybe_cloud_read(gateway_id)
+                due = self._next_cloud_read_time.get(gateway_id)
+                delay = due - time.time() if due else self._poll_interval
+                await asyncio.sleep(min(max(delay, 0.5), self._poll_interval))
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in cloud read task for {gateway_id}: {e}")
+                await asyncio.sleep(self._poll_interval)
+
+    async def _fetch_gateway_data(
+        self, gateway_id: str, pw, *, cloud_fallback: bool = False
+    ) -> PowerwallData:
         """Fetch all data fields from a connected gateway.
+
+        ``cloud_fallback`` uses the same field set as a normal Cloud/FleetAPI
+        gateway even when the configured gateway is Basic LAN; it only affects
+        the read-mode guard below.
 
         Runs every blocking pypowerwall call in the dedicated executor with a
         per-step timeout.  Aggregates is required (raises on failure); all
@@ -957,7 +1052,9 @@ class GatewayManager:
         # 404 on the wired LAN interface, so skip the fetches below in that
         # mode - avoids per-cycle 404 log noise and wasted request timeouts.
         gateway = self.gateways.get(gateway_id)
-        basic_lan = bool(gateway.basic_lan) if gateway else False
+        basic_lan = False if cloud_fallback else (
+            bool(gateway.basic_lan) if gateway else False
+        )
 
         # Run blocking pypowerwall calls in dedicated executor with timeout protection
         loop = asyncio.get_running_loop()
@@ -1124,10 +1221,11 @@ class GatewayManager:
 
             # /api/site_info from the library (the gateway's own shape in every
             # mode). Throttled whether or not the last fetch worked; the last good
-            # copy is kept.
+            # copy is kept. A cloud fallback read serves that copy without
+            # touching it, so the cloud's copy never outlives local recovery.
             attempt = self._site_info_attempt.get(gateway_id)
-            if attempt is None or time.monotonic() - attempt[0] >= (
-                    self._SITE_INFO_REFRESH if attempt[1] else self._SITE_INFO_RETRY):
+            if not cloud_fallback and (attempt is None or time.monotonic() - attempt[0] >= (
+                    self._SITE_INFO_REFRESH if attempt[1] else self._SITE_INFO_RETRY)):
                 ok = False
                 try:
                     site_info = await asyncio.wait_for(
@@ -1225,13 +1323,13 @@ class GatewayManager:
         # cloud link drops. /api/operation
         # already serves the timestamped _cloud_grid_* fallback stale-marked
         # instead — same no-silent-freeze contract as mode/reserve (#87).
-        if last_data and last_data.mode and not basic_lan:
+        if last_data and last_data.mode and not basic_lan and not cloud_fallback:
             data.mode = last_data.mode
         if basic_lan:
             # Basic LAN local API does not expose operation mode/reserve. When a
             # hybrid cloud-control connection is available, refresh mode/reserve
             # from the cloud so the Console reflects the real system state.
-            if self._cloud_control:
+            if self._hybrid_reads_enabled():
                 try:
                     cloud_mode = await self.cloud_control(
                         "get_mode", timeout=step_timeout
@@ -1344,7 +1442,7 @@ class GatewayManager:
                     data.grid_charging = local_grid_charging
                 elif (
                     local_grid_charging is None
-                    and self._cloud_control is not None
+                    and self._hybrid_reads_enabled()
                     and _grid_controls_supported(self._cloud_control)
                 ):
                     grid_func = getattr(self._cloud_control, "get_grid_charging", None)
@@ -1376,7 +1474,7 @@ class GatewayManager:
                     data.grid_export = local_grid_export
                 elif (
                     local_grid_export is None
-                    and self._cloud_control is not None
+                    and self._hybrid_reads_enabled()
                     and _grid_controls_supported(self._cloud_control)
                 ):
                     export_func = getattr(self._cloud_control, "get_grid_export", None)
@@ -1451,9 +1549,260 @@ class GatewayManager:
             except (asyncio.TimeoutError, Exception) as e:
                 logger.debug(f"Powerwalls not available for {gateway_id}: {e}")
 
+        if cloud_fallback:
+            # Match a normal Cloud-Mode poll: do not mix in the last local
+            # multi-Powerwall snapshot, and do not inherit its vitals marker.
+            self._vitals_preserved.discard(gateway_id)
+            return data
         # Guard against partial TEDAPI follower snapshots replacing a complete
         # multi-Powerwall view for a single poll cycle.
         return self._preserve_complete_multi_pw_snapshot(gateway_id, data)
+
+    def _new_cloud_read_state(self) -> Dict[str, Any]:
+        """Create the per-gateway cloud read fallback state."""
+        return {
+            "active": False,
+            "since": None,
+            "last_success": None,
+            "failures": 0,
+            "last_error": None,
+        }
+
+    def _cloud_read_state_for(self, gateway_id: str) -> Dict[str, Any]:
+        return self._cloud_read_state.setdefault(
+            gateway_id, self._new_cloud_read_state()
+        )
+
+    def _hybrid_reads_enabled(self) -> bool:
+        """True when local polls may add the hybrid connection's read-only
+        cloud values (Basic LAN mode/reserve, grid charging/export).
+
+        Not when PW_CLOUD_READ_FALLBACK alone started the connection: it must
+        not query Tesla on every healthy local poll.
+        """
+        return self._cloud_control is not None and not self._cloud_for_fallback_only
+
+    @staticmethod
+    def _is_cloud_gateway(gateway) -> bool:
+        """True for a Cloud/FleetAPI gateway (no local link to report on)."""
+        return bool(gateway.cloud_mode or not gateway.host)
+
+    def _cloud_read_fallback_allowed(self, gateway_id: str) -> bool:
+        """True when local reads may fall back to the bound cloud client.
+
+        The flag must be on, the local transport must have failed, and the
+        shared cloud connection must be cloud/FleetAPI (not a local client)
+        and bound to this gateway's Tesla site.
+        """
+        from app.config import settings
+
+        if not settings.cloud_read_fallback or not settings.failover:
+            return False
+        gateway = self.gateways.get(gateway_id)
+        if gateway is None or self._is_cloud_gateway(gateway):
+            return False
+        cloud = self._cloud_control
+        if cloud is None or self._cloud_control_gateway_id != gateway_id:
+            return False
+        return bool(
+            getattr(cloud, "cloudmode", False)
+            or getattr(cloud, "fleetapi", False)
+            or getattr(cloud, "mode", None) in ("cloud", "fleetapi")
+        )
+
+    def _clear_cloud_read_state(self, gateway_id: str, live_cloud: bool = False) -> None:
+        """The gateway's own connection answered: end the cloud read fallback.
+
+        ``live_cloud``: it answered through the library's own failover to
+        Cloud, which data_source/local_online still report.
+        """
+        state = self._cloud_read_state.pop(gateway_id, None)
+        self._next_cloud_read_time.pop(gateway_id, None)
+        self._last_cloud_data.pop(gateway_id, None)
+        self._cloud_read_generation[gateway_id] = (
+            self._cloud_read_generation.get(gateway_id, 0) + 1
+        )
+        if state and state.get("active"):
+            logger.info(
+                "Gateway %s cloud read fallback ended; %s",
+                gateway_id,
+                "its connection now serves Cloud data" if live_cloud
+                else "local reads resumed",
+            )
+
+    def get_cloud_read_state(self, gateway_id: str) -> Optional[Dict[str, Any]]:
+        """Snapshot of the cloud read fallback state for one gateway."""
+        state = self._cloud_read_state.get(gateway_id)
+        if not state:
+            return None
+        snapshot = dict(state)
+        snapshot["duration_seconds"] = (
+            time.time() - snapshot["since"]
+            if snapshot.get("active") and snapshot.get("since")
+            else None
+        )
+        from app.config import settings
+
+        snapshot["enabled"] = settings.cloud_read_fallback
+        return snapshot
+
+    def get_all_cloud_read_states(self) -> Dict[str, Dict[str, Any]]:
+        """Cloud read fallback states for /health and /stats."""
+        return {
+            gateway_id: self.get_cloud_read_state(gateway_id)
+            for gateway_id in list(self._cloud_read_state)
+        }
+
+    def _cloud_read_interval(self) -> float:
+        """Cloud fallback cadence: PW_CACHE_EXPIRE, with a 30 s FleetAPI floor."""
+        interval = max(1.0, float(self._poll_interval))
+        cloud = self._cloud_control
+        fleetapi = bool(
+            getattr(cloud, "fleetapi", False)
+            or getattr(cloud, "mode", None) == "fleetapi"
+        )
+        return max(interval, 30.0) if fleetapi else interval
+
+    async def _maybe_cloud_read(self, gateway_id: str) -> Optional[bool]:
+        """Read from cloud when fallback is due, independently of local backoff.
+
+        Returns ``True`` on success, ``False`` when a cloud read was attempted
+        and failed, and ``None`` when no attempt was due/applicable (including
+        a read already in flight for this gateway) or local reads recovered
+        while the read ran (its result is dropped). The
+        distinction lets the caller keep a live cloud cache while waiting for
+        its next cadence, but stop reporting it online once a cloud read fails.
+        """
+        if (
+            self._consecutive_failures.get(gateway_id, 0)
+            < self._CLOUD_READ_FALLBACK_THRESHOLD
+        ):
+            return None
+        if not self._cloud_read_fallback_allowed(gateway_id):
+            return None
+        now = time.time()
+        if (
+            gateway_id in self._cloud_read_inflight
+            or now < self._next_cloud_read_time.get(gateway_id, 0)
+        ):
+            return None
+        # Schedule before the await so a slow/failed cloud read cannot spin.
+        self._next_cloud_read_time[gateway_id] = now + self._cloud_read_interval()
+        generation = self._cloud_read_generation.get(gateway_id, 0)
+        self._cloud_read_inflight.add(gateway_id)
+        try:
+            data = await self._fetch_cloud_read(gateway_id)
+        finally:
+            self._cloud_read_inflight.discard(gateway_id)
+        if (
+            self._cloud_read_generation.get(gateway_id, 0) != generation
+            or self._consecutive_failures.get(gateway_id, 0)
+            < self._CLOUD_READ_FALLBACK_THRESHOLD
+        ):
+            return None  # local reads recovered while the cloud read ran
+        if data is None:
+            cached = self.cache.get(gateway_id)
+            if cached is not None and cached.data_source == "cloud":
+                gateway = self.gateways[gateway_id]
+                error = "Cloud read fallback unavailable"
+                gateway.online = False
+                gateway.last_error = error
+                self.cache[gateway_id] = GatewayStatus(
+                    gateway=gateway,
+                    online=False,
+                    last_updated=cached.last_updated,
+                    error=error,
+                    data_source="cache",
+                    local_online=False,
+                )
+                self._schedule_mqtt_publish(gateway_id)
+            return False
+        self._apply_cloud_read(gateway_id, data)
+        return True
+
+    async def _fetch_cloud_read(self, gateway_id: str) -> Optional[PowerwallData]:
+        """Read the same dataset as Cloud Mode from the bound cloud client."""
+        if not self._cloud_read_fallback_allowed(gateway_id):
+            return None
+        from app.config import settings
+
+        state = self._cloud_read_state_for(gateway_id)
+        if not state["active"]:
+            state["active"] = True
+            state["since"] = time.time()
+            logger.warning(
+                "Gateway %s local reads failed; using cloud read fallback",
+                gateway_id,
+            )
+        budget = max(
+            30.0,
+            self._poll_interval * 3.0,
+            (settings.timeout + 2.0) * 4.0,
+        )
+        try:
+            async with self._cloud_read_lock:
+                data = await asyncio.wait_for(
+                    self._fetch_gateway_data(
+                        gateway_id, self._cloud_control, cloud_fallback=True
+                    ),
+                    timeout=budget,
+                )
+        except Exception as exc:
+            state["failures"] += 1
+            state["last_error"] = str(exc) or type(exc).__name__  # a timeout has no message
+            # Same shared cloud connection as cloud_control() (#87 link health
+            # in /stats and the Console); _apply_cloud_read() resets it.
+            self._cloud_failures += 1
+            logger.debug(
+                "Cloud read fallback for %s failed: %s", gateway_id, exc
+            )
+            return None
+
+        if not data or not data.aggregates:
+            state["failures"] += 1
+            state["last_error"] = "cloud fallback returned no aggregates"
+            self._cloud_failures += 1
+            logger.debug(
+                "Cloud read fallback for %s returned no aggregates", gateway_id
+            )
+            return None
+
+        state["failures"] = 0
+        state["last_success"] = time.time()
+        state["last_error"] = None
+        return data
+
+    def _apply_cloud_read(self, gateway_id: str, data: PowerwallData) -> None:
+        """Cache a successful cloud fallback read like a normal cloud poll."""
+        gateway = self.gateways[gateway_id]
+        error = "Local gateway unavailable; serving cloud fallback"
+        gateway.online = True
+        gateway.last_error = error
+        self._last_cloud_data[gateway_id] = data
+        self.cache[gateway_id] = GatewayStatus(
+            gateway=gateway,
+            data=data,
+            online=True,
+            last_updated=data.timestamp,
+            error=error,
+            data_source="cloud",
+            local_online=False,
+        )
+        # A successful read proves the shared cloud link is alive.
+        self._cloud_failures = 0
+        self._cloud_last_success = time.time()
+        # Keep both deadlines intact: the start-based cloud deadline was set
+        # in _maybe_cloud_read(), and the local poll backoff must not reset.
+        try:
+            self._record_timeseries_sample(gateway_id, gateway, data)
+            self._record_signal_sample(gateway_id, gateway, data)
+        except Exception as exc:
+            logger.debug(
+                "Cloud fallback history/signal recording failed for %s: %s",
+                gateway_id,
+                exc,
+            )
+        self._schedule_mqtt_publish(gateway_id)
 
     async def _poll_gateway(self, gateway_id: str) -> None:
         """Poll a single gateway for data with exponential backoff on failures."""
@@ -1463,9 +1812,10 @@ class GatewayManager:
             next_poll = self._next_poll_time.get(gateway_id, 0)
 
             if now < next_poll:
-                # Skip this poll cycle - in backoff period
+                # Local retries stay in exponential backoff; cloud reads keep
+                # their own cadence in _cloud_read_loop().
                 logger.debug(
-                    f"Gateway {gateway_id} in backoff, skipping poll (next poll at {next_poll - now:.0f}s)"
+                    f"Gateway {gateway_id} in backoff, skipping local poll (next poll at {next_poll - now:.0f}s)"
                 )
                 return
 
@@ -1706,8 +2056,19 @@ class GatewayManager:
                         f"Exponential backoff reset for {gateway_id} after {previous_failures} failures"
                     )
 
+            cloud_only = self._is_cloud_gateway(gateway)
+            live_cloud = data.connection_mode in ("Cloud", "FleetAPI")
+            # Any successful poll ends the cloud read fallback (polls succeed,
+            # so no fallback reads would run); a library-internal failover to
+            # Cloud still shows in data_source/local_online below.
+            self._clear_cloud_read_state(gateway_id, live_cloud)
             self.cache[gateway_id] = GatewayStatus(
-                gateway=gateway, data=data, online=True, last_updated=data.timestamp
+                gateway=gateway,
+                data=data,
+                online=True,
+                last_updated=data.timestamp,
+                data_source="cloud" if cloud_only or live_cloud else "local",
+                local_online=None if cloud_only else not live_cloud,
             )
 
             # Queue the sample for daily energy statistics (never raises or
@@ -1735,6 +2096,22 @@ class GatewayManager:
             now = datetime.now().timestamp()
             self._next_poll_time[gateway_id] = now + backoff_seconds
 
+            if failure_count >= self._CLOUD_READ_FALLBACK_THRESHOLD:
+                # _cloud_read_loop() does the cloud reads; awaiting one here
+                # would stall local retries for a whole cloud read. Keep the
+                # cloud data, or the offline snapshot a failed cloud refresh
+                # left, until the next cloud read: the generic status below
+                # would drop its data_source and local-outage indicator.
+                cached = self.cache.get(gateway_id)
+                if cached is not None and cached.data_source in ("cloud", "cache"):
+                    logger.debug(
+                        "Local retry for %s failed; keeping %s fallback status "
+                        "until the next cloud read",
+                        gateway_id,
+                        cached.data_source,
+                    )
+                    return
+
             logger.debug(
                 f"Exponential backoff for {gateway_id}: failure #{failure_count}, waiting {backoff_seconds}s before retry"
             )
@@ -1758,7 +2135,14 @@ class GatewayManager:
             gateway.last_error = str(e)
 
             self.cache[gateway_id] = GatewayStatus(
-                gateway=gateway, online=False, error=str(e), last_updated=now
+                gateway=gateway,
+                online=False,
+                error=str(e),
+                last_updated=now,
+                # The local poll just failed, so the local link is down. This
+                # also keeps the outage indicator when a cloud fallback read
+                # failed in the same cycle.
+                local_online=None if self._is_cloud_gateway(gateway) else False,
             )
 
             # Publish the offline status to MQTT so HA reflects gateway going offline.
@@ -1996,6 +2380,8 @@ class GatewayManager:
             tedapi_kwargs["rsa_key_path"] = config.rsa_key_path
         if config.wifi_host:
             tedapi_kwargs["wifi_host"] = config.wifi_host
+        if settings.wifi_v1r_fallback:
+            tedapi_kwargs["wifi_v1r_fallback"] = True
         return tedapi_kwargs
 
     async def _create_local_connection(
@@ -2252,16 +2638,28 @@ class GatewayManager:
             logger.debug(
                 f"Gateway {gateway_id} offline, graceful degradation disabled (PW_GRACEFUL_DEGRADATION=no)"
             )
-            return status
+            return self._without_cache_label(status)
 
-        # Check if we have cached data that's still fresh
-        last_success_data = self._last_successful_data.get(gateway_id)
+        # Check if we have cached data that's still fresh: the newer of the
+        # last local poll and the last cloud fallback read.
+        last_success_data = max(
+            (
+                d
+                for d in (
+                    self._last_successful_data.get(gateway_id),
+                    self._last_cloud_data.get(gateway_id),
+                )
+                if d is not None and d.timestamp
+            ),
+            key=lambda d: d.timestamp,
+            default=None,
+        )
         if not last_success_data or not last_success_data.timestamp:
             # No cached data available
             logger.debug(
                 f"Gateway {gateway_id} offline, no cached data available for graceful degradation"
             )
-            return status
+            return self._without_cache_label(status)
 
         # Calculate age of cached data
         now = datetime.now().timestamp()
@@ -2278,12 +2676,22 @@ class GatewayManager:
                 online=False,  # Still indicate gateway is offline
                 last_updated=last_success_data.timestamp,
                 error=status.error,
+                data_source="cache",
+                local_online=status.local_online,
             )
 
         # Cached data too old - return offline status with no data
         logger.debug(
             f"Graceful degradation expired for {gateway_id}: cached data too old (age: {data_age:.0f}s > TTL: {settings.cache_ttl}s), returning null"
         )
+        return self._without_cache_label(status)
+
+    @staticmethod
+    def _without_cache_label(status: GatewayStatus) -> GatewayStatus:
+        """An offline status served without data is not cached data: drop the
+        "cache" label a failed cloud refresh stored with it."""
+        if status.data is None and status.data_source == "cache":
+            return status.model_copy(update={"data_source": None})
         return status
 
     def get_all_gateways(self) -> Dict[str, GatewayStatus]:
@@ -2541,6 +2949,34 @@ class GatewayManager:
             self._cloud_failures += 1
             return None
 
+    def check_islanding_safety(self, gateway_id: str) -> None:
+        """Reject overlapping islanding commands and server-side cooldown hits.
+
+        Callers that perform an async preflight/probe before dispatch must run
+        this check before that await, then local_control() checks it again
+        immediately before dispatch.
+        """
+        # "In progress" means the dispatched future hasn't finished. Check
+        # done() rather than relying on the clear-on-completion callback below:
+        # asyncio runs done-callbacks on a later loop iteration, and on Python
+        # 3.13 local_control() returns before that has happened.
+        in_flight = self._islanding_futures.get(gateway_id)
+        if in_flight is not None and not in_flight.done():
+            raise IslandingCommandInProgressError(
+                "An islanding command is still in progress"
+            )
+        # Server-enforced cooldown between contactor commands.
+        from app.config import settings
+
+        cooldown = settings.islanding_cooldown
+        last_dispatch = self._islanding_last_dispatch.get(gateway_id)
+        if cooldown > 0 and last_dispatch is not None:
+            elapsed = time.monotonic() - last_dispatch
+            if elapsed < cooldown:
+                raise IslandingCooldownError(
+                    retry_after=max(1, math.ceil(cooldown - elapsed))
+                )
+
     async def local_control(
         self,
         gateway_id: str,
@@ -2566,27 +3002,7 @@ class GatewayManager:
             Result of the method call, or None on error/timeout
         """
         if method in _ISLANDING_METHODS:
-            # "In progress" means the dispatched future hasn't finished. Check
-            # done() rather than relying on the clear-on-completion callback
-            # below: asyncio runs done-callbacks on a later loop iteration, and
-            # on Python 3.13 local_control() returns before that has happened.
-            in_flight = self._islanding_futures.get(gateway_id)
-            if in_flight is not None and not in_flight.done():
-                raise IslandingCommandInProgressError(
-                    "An islanding command is still in progress"
-                )
-            # Server-enforced cooldown between contactor commands. Late
-            # import per repo convention (avoids circular dependency).
-            from app.config import settings
-
-            cooldown = settings.islanding_cooldown
-            last_dispatch = self._islanding_last_dispatch.get(gateway_id)
-            if cooldown > 0 and last_dispatch is not None:
-                elapsed = time.monotonic() - last_dispatch
-                if elapsed < cooldown:
-                    raise IslandingCooldownError(
-                        retry_after=max(1, math.ceil(cooldown - elapsed))
-                    )
+            self.check_islanding_safety(gateway_id)
 
         pw = self.connections.get(gateway_id)
         if not pw:
@@ -2682,53 +3098,100 @@ class GatewayManager:
         except Exception:
             return False
 
+    async def wifi_v1r_write_allowed(self, gateway_id: str) -> bool:
+        """Whether a write may go out now under the strict WiFi v1r rule.
+
+        A plain bool for callers. True means either the strict route is not
+        applicable (flag/failover off or LAN up), or the strict signed WiFi
+        probe succeeded. False means the strict route applies and its probe
+        failed, so islanding/max backup must return 503 and value controls use
+        their historical path.
+        """
+        from app.config import settings
+
+        if not settings.wifi_v1r_fallback or not settings.failover:
+            return True
+        if not self._is_lan_failed(gateway_id):
+            return True
+        pw = self.connections.get(gateway_id)
+        tedapi = getattr(pw, "tedapi", None)
+        if not getattr(tedapi, "v1r", False):
+            return True
+        probe = getattr(pw, "wifi_v1r_ready", None)
+        if not callable(probe) or getattr(tedapi, "wifi_v1r_transport", None) is None:
+            return False
+        timeout = max(5.0, settings.timeout + 2.0)
+        try:
+            loop = asyncio.get_running_loop()
+            return bool(
+                await asyncio.wait_for(
+                    loop.run_in_executor(self._executor, probe), timeout=timeout
+                )
+            )
+        except Exception as e:
+            logger.debug(f"[{gateway_id}] WiFi v1r probe failed: {e}")
+            return False
+
     async def control_write(
         self, gateway_id: str, method: str, *args, timeout: float = 10.0, **kwargs
     ) -> Tuple[Optional[str], Optional[Any]]:
-        """Write a reserve/mode/grid control locally when PW_LOCAL_FIRST is on.
+        """Write a reserve/mode/grid control locally when local-first is on.
 
         Returns ``(path_label, result)`` when this helper takes the write,
         else ``(None, None)`` — the caller then runs its historical dispatch
-        verbatim. The helper only takes the write with
-        ``PW_LOCAL_FIRST=yes`` on a confirmed v1r transport whose LAN is up
-        and which has a local connection object; in every other case (flag
-        off, non-v1r, LAN failed, no local connection) behavior is
-        byte-identical to before, because the historical HTTP and MQTT
-        dispatch rules genuinely differ (HTTP: any cloud connection wins,
-        even an ambiguous-site one; MQTT: strict ``_write_path`` order) and
-        no single shared default could reproduce both.
+        verbatim.
 
-        Local v1r writes are LAN-only, so with the library's LAN to WiFi
-        failover tripped (``lan_failed``, e.g. the ESP32 bridge serving) or
-        no local connection object there is nothing this helper could
-        dispatch — it declines and the historical dispatch (cloud first
-        when configured) runs unchanged. Any dispatched attempt — success,
-        timeout (None) or a library error dict — is final and never
-        followed by a second write: a timed-out write may still have been
-        applied, and blindly failing over would risk double-applying or
-        racing two async command paths (issue #149). A failed write returns
-        HTTP 503 (or an MQTT failed-warning) so the caller can retry
-        deliberately. Absolute-value controls (reserve, mode, grid
-        settings) converge on the same target state either way.
+        ``PW_LOCAL_FIRST=yes`` takes the LAN write while the LAN is up.
+        ``PW_WIFI_V1R_FALLBACK=yes`` additionally takes the signed WiFi-v1r
+        write when the library's LAN failover is tripped and a read-only
+        probe (``wifi_v1r_write_allowed``) succeeds. The two flags are
+        independent; neither changes the LAN-up priority of the other. Any
+        dispatched attempt — success, timeout (None) or a library error dict
+        — is final and never followed by a second write: a timed-out write
+        may still have been applied, and blindly failing over would risk
+        double-applying or racing two async command paths (issue #149). A
+        failed write returns HTTP 503 (or an MQTT failed-warning) so the
+        caller can retry deliberately. Absolute-value controls (reserve,
+        mode, grid settings) converge on the same target state either way.
 
-        Islanding methods must not go through here (always local v1r).
+        Islanding and max backup use the same public write gate; value
+        controls fall back to their historical dispatch when it returns false.
         """
         # Late import per repo convention (avoids circular dependency).
         from app.config import settings
 
+        if not settings.local_first and not settings.wifi_v1r_fallback:
+            return None, None
+        if self.connections.get(gateway_id) is None:
+            return None, None
+
+        if not await self.wifi_v1r_write_allowed(gateway_id):
+            logger.warning(
+                f"[{gateway_id}] control_write({method}): WiFi v1r probe "
+                "failed; using the historical write path"
+            )
+            return None, None
+        if self._is_lan_failed(gateway_id):
+            if not settings.wifi_v1r_fallback:
+                # Historical #161 behavior: cloud is the LAN-down fallback.
+                return None, None
+            logger.info(
+                f"[{gateway_id}] control_write({method}): LAN failed, "
+                "trying WiFi v1r"
+            )
+            result = await self.local_control(
+                gateway_id, method, *args, timeout=timeout, **kwargs
+            )
+            return "local v1r (wifi)", result
+
         if not settings.local_first or not self._is_confirmed_v1r(gateway_id):
             return None, None
+        # A failed last poll means the LAN write would only time out; keep the
+        # historical #174 guard for the LAN path. The WiFi branch above is
+        # gated by its live probe instead, so it still works when the last
+        # poll failed but the bridge is serving v1r.
         status = self.cache.get(gateway_id)
-        if (
-            self._is_lan_failed(gateway_id)
-            or self.connections.get(gateway_id) is None
-            # lan_failed only trips with a WiFi host and failover on; a
-            # failed last poll covers a dead LAN without them (cached state)
-            or status is None
-            or not status.online
-        ):
-            # Nothing dispatchable locally (local v1r writes are LAN-only):
-            # decline and let the caller's historical dispatch run unchanged.
+        if status is None or not status.online:
             return None, None
         logger.info(
             f"[{gateway_id}] control_write({method}): trying local v1r first"
@@ -2736,9 +3199,6 @@ class GatewayManager:
         result = await self.local_control(
             gateway_id, method, *args, timeout=timeout, **kwargs
         )
-        # Final, whatever came back: a timeout (None) may still have been
-        # applied, and an error dict means the gateway answered. Either
-        # way a second write on another path could race it.
         return "local v1r", result
 
     async def call_tedapi(

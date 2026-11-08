@@ -2,15 +2,59 @@
 
 ## Version History
 
-### [Unreleased]
+### [0.15.0] - Upcoming
 
 **Added:**
-- **MQTT: active gateway alerts.** New retained topics `{gw}/alerts` (sorted
-  JSON list, the same alerts as `GET /alerts`) and `{gw}/alert_count`, plus a
-  Home Assistant "Active Alerts" diagnostic sensor whose state is the count and
-  whose `alerts` attribute holds the list, for automations on specific alerts.
-  Not published when the alert fetch fails, so a failed poll never reads as
-  "no alerts". (#178)
+- **Cloud read fallback (`PW_CLOUD_READ_FALLBACK`)** - opt-in (`no` by
+  default). After three consecutive failed local polls, a local gateway reads
+  the Cloud-Mode data set from its bound Cloud/FleetAPI connection, every
+  `PW_CACHE_EXPIRE` (5 s default; at least 30 s for FleetAPI). Cloud reads run
+  on their own schedule, so a slow local retry doesn't pause them; local
+  retries keep their backoff. Needs `PW_EMAIL` and cloud auth, an unambiguous site
+  (`PW_SITEID`, `.pypowerwall.site`, a single-site account or a live FleetAPI
+  connection) and `PW_FAILOVER=yes`. The flag starts the cloud connection
+  but adds no cloud calls while local polls succeed. Read-only:
+  writes are unchanged. `online` stays true so Home Assistant keeps the
+  values; check `data_source`/`local_online` for where they come from.
+  Fallback reads count toward the cloud link health in `/stats` and the
+  Console.
+  Validated on a Powerwall 2 with Tesla cloud. Thanks @erikgieseler! (#187)
+- **`data_source` and `local_online`** on each gateway status (`/api/gateways`,
+  `/health`, `/stats`): `local`, `cloud` or `cache`, and whether the local link
+  is up, with or without the flag. With the flag on, `/health` reports
+  `degraded` (still HTTP 200) while a local gateway is served from cloud;
+  without it, `/health` is unchanged.
+- **Signed WiFi-v1r transport (`PW_WIFI_V1R_FALLBACK`)** - opt-in (`no` by
+  default), independent of `PW_LOCAL_FIRST`. After the library's v1r LAN
+  failover trips, a gateway with `PW_WIFI_HOST` and an RSA key uses signed
+  WiFi-v1r as its only leader route: reads, and reserve/mode/grid, max backup
+  and islanding writes, with no fallback to legacy WiFi TEDAPI. Each write
+  first runs a read-only probe; if it fails, value controls use their
+  historical path (cloud, which during a LAN outage may accept a write without
+  applying it, #149) and max backup/islanding return `503`. A dispatched write
+  stays final. No change without the flag. Reserve writes validated on a
+  Powerwall 2 over an ESP32 bridge, and read-only cold failover on 2x
+  Powerwall 3 (@jasonacox-sam); max backup and islanding were not exercised on
+  hardware. Thanks @erikgieseler! (#186)
+- **`/json` `soe_scaled`** - the Tesla-app-scaled battery level, the same value
+  as `/api/system_status/soe`, next to the raw `soe`/`soe_raw`, which are
+  unchanged. Thanks @erikgieseler! (#192)
+
+**Fixed:**
+- **MQTT controls no longer bind to the wrong Tesla site** after a configured
+  FleetAPI connection fails over to Cloud on a multi-site account. The
+  FleetAPI exemption now checks the live connection; the Cloud client would
+  use the account's first site. Set `PW_SITEID` in that case. (#187)
+- **Console Authorization Token spacing** - the collapsed token panel keeps
+  equal top and bottom padding; the expanded layout is unchanged. Thanks
+  @erikgieseler! (#193)
+- **Console narrow-screen layout** - the Daily Energy table compacts at
+  380 px instead of spilling out of its card; long alert names wrap and the
+  mobile alert card grows with its content; the Operating Mode / Battery
+  panels fit at 320 px. (#194)
+- **Multi-gateway Console separators** - section headers use the defined
+  `--border-color` token instead of the undefined `--border`, so they show
+  again. Thanks @erikgieseler! (#194)
 
 ### [0.14.0] - 2026-10-28
 
