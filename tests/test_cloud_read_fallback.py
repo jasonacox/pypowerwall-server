@@ -544,6 +544,44 @@ async def test_cloud_read_is_dropped_when_local_recovers_mid_read(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cloud_read_spanning_recovery_and_a_new_outage_is_dropped(monkeypatch):
+    """Recovery, then three new failures while the same cloud read is still
+    pending: its pre-recovery result must not be published."""
+    gm = _manager(monkeypatch)
+    _install_fetch(gm, cloud_data=_data(), calls=[])
+    await _enter_fallback(gm)
+
+    gate = asyncio.Event()
+    local_ok = True
+    stale = _data()
+
+    async def fetch(gateway_id, pw, *, cloud_fallback=False):
+        if pw is gm._cloud_control:
+            await gate.wait()
+            return stale
+        if local_ok:
+            return _data()
+        raise RuntimeError("local down")
+
+    gm._fetch_gateway_data = fetch
+    gm._next_cloud_read_time["v1r"] = 0
+    cloud = asyncio.create_task(gm._maybe_cloud_read("v1r"))
+    await asyncio.sleep(0)
+    gm._next_poll_time["v1r"] = 0
+    await gm._poll_gateway("v1r")              # local recovers
+    local_ok = False
+    for _ in range(3):                          # and fails again
+        gm._next_poll_time["v1r"] = 0
+        await gm._poll_gateway("v1r")
+    assert gm._consecutive_failures["v1r"] >= 3
+
+    gate.set()
+    assert await cloud is None
+    assert gm.cache["v1r"].data is not stale
+    assert gm.cache["v1r"].data_source != "cloud"
+
+
+@pytest.mark.asyncio
 async def test_cloud_read_task_runs_only_for_local_gateways_and_stops_on_shutdown(monkeypatch):
     import pypowerwall
     from app.config import GatewayConfig

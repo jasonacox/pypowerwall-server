@@ -10,7 +10,7 @@
   the Cloud-Mode data set from its bound Cloud/FleetAPI connection, every
   `PW_CACHE_EXPIRE` (5 s default; at least 30 s for FleetAPI). Cloud reads run
   on their own schedule, so a slow local retry doesn't pause them; local
-  retries keep their backoff. Needs cloud auth, an unambiguous site
+  retries keep their backoff. Needs `PW_EMAIL` and cloud auth, an unambiguous site
   (`PW_SITEID`, `.pypowerwall.site`, a single-site account or a live FleetAPI
   connection) and `PW_FAILOVER=yes`. The flag starts the cloud connection
   but adds no cloud calls while local polls succeed. Read-only:

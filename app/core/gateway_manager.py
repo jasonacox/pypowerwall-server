@@ -379,6 +379,9 @@ class GatewayManager:
         # Gateways with a cloud read in flight: a second caller skips instead
         # of queuing behind it, so reads never start closer than the interval.
         self._cloud_read_inflight: Set[str] = set()
+        # Bumped when a fallback ends, so a read that spans a local recovery
+        # (and a new outage) is dropped instead of published.
+        self._cloud_read_generation: Dict[str, int] = {}
         self._cloud_read_lock: asyncio.Lock = asyncio.Lock()
 
         # Hybrid cloud-link health (issue #87): the shared cloud connection
@@ -1616,6 +1619,9 @@ class GatewayManager:
         state = self._cloud_read_state.pop(gateway_id, None)
         self._next_cloud_read_time.pop(gateway_id, None)
         self._last_cloud_data.pop(gateway_id, None)
+        self._cloud_read_generation[gateway_id] = (
+            self._cloud_read_generation.get(gateway_id, 0) + 1
+        )
         if state and state.get("active"):
             logger.info(
                 "Gateway %s cloud read fallback ended; %s",
@@ -1682,13 +1688,15 @@ class GatewayManager:
             return None
         # Schedule before the await so a slow/failed cloud read cannot spin.
         self._next_cloud_read_time[gateway_id] = now + self._cloud_read_interval()
+        generation = self._cloud_read_generation.get(gateway_id, 0)
         self._cloud_read_inflight.add(gateway_id)
         try:
             data = await self._fetch_cloud_read(gateway_id)
         finally:
             self._cloud_read_inflight.discard(gateway_id)
         if (
-            self._consecutive_failures.get(gateway_id, 0)
+            self._cloud_read_generation.get(gateway_id, 0) != generation
+            or self._consecutive_failures.get(gateway_id, 0)
             < self._CLOUD_READ_FALLBACK_THRESHOLD
         ):
             return None  # local reads recovered while the cloud read ran
