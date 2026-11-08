@@ -2,6 +2,14 @@
 
 ## Version History
 
+### [0.15.1] - Upcoming
+
+**Fixed:**
+- **Console HTML escaping** - gateway names, hosts, modes, firmware, errors,
+  alerts, string names and section headers now render as text. A gateway
+  error or config value containing markup could inject HTML or script into
+  the Console. (#199)
+
 ### [0.15.0] - 2026-11-08
 
 Opt-in cloud read fallback and signed WiFi-v1r, MQTT active alerts, cleanup of
@@ -91,10 +99,6 @@ MQTT or Home Assistant.
 - **Multi-gateway Console separators** - section headers use the defined
   `--border-color` token instead of the undefined `--border`, so they show
   again. Thanks @erikgieseler! (#194)
-- **Console HTML escaping** - gateway names, hosts, modes, firmware, errors,
-  alerts, string names and section headers now render as text. A gateway
-  error or config value containing markup could inject HTML or script into
-  the Console. (#199)
 
 ### [0.14.0] - 2026-10-28
 
