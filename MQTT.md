@@ -400,6 +400,7 @@ Sensors to auto-discover per gateway:
 | Battery Energy Discharged | `energy` | `Wh` | `mdi:battery-minus` |
 | Grid Export | — | — | `mdi:transmission-tower-export` |
 | Time Remaining | `duration` | `h` | `mdi:timer-outline` |
+| Active Alerts (diagnostic; alert names in its `alerts` attribute) | — | — | `mdi:alert-circle-outline` |
 
 Binary sensors:
 | Sensor | HA device_class |
