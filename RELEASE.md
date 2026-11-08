@@ -2,6 +2,22 @@
 
 ## Version History
 
+### [0.15.0] - Upcoming
+
+**Added:**
+- **Signed WiFi-v1r transport (`PW_WIFI_V1R_FALLBACK`)** - opt-in (`no` by
+  default), independent of `PW_LOCAL_FIRST`. After the library's v1r LAN
+  failover trips, a gateway with `PW_WIFI_HOST` and an RSA key uses signed
+  WiFi-v1r as its only leader route: reads, and reserve/mode/grid, max backup
+  and islanding writes, with no fallback to legacy WiFi TEDAPI. Each write
+  first runs a read-only probe; if it fails, value controls use their
+  historical path (cloud, which during a LAN outage may accept a write without
+  applying it, #149) and max backup/islanding return `503`. A dispatched write
+  stays final. No change without the flag. Reserve writes validated on a
+  Powerwall 2 over an ESP32 bridge, and read-only cold failover on 2x
+  Powerwall 3 (@jasonacox-sam); max backup and islanding were not exercised on
+  hardware. Thanks @erikgieseler! (#186)
+
 ### [0.14.0] - 2026-10-28
 
 Optional HTTPS on port 8775, and battery dispatch now warns that it could void
