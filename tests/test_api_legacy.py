@@ -227,6 +227,19 @@ def test_pod_tolerates_null_battery_blocks(
         assert not any(key.startswith("PW") for key in data)
 
 
+@pytest.mark.parametrize("endpoint", ["/pod", "/freq", "/pw/battery_blocks"])
+def test_null_system_status_block_entry(client, connected_gateway, endpoint):
+    """A null entry in system_status battery_blocks is skipped everywhere."""
+    connected_gateway.data.system_status = {
+        "battery_blocks": [None, {"PackageSerialNumber": "LEADER"}]
+    }
+    connected_gateway.data.tedapi_config = None
+
+    response = client.get(endpoint)
+
+    assert response.status_code == 200
+
+
 @pytest.mark.parametrize("endpoint", ["/pod", "/freq"])
 def test_null_vin_in_tedapi_config(client, connected_gateway, endpoint):
     """A config battery block with a null vin (or a null block) is skipped."""
