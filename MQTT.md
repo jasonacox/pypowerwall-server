@@ -163,14 +163,11 @@ Base path: `{MQTT_TOPIC_PREFIX}/{gateway_id}/`
 | `pypowerwall/{gw}/time_remaining` | `5.50` | `h` (backup time remaining, rounded 2 dp; `status` JSON keeps raw precision) |
 | `pypowerwall/{gw}/online` | `true` or `false` | — |
 
-Optional topics are published only when the source value is available. When a
-retained topic stops being published while the gateway stays online (for
-example after switching a gateway to a mode that lacks that value, or removing
-a battery or string), the server clears it from the broker with one empty
-retained payload after it has been missing from 3 consecutive publishes. While
-the gateway is offline, `availability` goes `offline` and nothing is cleared.
-Tracking is in memory, so topics left over from before a server restart are not
-cleared.
+Optional topics are published only when the source value is available. If a
+retained topic stops being published while the gateway stays online (say, a
+mode without that value, or a removed battery or string), the server deletes it
+after 3 consecutive publishes without it. Nothing is cleared while the gateway
+is offline, and topics from before a server restart aren't tracked.
 
 ### Control command topics (opt-in `MQTT_CONTROLS`)
 
