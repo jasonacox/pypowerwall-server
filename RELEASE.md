@@ -9,6 +9,10 @@
   alerts, string names and section headers now render as text. A gateway
   error or config value containing markup could inject HTML or script into
   the Console. (#199)
+- **Console and History headers no longer show a Power Flow link**, which only
+  reloaded the Console: opened directly, `/` redirects to `/console`. `/` is
+  unchanged, so existing iframe embeds keep working; `/example.html` shows how
+  to embed it. (#201)
 
 ### [0.15.0] - 2026-11-08
 

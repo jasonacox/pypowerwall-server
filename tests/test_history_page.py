@@ -110,7 +110,6 @@ class TestSharedChartCode:
         assert [t for _, t in console_items] == [
             "Console",
             "History",
-            "Power Flow",
             "API Docs",
             "Gateways API",
             "GitHub",
