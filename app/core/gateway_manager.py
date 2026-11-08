@@ -1512,6 +1512,11 @@ class GatewayManager:
             gateway_id, self._new_cloud_read_state()
         )
 
+    @staticmethod
+    def _is_cloud_gateway(gateway) -> bool:
+        """True for a Cloud/FleetAPI gateway (no local link to report on)."""
+        return bool(gateway.cloud_mode or not gateway.host)
+
     def _cloud_read_fallback_allowed(self, gateway_id: str) -> bool:
         """True when local reads may fall back to the bound cloud client.
 
@@ -1524,7 +1529,7 @@ class GatewayManager:
         if not settings.cloud_read_fallback or not settings.failover:
             return False
         gateway = self.gateways.get(gateway_id)
-        if gateway is None or gateway.cloud_mode or not gateway.host:
+        if gateway is None or self._is_cloud_gateway(gateway):
             return False
         cloud = self._cloud_control
         if cloud is None or self._cloud_control_gateway_id != gateway_id:
@@ -1649,6 +1654,9 @@ class GatewayManager:
         except Exception as exc:
             state["failures"] += 1
             state["last_error"] = str(exc)
+            # Same shared cloud connection as cloud_control() (#87 link health
+            # in /stats and the Console); _apply_cloud_read() resets it.
+            self._cloud_failures += 1
             logger.debug(
                 "Cloud read fallback for %s failed: %s", gateway_id, exc
             )
@@ -1952,7 +1960,7 @@ class GatewayManager:
                         f"Exponential backoff reset for {gateway_id} after {previous_failures} failures"
                     )
 
-            cloud_only = bool(gateway.cloud_mode or (gateway.fleetapi and not gateway.host))
+            cloud_only = self._is_cloud_gateway(gateway)
             live_cloud = data.connection_mode in ("Cloud", "FleetAPI")
             # Library-internal failover to Cloud is not a local recovery:
             # keep any active cloud-read fallback state until local data returns.
@@ -2038,7 +2046,14 @@ class GatewayManager:
             gateway.last_error = str(e)
 
             self.cache[gateway_id] = GatewayStatus(
-                gateway=gateway, online=False, error=str(e), last_updated=now
+                gateway=gateway,
+                online=False,
+                error=str(e),
+                last_updated=now,
+                # The local poll just failed, so the local link is down. This
+                # also keeps the outage indicator when a cloud fallback read
+                # failed in the same cycle.
+                local_online=None if self._is_cloud_gateway(gateway) else False,
             )
 
             # Publish the offline status to MQTT so HA reflects gateway going offline.

@@ -13,6 +13,8 @@
   (`.pypowerwall.site` or `PW_SITEID`) and `PW_FAILOVER=yes`. Read-only:
   writes are unchanged. `online` stays true so Home Assistant keeps the
   values; check `data_source`/`local_online` for where they come from.
+  Fallback reads count toward the cloud link health in `/stats` and the
+  Console.
   Validated on a Powerwall 2 with Tesla cloud. Thanks @erikgieseler! (#187)
 - **`data_source` and `local_online`** on each gateway status (`/api/gateways`,
   `/health`, `/stats`): `local`, `cloud` or `cache`, and whether the local link

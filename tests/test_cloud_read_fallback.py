@@ -481,6 +481,42 @@ async def test_cloud_failure_marks_cloud_cache_offline(monkeypatch):
     assert gm.get_gateway("v1r").data is None
 
 
+@pytest.mark.asyncio
+async def test_failed_local_poll_reports_local_link_down(monkeypatch):
+    """With no cloud snapshot to keep, the generic failure status still says
+    the local link is down; a Cloud gateway has no local link (None)."""
+    gm = _manager(monkeypatch, flag=False)
+    _install_fetch(gm, calls=[])
+    await gm._poll_gateway("v1r")
+    assert gm.cache["v1r"].online is False
+    assert gm.cache["v1r"].data_source != "cache"
+    assert gm.cache["v1r"].local_online is False
+    assert gm.get_gateway("v1r").local_online is False
+
+    gm.gateways["v1r"].cloud_mode = True
+    gm._next_poll_time["v1r"] = 0
+    await gm._poll_gateway("v1r")
+    assert gm.cache["v1r"].local_online is None
+
+
+@pytest.mark.asyncio
+async def test_failed_cloud_fallback_read_counts_as_cloud_link_failure(monkeypatch):
+    """The fallback reads over the shared cloud connection, so a failed read
+    counts against its link health like a failed cloud_control() (#87)."""
+    gm = _manager(monkeypatch)
+
+    async def fake_fetch(gateway_id, pw, *, cloud_fallback=False):
+        raise RuntimeError("cloud down" if pw is gm._cloud_control else "local down")
+
+    gm._fetch_gateway_data = fake_fetch
+    for _ in range(3):
+        gm._next_poll_time["v1r"] = 0
+        await gm._poll_gateway("v1r")
+
+    assert gm._cloud_read_state_for("v1r")["failures"] == 1
+    assert gm._cloud_failures == 1
+
+
 def test_cloud_fallback_allows_local_gateway_with_fleetapi_hybrid(monkeypatch):
     gm = _manager(monkeypatch)
     gm.gateways["v1r"].cloud_mode = False
