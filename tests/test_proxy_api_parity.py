@@ -22,6 +22,7 @@ def test_json_soe_scaled_matches_system_status_soe(client, connected_gateway):
 
 def test_json_soe_scaled_null_when_system_status_soe_is_null(client, connected_gateway):
     connected_gateway.data.soe = None
+    connected_gateway.data.soe_raw = None
     assert client.get("/json").json()["soe_scaled"] is None
     assert client.get("/api/system_status/soe").json()["percentage"] is None
 
