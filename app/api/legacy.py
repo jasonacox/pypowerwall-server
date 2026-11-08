@@ -1766,7 +1766,7 @@ async def get_json():
     # Battery level: the raw gateway level, like the proxy's pw.level()
     soe_raw = status.data.soe_raw if status.data.soe_raw is not None else 0
     soe = soe_raw
-    soe_scaled = status.data.soe
+    soe_scaled = status.data.soe  # Tesla App scale: the value /api/system_status/soe returns
 
     # Convert grid_status to numeric (1=UP, 0=DOWN)
     grid_status_str = status.data.grid_status or "DOWN"
