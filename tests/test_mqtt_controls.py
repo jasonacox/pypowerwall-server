@@ -942,22 +942,25 @@ async def test_no_site_check_without_mqtt_controls(env, monkeypatch, caplog):
     client = MagicMock(sitefile=None)
     monkeypatch.setattr(gateway_manager, "_cloud_control", MagicMock(client=client))
     with caplog.at_level(logging.WARNING, logger="app.core.gateway_manager"):
-        assert await gateway_manager._cloud_site_unambiguous(False) is False
+        assert await gateway_manager._cloud_site_unambiguous() is False
     client.getsites.assert_not_called()
     assert caplog.text == ""
 
 
-@pytest.mark.parametrize("siteid, fleetapi, sitefile, sites, bound", [
-    ("123", False, False, [1, 2], True),   # PW_SITEID picks the site
-    (None, True, False, [1, 2], True),     # FleetAPI: site from its own setup
-    (None, False, True, [1, 2], True),     # site chosen with pypowerwall setup
-    (None, False, False, [1], True),       # single-site account
-    (None, False, False, [1, 2], False),   # ambiguous: would default to sites[0]
-    (None, False, False, None, False),     # unknown
+@pytest.mark.parametrize("siteid, fleetapi, mode, sitefile, sites, bound", [
+    ("123", False, "cloud", False, [1, 2], True),    # PW_SITEID picks the site
+    (None, True, "fleetapi", False, [1, 2], True),   # FleetAPI: site from its own setup
+    # Configured FleetAPI that failed over to Cloud: the Cloud client picks
+    # the account's first site, so the FleetAPI exemption must not apply
+    (None, True, "cloud", False, [1, 2], False),
+    (None, False, "cloud", True, [1, 2], True),      # site chosen with pypowerwall setup
+    (None, False, "cloud", False, [1], True),        # single-site account
+    (None, False, "cloud", False, [1, 2], False),    # ambiguous: would default to sites[0]
+    (None, False, "cloud", False, None, False),      # unknown
 ])
 @pytest.mark.asyncio
 async def test_shared_cloud_binds_only_to_an_unambiguous_site(
-    env, monkeypatch, tmp_path, caplog, siteid, fleetapi, sitefile, sites, bound
+    env, monkeypatch, tmp_path, caplog, siteid, fleetapi, mode, sitefile, sites, bound
 ):
     from app.config import GatewayConfig
     gm_module = sys.modules["app.core.gateway_manager"]
@@ -972,6 +975,7 @@ async def test_shared_cloud_binds_only_to_an_unambiguous_site(
         return types.SimpleNamespace(
             client=_CloudClient(sites, str(path)),
             cloudmode=True,
+            mode=mode,
             is_connected=lambda: True,
         )
 

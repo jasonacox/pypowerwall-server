@@ -42,6 +42,7 @@ def _reset_singleton_state():
     gateway_manager._islanding_futures.clear()
     gateway_manager._islanding_last_dispatch.clear()
     gateway_manager._poll_tasks.clear()
+    gateway_manager._cloud_read_tasks.clear()
     gateway_manager._mqtt_tasks.clear()
     gateway_manager._consecutive_failures.clear()
     gateway_manager._next_poll_time.clear()

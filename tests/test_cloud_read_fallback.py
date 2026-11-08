@@ -198,6 +198,30 @@ class _FakeCloudPowerwall:
         return lambda *args, **kwargs: None
 
 
+
+@pytest.mark.asyncio
+async def test_cloud_fallback_serves_local_site_info_without_touching_it(monkeypatch):
+    """The cloud's site_info must not replace the local copy, which would
+    outlive local recovery until the next refresh (300 s)."""
+    gm = _manager(monkeypatch)
+    gm._site_info["v1r"] = {"source": "local"}
+    gm._site_info_attempt["v1r"] = (0.0, True)   # refresh long overdue
+    polled = []
+
+    class Cloud(_FakeCloudPowerwall):
+        def poll(self, path):
+            polled.append(path)
+            if path == "/api/site_info":
+                return {"source": "cloud"}
+            return super().poll(path)
+
+    data = await gm._fetch_gateway_data("v1r", Cloud(), cloud_fallback=True)
+
+    assert data.site_info == {"source": "local"}
+    assert "/api/site_info" not in polled
+    assert gm._site_info["v1r"] == {"source": "local"}
+    assert gm._site_info_attempt["v1r"] == (0.0, True)
+
 @pytest.mark.asyncio
 async def test_cloud_fallback_uses_same_fields_as_cloud_mode(monkeypatch):
     normal = _manager(monkeypatch)
@@ -394,23 +418,102 @@ def test_cloud_fallback_does_not_mix_multi_powerwall_snapshot(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cloud_fallback_reads_on_its_own_cadence_during_local_backoff(monkeypatch):
+async def test_slow_local_retry_does_not_pause_cloud_reads(monkeypatch):
+    """The cloud-read loop keeps its cadence while a local retry hangs (a
+    timing-out gateway can hold one for its whole poll budget)."""
     gm = _manager(monkeypatch)
     calls = []
     _install_fetch(gm, cloud_data=_data(), calls=calls)
     for _ in range(3):
         gm._next_poll_time["v1r"] = 0
         await gm._poll_gateway("v1r")
-    assert calls[-1] == (True, True)
+    assert gm.cache["v1r"].data_source == "cloud"
 
-    local_calls = sum(not is_cloud for is_cloud, _ in calls)
-    gm._next_poll_time["v1r"] = time.time() + 100
+    release = asyncio.Event()
+
+    async def hanging_local(gateway_id, pw, *, cloud_fallback=False):
+        calls.append((pw is gm._cloud_control, cloud_fallback))
+        if pw is gm._cloud_control:
+            return _data()
+        await release.wait()
+        raise RuntimeError("local down")
+
+    gm._fetch_gateway_data = hanging_local
+    gm._poll_interval = 0.05
+    monkeypatch.setattr(gm, "_cloud_read_interval", lambda: 0.05)
+    gm._next_poll_time["v1r"] = 0
     gm._next_cloud_read_time["v1r"] = 0
-    await gm._poll_gateway("v1r")
+    start = len(calls)
+    local = asyncio.create_task(gm._poll_gateway("v1r"))
+    cloud = asyncio.create_task(gm._cloud_read_loop("v1r"))
+    try:
+        await asyncio.sleep(0.4)
+        assert not local.done()   # the local retry is still hanging
+        assert sum(is_cloud for is_cloud, _ in calls[start:]) >= 3
+        assert gm.cache["v1r"].data_source == "cloud"
+    finally:
+        release.set()
+        cloud.cancel()
+        await asyncio.gather(local, cloud, return_exceptions=True)
 
-    assert calls[-1] == (True, True)
-    assert sum(not is_cloud for is_cloud, _ in calls) == local_calls
-    assert gm._next_poll_time["v1r"] > time.time() + 90
+
+@pytest.mark.asyncio
+async def test_cloud_read_is_dropped_when_local_recovers_mid_read(monkeypatch):
+    """A cloud read still in flight when local reads recover must not
+    overwrite the fresh local status."""
+    gm = _manager(monkeypatch)
+    _install_fetch(gm, cloud_data=_data(), calls=[])
+    for _ in range(3):
+        gm._next_poll_time["v1r"] = 0
+        await gm._poll_gateway("v1r")
+    assert gm.cache["v1r"].data_source == "cloud"
+
+    gate = asyncio.Event()
+
+    async def fetch(gateway_id, pw, *, cloud_fallback=False):
+        if pw is gm._cloud_control:
+            await gate.wait()
+            return _data()
+        return _data()
+
+    gm._fetch_gateway_data = fetch
+    gm._next_cloud_read_time["v1r"] = 0
+    cloud = asyncio.create_task(gm._maybe_cloud_read("v1r"))
+    await asyncio.sleep(0)   # the cloud read is now in flight
+    gm._next_poll_time["v1r"] = 0
+    await gm._poll_gateway("v1r")   # local reads recover
+    assert gm.cache["v1r"].data_source == "local"
+
+    gate.set()
+    assert await cloud is None
+    assert gm.cache["v1r"].data_source == "local"
+    assert gm.cache["v1r"].local_online is True
+    assert "v1r" not in gm._cloud_read_state
+
+
+@pytest.mark.asyncio
+async def test_cloud_read_task_runs_only_for_local_gateways_and_stops_on_shutdown(monkeypatch):
+    import pypowerwall
+    from app.config import GatewayConfig
+    from app.core.gateway_manager import gateway_manager as manager
+
+    monkeypatch.setattr(settings, "cloud_read_fallback", True)
+    monkeypatch.setattr(settings, "failover", True)
+    monkeypatch.setattr(pypowerwall, "Powerwall", lambda **kw: Mock(
+        mode="local", cloudmode=False, fleetapi=False, tedapi=None, is_connected=lambda: True))
+    configs = [
+        GatewayConfig(id="local", name="Local", host="10.0.0.2", password="12345"),
+        GatewayConfig(id="cloud", name="Cloud", email="a@b.c", cloud_mode=True),
+    ]
+    await manager.initialize(configs, poll_interval=5)
+    try:
+        assert "local" in manager.gateways
+        assert set(manager._cloud_read_tasks) == {"local"}   # never a Cloud gateway
+        tasks = list(manager._cloud_read_tasks.values())
+    finally:
+        await manager.shutdown()
+    assert manager._cloud_read_tasks == {}
+    assert all(t.done() for t in tasks)
 
 
 def test_cloud_fallback_cadence_is_cache_expire_with_fleetapi_floor(monkeypatch):
@@ -452,9 +555,9 @@ async def test_cloud_failure_marks_cloud_cache_offline(monkeypatch):
     assert gm.cache["v1r"].data_source == "cloud"
 
     _install_fetch(gm, cloud_data=None, calls=calls)
-    gm._next_poll_time["v1r"] = time.time() + 100
+    gm._next_poll_time["v1r"] = time.time() + 100   # local retry in backoff
     gm._next_cloud_read_time["v1r"] = 0
-    await gm._poll_gateway("v1r")
+    assert await gm._maybe_cloud_read("v1r") is False   # what _cloud_read_loop runs
 
     status = gm.cache["v1r"]
     assert status.online is False

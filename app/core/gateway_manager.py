@@ -281,6 +281,9 @@ class GatewayManager:
         # One independent poll task per gateway so a slow/degraded gateway
         # never delays polling of the healthy ones.
         self._poll_tasks: Dict[str, asyncio.Task] = {}
+        # PW_CLOUD_READ_FALLBACK: one cloud-read task per local gateway, so a
+        # slow local retry never pauses cloud refreshes.
+        self._cloud_read_tasks: Dict[str, asyncio.Task] = {}
         self._poll_interval = 5  # Default, will be set from config during initialize()
 
         # Strong references to in-flight MQTT publish tasks (one per gateway).
@@ -725,6 +728,13 @@ class GatewayManager:
             self._poll_tasks[gateway_id] = asyncio.create_task(
                 self._poll_gateway_loop(gateway_id), name=f"poll-{gateway_id}"
             )
+        if settings.cloud_read_fallback and settings.failover:
+            for gateway_id, gw in self.gateways.items():
+                if not self._is_cloud_gateway(gw):
+                    self._cloud_read_tasks[gateway_id] = asyncio.create_task(
+                        self._cloud_read_loop(gateway_id),
+                        name=f"cloud-read-{gateway_id}",
+                    )
 
         # Start TEDAPI probe/recovery tasks for TEDAPI gateways.
         # Probes pw.version() on an interval; after N consecutive failed
@@ -816,7 +826,7 @@ class GatewayManager:
                             f"(mode={getattr(pw, 'mode', 'unknown')})"
                         )
                     self._cloud_control = pw
-                    if await self._cloud_site_unambiguous(config.fleetapi):
+                    if await self._cloud_site_unambiguous():
                         self._cloud_control_gateway_id = config.id
                     logger.info(
                         "Cloud connection established (control/read bindings available)"
@@ -835,12 +845,14 @@ class GatewayManager:
                 retry_interval * 2, self._CLOUD_CONTROL_RETRY_MAX
             )
 
-    async def _cloud_site_unambiguous(self, fleetapi: bool) -> bool:
+    async def _cloud_site_unambiguous(self) -> bool:
         """True when the shared cloud connection's Tesla site is certain.
 
         That is when PW_SITEID is set, a site was chosen with pypowerwall
-        setup (the site file in the auth path), the connection is FleetAPI
-        (its site comes from its own setup), or the account has one site.
+        setup (the site file in the auth path), the live connection is
+        FleetAPI (its site comes from its own setup; a configured FleetAPI
+        gateway can fail over to Cloud, which has no such setup), or the
+        account has one site.
         Otherwise the cloud client defaults to the account's first site,
         which may not be this gateway's, so the binding is unsafe.
 
@@ -854,6 +866,7 @@ class GatewayManager:
             return False
         client = getattr(self._cloud_control, "client", None)
         sitefile = getattr(client, "sitefile", None)
+        fleetapi = getattr(self._cloud_control, "mode", None) == "fleetapi"
         if settings.siteid or fleetapi or (sitefile and os.path.exists(sitefile)):
             return True
         getsites = getattr(client, "getsites", None)
@@ -921,6 +934,9 @@ class GatewayManager:
         # then cancel any in-flight publish tasks.
         named_tasks = [(t, f"poll-{gid}") for gid, t in self._poll_tasks.items()]
         named_tasks.extend(
+            (t, f"cloud-read-{gid}") for gid, t in self._cloud_read_tasks.items()
+        )
+        named_tasks.extend(
             (t, f"tedapi-probe-{gid}") for gid, t in self._probe_tasks.items()
         )
         if self._cloud_control_task:
@@ -940,6 +956,7 @@ class GatewayManager:
         )
 
         self._poll_tasks.clear()
+        self._cloud_read_tasks.clear()
         self._probe_tasks.clear()
         self._mqtt_tasks.clear()
 
@@ -974,6 +991,26 @@ class GatewayManager:
                 break
             except Exception as e:
                 logger.error(f"Error in polling task for {gateway_id}: {e}")
+                await asyncio.sleep(self._poll_interval)
+
+    async def _cloud_read_loop(self, gateway_id: str):
+        """Cloud read fallback cadence for one gateway (PW_CLOUD_READ_FALLBACK).
+
+        Runs beside the poll loop so a slow local retry (up to its poll
+        budget) never pauses cloud refreshes. _maybe_cloud_read() decides
+        whether a read is due; between reads this sleeps until the next
+        deadline, at most one poll interval.
+        """
+        while True:
+            try:
+                await self._maybe_cloud_read(gateway_id)
+                due = self._next_cloud_read_time.get(gateway_id)
+                delay = due - time.time() if due else self._poll_interval
+                await asyncio.sleep(min(max(delay, 0.5), self._poll_interval))
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in cloud read task for {gateway_id}: {e}")
                 await asyncio.sleep(self._poll_interval)
 
     async def _fetch_gateway_data(
@@ -1175,10 +1212,11 @@ class GatewayManager:
 
             # /api/site_info from the library (the gateway's own shape in every
             # mode). Throttled whether or not the last fetch worked; the last good
-            # copy is kept.
+            # copy is kept. A cloud fallback read serves that copy without
+            # touching it, so the cloud's copy never outlives local recovery.
             attempt = self._site_info_attempt.get(gateway_id)
-            if attempt is None or time.monotonic() - attempt[0] >= (
-                    self._SITE_INFO_REFRESH if attempt[1] else self._SITE_INFO_RETRY):
+            if not cloud_fallback and (attempt is None or time.monotonic() - attempt[0] >= (
+                    self._SITE_INFO_REFRESH if attempt[1] else self._SITE_INFO_RETRY)):
                 ok = False
                 try:
                     site_info = await asyncio.wait_for(
@@ -1601,7 +1639,8 @@ class GatewayManager:
         """Read from cloud when fallback is due, independently of local backoff.
 
         Returns ``True`` on success, ``False`` when a cloud read was attempted
-        and failed, and ``None`` when no attempt was due/applicable. The
+        and failed, and ``None`` when no attempt was due/applicable or local
+        reads recovered while the read ran (its result is dropped). The
         distinction lets the caller keep a live cloud cache while waiting for
         its next cadence, but stop reporting it online once a cloud read fails.
         """
@@ -1618,6 +1657,11 @@ class GatewayManager:
         # Schedule before the await so a slow/failed cloud read cannot spin.
         self._next_cloud_read_time[gateway_id] = now + self._cloud_read_interval()
         data = await self._fetch_cloud_read(gateway_id)
+        if (
+            self._consecutive_failures.get(gateway_id, 0)
+            < self._CLOUD_READ_FALLBACK_THRESHOLD
+        ):
+            return None  # local reads recovered while the cloud read ran
         if data is None:
             cached = self.cache.get(gateway_id)
             if cached is not None and cached.data_source == "cloud":
@@ -1667,7 +1711,7 @@ class GatewayManager:
                 )
         except Exception as exc:
             state["failures"] += 1
-            state["last_error"] = str(exc)
+            state["last_error"] = str(exc) or type(exc).__name__  # a timeout has no message
             # Same shared cloud connection as cloud_control() (#87 link health
             # in /stats and the Console); _apply_cloud_read() resets it.
             self._cloud_failures += 1
@@ -1730,9 +1774,8 @@ class GatewayManager:
             next_poll = self._next_poll_time.get(gateway_id, 0)
 
             if now < next_poll:
-                # Local retries stay in exponential backoff, but cloud reads
-                # keep their own cadence while fallback is active.
-                await self._maybe_cloud_read(gateway_id)
+                # Local retries stay in exponential backoff; cloud reads keep
+                # their own cadence in _cloud_read_loop().
                 logger.debug(
                     f"Gateway {gateway_id} in backoff, skipping local poll (next poll at {next_poll - now:.0f}s)"
                 )

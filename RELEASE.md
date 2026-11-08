@@ -8,9 +8,11 @@
 - **Cloud read fallback (`PW_CLOUD_READ_FALLBACK`)** - opt-in (`no` by
   default). After three consecutive failed local polls, a local gateway reads
   the Cloud-Mode data set from its bound Cloud/FleetAPI connection, every
-  `PW_CACHE_EXPIRE` (5 s default; at least 30 s for FleetAPI), while local
+  `PW_CACHE_EXPIRE` (5 s default; at least 30 s for FleetAPI). Cloud reads run
+  on their own schedule, so a slow local retry doesn't pause them; local
   retries keep their backoff. Needs cloud auth, an unambiguous site
-  (`.pypowerwall.site` or `PW_SITEID`) and `PW_FAILOVER=yes`. Read-only:
+  (`PW_SITEID`, `.pypowerwall.site`, a single-site account or a live FleetAPI
+  connection) and `PW_FAILOVER=yes`. Read-only:
   writes are unchanged. `online` stays true so Home Assistant keeps the
   values; check `data_source`/`local_online` for where they come from.
   Fallback reads count toward the cloud link health in `/stats` and the
@@ -33,6 +35,12 @@
   Powerwall 2 over an ESP32 bridge, and read-only cold failover on 2x
   Powerwall 3 (@jasonacox-sam); max backup and islanding were not exercised on
   hardware. Thanks @erikgieseler! (#186)
+
+**Fixed:**
+- **MQTT controls no longer bind to the wrong Tesla site** after a configured
+  FleetAPI connection fails over to Cloud on a multi-site account. The
+  FleetAPI exemption now checks the live connection; the Cloud client would
+  use the account's first site. Set `PW_SITEID` in that case. (#187)
 
 ### [0.14.0] - 2026-10-28
 
