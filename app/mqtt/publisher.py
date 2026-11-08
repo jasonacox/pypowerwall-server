@@ -617,6 +617,19 @@ class MqttPublisher:
                         retain, qos,
                     )
 
+                # Active gateway alerts (#178): the same list /alerts serves,
+                # sorted and de-duplicated so an unchanged set republishes the
+                # same retained payload. Skipped when alerts weren't fetched
+                # (None), so a failed fetch never reads as "no alerts".
+                if isinstance(data.alerts, list):
+                    alerts = sorted({str(a) for a in data.alerts if a})
+                    await self._safe_publish(
+                        f"{prefix}/alerts", json.dumps(alerts), retain, qos
+                    )
+                    await self._safe_publish(
+                        f"{prefix}/alert_count", str(len(alerts)), retain, qos
+                    )
+
                 # Solar string topics (voltage, current, power per string)
                 if data.strings and isinstance(data.strings, dict):
                     strings_prefix = f"{prefix}/strings"

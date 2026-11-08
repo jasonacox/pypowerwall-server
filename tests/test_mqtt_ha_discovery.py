@@ -26,11 +26,11 @@ from app.mqtt.ha_discovery import (
 from app.mqtt.publisher import MqttPublisher
 from app.models.gateway import Gateway, GatewayStatus, PowerwallData
 
-# Base entities every gateway announces: 18 sensors + 3 binary sensors.
+# Base entities every gateway announces: 21 sensors + 3 binary sensors.
 # Solar-string, remote-meter and grid voltage/current entities are added on
 # top when reported (grid sensors only when the site CT-average fields are
 # present — #177).
-BASE_ENTITY_COUNT = 23
+BASE_ENTITY_COUNT = 24
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +280,18 @@ class TestBuildDiscoveryPayloads:
         assert p["unit_of_measurement"] == "h"
         assert p["device_class"] == "duration"
         assert p["state_class"] == "measurement"
+
+    def test_alerts_sensor_fields(self):
+        """Active alerts (#178): count as state, alert list as attribute."""
+        results = dict(self._payloads())
+        topic = "homeassistant/sensor/pypowerwall_home_alerts/config"
+        p = results[topic]
+        assert p["unique_id"] == "pypowerwall_home_alerts"
+        assert p["state_topic"] == "pypowerwall/home/alert_count"
+        assert p["json_attributes_topic"] == "pypowerwall/home/alerts"
+        assert "value_json" in p["json_attributes_template"]
+        assert p["entity_category"] == "diagnostic"
+        assert "unit_of_measurement" not in p
 
     def test_availability_references_correct_topic(self):
         results = self._payloads(gateway_id="main", prefix="pw")
