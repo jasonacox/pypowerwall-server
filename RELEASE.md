@@ -45,6 +45,9 @@
   FleetAPI connection fails over to Cloud on a multi-site account. The
   FleetAPI exemption now checks the live connection; the Cloud client would
   use the account's first site. Set `PW_SITEID` in that case. (#187)
+- **Console Authorization Token spacing** - the collapsed token panel keeps
+  equal top and bottom padding; the expanded layout is unchanged. Thanks
+  @erikgieseler! (#193)
 
 ### [0.14.0] - 2026-10-28
 
