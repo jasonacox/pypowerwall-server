@@ -58,7 +58,7 @@
 - **Console HTML escaping** - gateway names, hosts, modes, firmware, errors,
   alerts, string names and section headers now render as text. A gateway
   error or config value containing markup could inject HTML or script into
-  the Console.
+  the Console. (#199)
 
 ### [0.14.0] - 2026-10-28
 
