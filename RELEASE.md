@@ -12,7 +12,7 @@
 - **Console and History headers no longer show a Power Flow link**, which only
   reloaded the Console: opened directly, `/` redirects to `/console`. `/` is
   unchanged, so existing iframe embeds keep working; `/example.html` shows how
-  to embed it.
+  to embed it. (#201)
 
 ### [0.15.0] - 2026-11-08
 
