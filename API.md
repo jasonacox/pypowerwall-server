@@ -257,7 +257,7 @@ dashboards, Telegraf and Home Assistant configurations keep working.
 | GET | `/fans/pw` | | `FANn_actual` / `FANn_target` RPM; Powerwall 3 fans add `FANn_duty` (%) and have a null target. |
 | GET | `/freq` | | Per-Powerwall frequency, voltage and power, island/meter readings and `grid_status` (1 up, 0 down, -1 syncing, `null` unknown). |
 | GET | `/pod` | | Per-Powerwall battery data (`PWn_*`), pack energy, time remaining and reserve. |
-| GET | `/json` | | Power flows, battery level, grid status, reserve, time remaining, pack energy and strings in one object. |
+| GET | `/json` | | Power flows, battery level, grid status, reserve, time remaining, pack energy and strings in one object. `soe`/`soe_raw` are the gateway's raw level; `soe_scaled` is the Tesla App scale, as in `/api/system_status/soe`. |
 | GET | `/battery` | | `{"power"}`: battery power (W). |
 | GET | `/csv` | | Text: `Grid,Home,Solar,Battery,BatteryLevel`. Missing readings are 0. Add `?headers` for a header row. |
 | GET | `/csv/v2` | | Text: adds `GridStatus,Reserve`. Add `?headers` for a header row. |
