@@ -267,7 +267,7 @@ class MqttPublisher:
         return (
             settings.mqtt_controls,
             _write_path(gateway_manager, gateway_id) is not None,
-            _gateway_is_v1r(gateway_manager, gateway_id),
+            _gateway_can_v1r_write(gateway_manager, gateway_id),
         )
 
     async def _publish_ha_discovery(
@@ -1220,12 +1220,20 @@ class MqttPublisher:
                         "with confirm:true"
                     )
                     return
-                if not _gateway_is_v1r(gateway_manager, gateway_id):
+                if not _gateway_can_v1r_write(gateway_manager, gateway_id):
                     logger.warning(f"{label} rejected: no confirmed v1r transport")
                     return
                 method = "go_off_grid" if action == "off_grid" else "reconnect_grid"
                 kwargs = {"confirm": True} if action == "off_grid" else {}
                 try:
+                    # Check safety before awaiting the probe; local_control()
+                    # checks again immediately before dispatch.
+                    gateway_manager.check_islanding_safety(gateway_id)
+                    if not await gateway_manager.wifi_v1r_write_allowed(gateway_id):
+                        logger.warning(
+                            f"{label} rejected: WiFi v1r unavailable for islanding"
+                        )
+                        return
                     # Local v1r only, never the shared cloud connection, same
                     # 10 s timeout as HTTP, never retried
                     result = await gateway_manager.local_control(
@@ -1234,7 +1242,12 @@ class MqttPublisher:
                 except Exception as e:  # cooldown or a command in progress
                     logger.warning(f"{label} action={action} failed: {e}")
                     return
-                audit = f"action={action} via local v1r"
+                route = (
+                    "local v1r (wifi)"
+                    if gateway_manager._is_lan_failed(gateway_id)
+                    else "local v1r"
+                )
+                audit = f"action={action} via {route}"
                 ok = _island_ack_ok(result)
             else:
                 if control == "reserve_hold":
@@ -1381,9 +1394,30 @@ def _write_path(gateway_manager, gateway_id: str) -> Optional[str]:
         and gateway_manager._cloud_control_gateway_id == gateway_id
     ):
         return "hybrid cloud"
-    if _gateway_is_v1r(gateway_manager, gateway_id):
+    if _gateway_can_v1r_write(gateway_manager, gateway_id):
         return "local v1r"
     return None
+
+
+def _gateway_can_v1r_write(gateway_manager, gateway_id: str) -> bool:
+    """True when the gateway can write over v1r or the opt-in WiFi-v1r path.
+
+    The cached-status check is preferred. When status is unknown but the
+    gateway has the opt-in signed WiFi-v1r transport configured, controls
+    stay announced; the write route still probes before dispatching.
+    """
+    if _gateway_is_v1r(gateway_manager, gateway_id):
+        return True
+    from app.config import settings
+
+    if not settings.wifi_v1r_fallback or not settings.failover:
+        return False
+    connection = gateway_manager.connections.get(gateway_id)
+    tedapi = getattr(connection, "tedapi", None)
+    return bool(
+        getattr(tedapi, "v1r", False)
+        and getattr(tedapi, "wifi_v1r_transport", None) is not None
+    )
 
 
 def _gateway_is_v1r(gateway_manager, gateway_id: str) -> bool:

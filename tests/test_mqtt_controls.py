@@ -19,7 +19,7 @@ from aiomqtt import Message
 from aiomqtt.client import MessagesIterator
 
 from app.config import settings
-from app.core.gateway_manager import gateway_manager
+from app.core.gateway_manager import IslandingCommandInProgressError, gateway_manager
 from app.models.gateway import Gateway, GatewayStatus, PowerwallData
 from app.mqtt.ha_discovery import build_discovery_payloads, control_config_topics
 from app.mqtt.publisher import CONTROL_COALESCE_WINDOW_S, MqttPublisher
@@ -430,6 +430,112 @@ async def test_local_first_no_cloud_retry_after_a_failed_local_write(
     assert "failed (value=30 via local v1r)" in caplog.text
 
 
+# --- PW_WIFI_V1R_FALLBACK (signed WiFi-v1r after LAN failover) -----------------
+
+
+def bind_hybrid_wifi(monkeypatch, preflight=True):
+    """Hybrid v1r gateway with the opt-in WiFi write transport configured."""
+    monkeypatch.setattr(settings, "local_first", False)
+    monkeypatch.setattr(settings, "wifi_v1r_fallback", True)
+    monkeypatch.setattr(settings, "failover", True)
+    monkeypatch.setattr(gateway_manager, "_cloud_control_gateway_id", "v1r")
+    conn = _connection(lan_failed=True)
+    conn.tedapi.v1r = True
+    conn.tedapi.wifi_v1r_transport = object()
+    conn.wifi_v1r_ready = MagicMock(return_value=True)
+    monkeypatch.setattr(gateway_manager, "connections", {"v1r": conn})
+    monkeypatch.setattr(
+        gateway_manager,
+        "wifi_v1r_write_allowed",
+        AsyncMock(return_value=preflight),
+    )
+
+
+@pytest.mark.asyncio
+async def test_wifi_v1r_fallback_mqtt_takes_write(env, gm, monkeypatch, caplog):
+    bind_hybrid_wifi(monkeypatch)
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await run_commands(cmd("v1r", "mode", {"value": "backup"}))
+    assert calls(gm.local_control) == [
+        (("v1r", "set_mode", "backup"), {"timeout": 10.0})
+    ]
+    assert gm.cloud_control.await_count == 0
+    assert "applied (value='backup' via local v1r (wifi))" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_wifi_v1r_fallback_probe_false_falls_back_to_cloud(
+    env, gm, monkeypatch, caplog
+):
+    bind_hybrid_wifi(monkeypatch, preflight=False)
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await run_commands(cmd("v1r", "mode", {"value": "backup"}))
+    assert gm.local_control.await_count == 0
+    assert calls(gm.cloud_control) == [(("set_mode", "backup"), {"timeout": 10.0})]
+    assert "applied (value='backup' via hybrid cloud)" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_wifi_v1r_probe_false_warns_before_historical_path(
+    env, monkeypatch, caplog
+):
+    """A failed probe sends the write to the historical path; say so."""
+    bind_hybrid_wifi(monkeypatch, preflight=False)
+    with caplog.at_level(logging.WARNING):
+        assert await gateway_manager.control_write("v1r", "set_mode", "backup") == (
+            None,
+            None,
+        )
+    assert "WiFi v1r probe failed; using the historical write path" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_wifi_v1r_fallback_islanding_probe_false_rejected(
+    env, gm, monkeypatch, caplog
+):
+    bind_hybrid_wifi(monkeypatch, preflight=False)
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        await run_commands(
+            cmd("v1r", "islanding", {"action": "off_grid", "confirm": True})
+        )
+    assert gm.local_control.await_count == 0
+    assert "WiFi v1r unavailable for islanding" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_wifi_v1r_mqtt_islanding_checks_safety_before_probe(
+    env, gm, monkeypatch, caplog
+):
+    bind_hybrid_wifi(monkeypatch)
+    monkeypatch.setattr(
+        gateway_manager,
+        "check_islanding_safety",
+        MagicMock(side_effect=IslandingCommandInProgressError("still running")),
+    )
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        await run_commands(
+            cmd("v1r", "islanding", {"action": "off_grid", "confirm": True})
+        )
+    assert gm.local_control.await_count == 0
+    gateway_manager.wifi_v1r_write_allowed.assert_not_awaited()
+    assert "failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_wifi_v1r_fallback_islanding_probe_true_dispatches(
+    env, gm, monkeypatch, caplog
+):
+    bind_hybrid_wifi(monkeypatch)
+    gm.local_control.return_value = {"result": 1}
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await run_commands(
+            cmd("v1r", "islanding", {"action": "off_grid", "confirm": True})
+        )
+    assert gm.local_control.await_count == 1
+    assert gm.cloud_control.await_count == 0
+    assert "applied (action=off_grid via local v1r (wifi))" in caplog.text
+
+
 @pytest.mark.parametrize("control, value, ok", [
     ("reserve", 0, True), ("reserve", 100, True), ("reserve", 101, False),
     ("reserve", -1, False), ("reserve", True, False), ("reserve", "30", False),
@@ -831,26 +937,30 @@ async def test_no_site_check_without_mqtt_controls(env, monkeypatch, caplog):
     """The binding is only for MQTT controls: with them off, no cloud call
     and no warning, even on an ambiguous multi-site account."""
     monkeypatch.setattr(settings, "mqtt_controls", 0)
+    monkeypatch.setattr(settings, "cloud_read_fallback", False)
     monkeypatch.setattr(settings, "siteid", None)
     client = MagicMock(sitefile=None)
     monkeypatch.setattr(gateway_manager, "_cloud_control", MagicMock(client=client))
     with caplog.at_level(logging.WARNING, logger="app.core.gateway_manager"):
-        assert await gateway_manager._cloud_site_unambiguous(False) is False
+        assert await gateway_manager._cloud_site_unambiguous() is False
     client.getsites.assert_not_called()
     assert caplog.text == ""
 
 
-@pytest.mark.parametrize("siteid, fleetapi, sitefile, sites, bound", [
-    ("123", False, False, [1, 2], True),   # PW_SITEID picks the site
-    (None, True, False, [1, 2], True),     # FleetAPI: site from its own setup
-    (None, False, True, [1, 2], True),     # site chosen with pypowerwall setup
-    (None, False, False, [1], True),       # single-site account
-    (None, False, False, [1, 2], False),   # ambiguous: would default to sites[0]
-    (None, False, False, None, False),     # unknown
+@pytest.mark.parametrize("siteid, fleetapi, mode, sitefile, sites, bound", [
+    ("123", False, "cloud", False, [1, 2], True),    # PW_SITEID picks the site
+    (None, True, "fleetapi", False, [1, 2], True),   # FleetAPI: site from its own setup
+    # Configured FleetAPI that failed over to Cloud: the Cloud client picks
+    # the account's first site, so the FleetAPI exemption must not apply
+    (None, True, "cloud", False, [1, 2], False),
+    (None, False, "cloud", True, [1, 2], True),      # site chosen with pypowerwall setup
+    (None, False, "cloud", False, [1], True),        # single-site account
+    (None, False, "cloud", False, [1, 2], False),    # ambiguous: would default to sites[0]
+    (None, False, "cloud", False, None, False),      # unknown
 ])
 @pytest.mark.asyncio
 async def test_shared_cloud_binds_only_to_an_unambiguous_site(
-    env, monkeypatch, tmp_path, caplog, siteid, fleetapi, sitefile, sites, bound
+    env, monkeypatch, tmp_path, caplog, siteid, fleetapi, mode, sitefile, sites, bound
 ):
     from app.config import GatewayConfig
     gm_module = sys.modules["app.core.gateway_manager"]
@@ -865,6 +975,7 @@ async def test_shared_cloud_binds_only_to_an_unambiguous_site(
         return types.SimpleNamespace(
             client=_CloudClient(sites, str(path)),
             cloudmode=True,
+            mode=mode,
             is_connected=lambda: True,
         )
 
