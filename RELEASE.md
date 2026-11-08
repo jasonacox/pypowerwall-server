@@ -55,10 +55,6 @@
 - **Multi-gateway Console separators** - section headers use the defined
   `--border-color` token instead of the undefined `--border`, so they show
   again. Thanks @erikgieseler! (#194)
-- **`/pod`, `/freq` and `/pw/battery_blocks` no longer return HTTP 500** when
-  `battery_blocks` is null or holds a null entry, or a config block has a null
-  `vin` (pypowerwall itself allows these). They're treated as empty or skipped,
-  and Powerwalls keep their PW numbers. Thanks @kochj23! (#198)
 
 ### [0.14.0] - 2026-10-28
 
