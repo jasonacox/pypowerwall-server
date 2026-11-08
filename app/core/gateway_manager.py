@@ -305,7 +305,10 @@ class GatewayManager:
         self._hw_pw3: Dict[str, bool] = {}
         self._last_successful_data: Dict[
             str, PowerwallData
-        ] = {}  # Keep last good data for graceful degradation
+        ] = {}  # Keep last good local data for graceful degradation
+        # Last cloud read fallback data, kept apart so History's Powerwall
+        # numbering and the multi-Powerwall guard only ever see local data.
+        self._last_cloud_data: Dict[str, PowerwallData] = {}
         self._firmware_seen: Dict[
             str, str
         ] = {}  # Last logged firmware per gateway (#854) — survives transient fetch misses
@@ -370,6 +373,12 @@ class GatewayManager:
         # full cloud reads. Cloud writes keep their existing finality path.
         self._cloud_read_state: Dict[str, Dict] = {}
         self._next_cloud_read_time: Dict[str, float] = {}
+        # True when PW_CLOUD_READ_FALLBACK is the only reason the shared cloud
+        # connection exists (no PW_CONTROL_SECRET, no PW_CLOUD_HYBRID).
+        self._cloud_for_fallback_only = False
+        # Gateways with a cloud read in flight: a second caller skips instead
+        # of queuing behind it, so reads never start closer than the interval.
+        self._cloud_read_inflight: Set[str] = set()
         self._cloud_read_lock: asyncio.Lock = asyncio.Lock()
 
         # Hybrid cloud-link health (issue #87): the shared cloud connection
@@ -687,15 +696,12 @@ class GatewayManager:
             and config.email
             and not config.cloud_mode
         ]
+        hybrid_wanted = settings.control_enabled or settings.cloud_hybrid
+        read_fallback = settings.cloud_read_fallback and settings.failover
         hybrid_configs = (
-            local_with_email
-            if (
-                settings.control_enabled
-                or settings.cloud_hybrid
-                or (settings.cloud_read_fallback and settings.failover)
-            )
-            else []
+            local_with_email if hybrid_wanted or read_fallback else []
         )
+        self._cloud_for_fallback_only = read_fallback and not hybrid_wanted
         if settings.cloud_read_fallback:
             if not settings.failover:
                 logger.warning(
@@ -1320,7 +1326,7 @@ class GatewayManager:
             # Basic LAN local API does not expose operation mode/reserve. When a
             # hybrid cloud-control connection is available, refresh mode/reserve
             # from the cloud so the Console reflects the real system state.
-            if self._cloud_control:
+            if self._hybrid_reads_enabled():
                 try:
                     cloud_mode = await self.cloud_control(
                         "get_mode", timeout=step_timeout
@@ -1433,7 +1439,7 @@ class GatewayManager:
                     data.grid_charging = local_grid_charging
                 elif (
                     local_grid_charging is None
-                    and self._cloud_control is not None
+                    and self._hybrid_reads_enabled()
                     and _grid_controls_supported(self._cloud_control)
                 ):
                     grid_func = getattr(self._cloud_control, "get_grid_charging", None)
@@ -1465,7 +1471,7 @@ class GatewayManager:
                     data.grid_export = local_grid_export
                 elif (
                     local_grid_export is None
-                    and self._cloud_control is not None
+                    and self._hybrid_reads_enabled()
                     and _grid_controls_supported(self._cloud_control)
                 ):
                     export_func = getattr(self._cloud_control, "get_grid_export", None)
@@ -1564,6 +1570,15 @@ class GatewayManager:
             gateway_id, self._new_cloud_read_state()
         )
 
+    def _hybrid_reads_enabled(self) -> bool:
+        """True when local polls may add the hybrid connection's read-only
+        cloud values (Basic LAN mode/reserve, grid charging/export).
+
+        Not when PW_CLOUD_READ_FALLBACK alone started the connection: it must
+        not query Tesla on every healthy local poll.
+        """
+        return self._cloud_control is not None and not self._cloud_for_fallback_only
+
     @staticmethod
     def _is_cloud_gateway(gateway) -> bool:
         """True for a Cloud/FleetAPI gateway (no local link to report on)."""
@@ -1592,14 +1607,21 @@ class GatewayManager:
             or getattr(cloud, "mode", None) in ("cloud", "fleetapi")
         )
 
-    def _clear_cloud_read_state(self, gateway_id: str) -> None:
-        """Local reads recovered: stop reporting cloud fallback."""
+    def _clear_cloud_read_state(self, gateway_id: str, live_cloud: bool = False) -> None:
+        """The gateway's own connection answered: end the cloud read fallback.
+
+        ``live_cloud``: it answered through the library's own failover to
+        Cloud, which data_source/local_online still report.
+        """
         state = self._cloud_read_state.pop(gateway_id, None)
         self._next_cloud_read_time.pop(gateway_id, None)
+        self._last_cloud_data.pop(gateway_id, None)
         if state and state.get("active"):
             logger.info(
-                "Gateway %s recovered from cloud read fallback; local reads resumed",
+                "Gateway %s cloud read fallback ended; %s",
                 gateway_id,
+                "its connection now serves Cloud data" if live_cloud
+                else "local reads resumed",
             )
 
     def get_cloud_read_state(self, gateway_id: str) -> Optional[Dict[str, Any]]:
@@ -1639,8 +1661,9 @@ class GatewayManager:
         """Read from cloud when fallback is due, independently of local backoff.
 
         Returns ``True`` on success, ``False`` when a cloud read was attempted
-        and failed, and ``None`` when no attempt was due/applicable or local
-        reads recovered while the read ran (its result is dropped). The
+        and failed, and ``None`` when no attempt was due/applicable (including
+        a read already in flight for this gateway) or local reads recovered
+        while the read ran (its result is dropped). The
         distinction lets the caller keep a live cloud cache while waiting for
         its next cadence, but stop reporting it online once a cloud read fails.
         """
@@ -1652,11 +1675,18 @@ class GatewayManager:
         if not self._cloud_read_fallback_allowed(gateway_id):
             return None
         now = time.time()
-        if now < self._next_cloud_read_time.get(gateway_id, 0):
+        if (
+            gateway_id in self._cloud_read_inflight
+            or now < self._next_cloud_read_time.get(gateway_id, 0)
+        ):
             return None
         # Schedule before the await so a slow/failed cloud read cannot spin.
         self._next_cloud_read_time[gateway_id] = now + self._cloud_read_interval()
-        data = await self._fetch_cloud_read(gateway_id)
+        self._cloud_read_inflight.add(gateway_id)
+        try:
+            data = await self._fetch_cloud_read(gateway_id)
+        finally:
+            self._cloud_read_inflight.discard(gateway_id)
         if (
             self._consecutive_failures.get(gateway_id, 0)
             < self._CLOUD_READ_FALLBACK_THRESHOLD
@@ -1740,7 +1770,7 @@ class GatewayManager:
         error = "Local gateway unavailable; serving cloud fallback"
         gateway.online = True
         gateway.last_error = error
-        self._last_successful_data[gateway_id] = data
+        self._last_cloud_data[gateway_id] = data
         self.cache[gateway_id] = GatewayStatus(
             gateway=gateway,
             data=data,
@@ -2020,10 +2050,10 @@ class GatewayManager:
 
             cloud_only = self._is_cloud_gateway(gateway)
             live_cloud = data.connection_mode in ("Cloud", "FleetAPI")
-            # Library-internal failover to Cloud is not a local recovery:
-            # keep any active cloud-read fallback state until local data returns.
-            if not live_cloud:
-                self._clear_cloud_read_state(gateway_id)
+            # Any successful poll ends the cloud read fallback (polls succeed,
+            # so no fallback reads would run); a library-internal failover to
+            # Cloud still shows in data_source/local_online below.
+            self._clear_cloud_read_state(gateway_id, live_cloud)
             self.cache[gateway_id] = GatewayStatus(
                 gateway=gateway,
                 data=data,
@@ -2059,12 +2089,11 @@ class GatewayManager:
             self._next_poll_time[gateway_id] = now + backoff_seconds
 
             if failure_count >= self._CLOUD_READ_FALLBACK_THRESHOLD:
-                cloud_result = await self._maybe_cloud_read(gateway_id)
-                if cloud_result is True:
-                    return
-                # Keep the cloud data, or the offline snapshot a failed cloud
-                # refresh left, until the next cloud read: the generic status
-                # below would drop its data_source and local-outage indicator.
+                # _cloud_read_loop() does the cloud reads; awaiting one here
+                # would stall local retries for a whole cloud read. Keep the
+                # cloud data, or the offline snapshot a failed cloud refresh
+                # left, until the next cloud read: the generic status below
+                # would drop its data_source and local-outage indicator.
                 cached = self.cache.get(gateway_id)
                 if cached is not None and cached.data_source in ("cloud", "cache"):
                     logger.debug(
@@ -2601,16 +2630,28 @@ class GatewayManager:
             logger.debug(
                 f"Gateway {gateway_id} offline, graceful degradation disabled (PW_GRACEFUL_DEGRADATION=no)"
             )
-            return status
+            return self._without_cache_label(status)
 
-        # Check if we have cached data that's still fresh
-        last_success_data = self._last_successful_data.get(gateway_id)
+        # Check if we have cached data that's still fresh: the newer of the
+        # last local poll and the last cloud fallback read.
+        last_success_data = max(
+            (
+                d
+                for d in (
+                    self._last_successful_data.get(gateway_id),
+                    self._last_cloud_data.get(gateway_id),
+                )
+                if d is not None and d.timestamp
+            ),
+            key=lambda d: d.timestamp,
+            default=None,
+        )
         if not last_success_data or not last_success_data.timestamp:
             # No cached data available
             logger.debug(
                 f"Gateway {gateway_id} offline, no cached data available for graceful degradation"
             )
-            return status
+            return self._without_cache_label(status)
 
         # Calculate age of cached data
         now = datetime.now().timestamp()
@@ -2635,6 +2676,14 @@ class GatewayManager:
         logger.debug(
             f"Graceful degradation expired for {gateway_id}: cached data too old (age: {data_age:.0f}s > TTL: {settings.cache_ttl}s), returning null"
         )
+        return self._without_cache_label(status)
+
+    @staticmethod
+    def _without_cache_label(status: GatewayStatus) -> GatewayStatus:
+        """An offline status served without data is not cached data: drop the
+        "cache" label a failed cloud refresh stored with it."""
+        if status.data is None and status.data_source == "cache":
+            return status.model_copy(update={"data_source": None})
         return status
 
     def get_all_gateways(self) -> Dict[str, GatewayStatus]:

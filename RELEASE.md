@@ -12,7 +12,8 @@
   on their own schedule, so a slow local retry doesn't pause them; local
   retries keep their backoff. Needs cloud auth, an unambiguous site
   (`PW_SITEID`, `.pypowerwall.site`, a single-site account or a live FleetAPI
-  connection) and `PW_FAILOVER=yes`. Read-only:
+  connection) and `PW_FAILOVER=yes`. The flag starts the cloud connection
+  but adds no cloud calls while local polls succeed. Read-only:
   writes are unchanged. `online` stays true so Home Assistant keeps the
   values; check `data_source`/`local_online` for where they come from.
   Fallback reads count toward the cloud link health in `/stats` and the
@@ -20,9 +21,9 @@
   Validated on a Powerwall 2 with Tesla cloud. Thanks @erikgieseler! (#187)
 - **`data_source` and `local_online`** on each gateway status (`/api/gateways`,
   `/health`, `/stats`): `local`, `cloud` or `cache`, and whether the local link
-  is up. These follow the live connection with or without the flag, so
-  `/health` now reports `degraded` (still HTTP 200) while the library's own
-  failover serves a local gateway from cloud.
+  is up, with or without the flag. With the flag on, `/health` reports
+  `degraded` (still HTTP 200) while a local gateway is served from cloud;
+  without it, `/health` is unchanged.
 - **Signed WiFi-v1r transport (`PW_WIFI_V1R_FALLBACK`)** - opt-in (`no` by
   default), independent of `PW_LOCAL_FIRST`. After the library's v1r LAN
   failover trips, a gateway with `PW_WIFI_HOST` and an RSA key uses signed

@@ -55,6 +55,14 @@ def _install_fetch(gm, *, local_data=None, cloud_data=None, calls=None):
 
     gm._fetch_gateway_data = fake_fetch
 
+async def _enter_fallback(gm, gateway_id="v1r"):
+    """Three failed local polls, then the cloud-read loop's next tick."""
+    for _ in range(3):
+        gm._next_poll_time[gateway_id] = 0
+        await gm._poll_gateway(gateway_id)
+    return await gm._maybe_cloud_read(gateway_id)
+
+
 
 @pytest.mark.asyncio
 async def test_cloud_fallback_triggers_on_third_local_failure(monkeypatch):
@@ -70,9 +78,12 @@ async def test_cloud_fallback_triggers_on_third_local_failure(monkeypatch):
     await gm._poll_gateway("v1r")
     assert calls[-1] == (False, False)
     assert gm._cloud_read_state.get("v1r") is None
+    assert await gm._maybe_cloud_read("v1r") is None   # two failures: not yet
 
     gm._next_poll_time["v1r"] = 0
     await gm._poll_gateway("v1r")
+    assert calls[-1] == (False, False)   # the poll itself never reads the cloud
+    assert await gm._maybe_cloud_read("v1r") is True   # the cloud-read loop's tick
     assert calls[-1] == (True, True)
     status = gm.cache["v1r"]
     assert status.online is True
@@ -98,9 +109,7 @@ async def test_cloud_fallback_off_never_uses_cloud(monkeypatch):
     calls = []
     _install_fetch(gm, cloud_data=_data(), calls=calls)
 
-    for _ in range(3):
-        gm._next_poll_time["v1r"] = 0
-        await gm._poll_gateway("v1r")
+    await _enter_fallback(gm)
 
     assert gm.cache["v1r"].online is False
     assert all(not is_cloud for is_cloud, _ in calls)
@@ -122,9 +131,7 @@ async def test_cloud_fallback_failure_keeps_offline_and_records_error(monkeypatc
     calls = []
     _install_fetch(gm, cloud_data=None, calls=calls)
 
-    for _ in range(3):
-        gm._next_poll_time["v1r"] = 0
-        await gm._poll_gateway("v1r")
+    await _enter_fallback(gm)
 
     assert gm.cache["v1r"].online is False
     state = gm._cloud_read_state["v1r"]
@@ -155,9 +162,7 @@ async def test_cloud_fallback_requires_bound_site(monkeypatch):
     calls = []
     _install_fetch(gm, cloud_data=_data(), calls=calls)
 
-    for _ in range(3):
-        gm._next_poll_time["v1r"] = 0
-        await gm._poll_gateway("v1r")
+    await _enter_fallback(gm)
 
     assert gm.cache["v1r"].online is False
     assert all(not is_cloud for is_cloud, _ in calls)
@@ -221,6 +226,26 @@ async def test_cloud_fallback_serves_local_site_info_without_touching_it(monkeyp
     assert "/api/site_info" not in polled
     assert gm._site_info["v1r"] == {"source": "local"}
     assert gm._site_info_attempt["v1r"] == (0.0, True)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_only, cloud_calls", [(True, False), (False, True)])
+async def test_fallback_only_connection_adds_no_per_poll_cloud_reads(
+    monkeypatch, fallback_only, cloud_calls
+):
+    """A connection started only for PW_CLOUD_READ_FALLBACK must not query
+    Tesla on every healthy local poll (Basic LAN mode/reserve and the like);
+    with PW_CONTROL_SECRET or PW_CLOUD_HYBRID it still does."""
+    from unittest.mock import AsyncMock
+
+    gm = _manager(monkeypatch)
+    gm.gateways["v1r"].basic_lan = True
+    gm._cloud_for_fallback_only = fallback_only
+    gm.cloud_control = AsyncMock(return_value=None)
+
+    await gm._fetch_gateway_data("v1r", _FakeCloudPowerwall())
+
+    assert gm.cloud_control.await_count > 0 if cloud_calls else gm.cloud_control.await_count == 0
+
 
 @pytest.mark.asyncio
 async def test_cloud_fallback_uses_same_fields_as_cloud_mode(monkeypatch):
@@ -424,9 +449,7 @@ async def test_slow_local_retry_does_not_pause_cloud_reads(monkeypatch):
     gm = _manager(monkeypatch)
     calls = []
     _install_fetch(gm, cloud_data=_data(), calls=calls)
-    for _ in range(3):
-        gm._next_poll_time["v1r"] = 0
-        await gm._poll_gateway("v1r")
+    await _enter_fallback(gm)
     assert gm.cache["v1r"].data_source == "cloud"
 
     release = asyncio.Event()
@@ -458,14 +481,43 @@ async def test_slow_local_retry_does_not_pause_cloud_reads(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_no_second_cloud_read_while_one_is_in_flight(monkeypatch):
+    """A read that outlasts the interval must not let another caller queue a
+    second one behind it: reads would start closer than the interval (the
+    FleetAPI 30 s minimum)."""
+    gm = _manager(monkeypatch)
+    _install_fetch(gm, cloud_data=_data(), calls=[])
+    await _enter_fallback(gm)
+
+    gate = asyncio.Event()
+    cloud_fetches = []
+
+    async def slow_cloud(gateway_id, pw, *, cloud_fallback=False):
+        if pw is gm._cloud_control:
+            cloud_fetches.append(1)
+            await gate.wait()
+            return _data()
+        raise RuntimeError("local down")
+
+    gm._fetch_gateway_data = slow_cloud
+    gm._next_cloud_read_time["v1r"] = 0
+    first = asyncio.create_task(gm._maybe_cloud_read("v1r"))
+    await asyncio.sleep(0)
+    gm._next_cloud_read_time["v1r"] = 0   # the interval passed mid-read
+    assert await gm._maybe_cloud_read("v1r") is None
+    gate.set()
+    assert await first is True
+    assert len(cloud_fetches) == 1
+    assert "v1r" not in gm._cloud_read_inflight
+
+
+@pytest.mark.asyncio
 async def test_cloud_read_is_dropped_when_local_recovers_mid_read(monkeypatch):
     """A cloud read still in flight when local reads recover must not
     overwrite the fresh local status."""
     gm = _manager(monkeypatch)
     _install_fetch(gm, cloud_data=_data(), calls=[])
-    for _ in range(3):
-        gm._next_poll_time["v1r"] = 0
-        await gm._poll_gateway("v1r")
+    await _enter_fallback(gm)
     assert gm.cache["v1r"].data_source == "cloud"
 
     gate = asyncio.Event()
@@ -499,6 +551,8 @@ async def test_cloud_read_task_runs_only_for_local_gateways_and_stops_on_shutdow
 
     monkeypatch.setattr(settings, "cloud_read_fallback", True)
     monkeypatch.setattr(settings, "failover", True)
+    monkeypatch.setattr(settings, "control_secret", None)
+    monkeypatch.setattr(settings, "cloud_hybrid", False)
     monkeypatch.setattr(pypowerwall, "Powerwall", lambda **kw: Mock(
         mode="local", cloudmode=False, fleetapi=False, tedapi=None, is_connected=lambda: True))
     configs = [
@@ -509,6 +563,7 @@ async def test_cloud_read_task_runs_only_for_local_gateways_and_stops_on_shutdow
     try:
         assert "local" in manager.gateways
         assert set(manager._cloud_read_tasks) == {"local"}   # never a Cloud gateway
+        assert manager._cloud_for_fallback_only is True   # no control secret, no PW_CLOUD_HYBRID
         tasks = list(manager._cloud_read_tasks.values())
     finally:
         await manager.shutdown()
@@ -531,9 +586,7 @@ async def test_failed_local_retry_keeps_cloud_cache_until_next_cloud_read(monkey
     gm = _manager(monkeypatch)
     calls = []
     _install_fetch(gm, cloud_data=_data(), calls=calls)
-    for _ in range(3):
-        gm._next_poll_time["v1r"] = 0
-        await gm._poll_gateway("v1r")
+    await _enter_fallback(gm)
     assert gm.cache["v1r"].data_source == "cloud"
 
     gm._next_poll_time["v1r"] = 0
@@ -549,9 +602,7 @@ async def test_cloud_failure_marks_cloud_cache_offline(monkeypatch):
     gm = _manager(monkeypatch)
     calls = []
     _install_fetch(gm, cloud_data=_data(), calls=calls)
-    for _ in range(3):
-        gm._next_poll_time["v1r"] = 0
-        await gm._poll_gateway("v1r")
+    await _enter_fallback(gm)
     assert gm.cache["v1r"].data_source == "cloud"
 
     _install_fetch(gm, cloud_data=None, calls=calls)
@@ -573,15 +624,47 @@ async def test_cloud_failure_marks_cloud_cache_offline(monkeypatch):
     assert within_ttl.data is not None
     assert within_ttl.local_online is False
 
-    # Once the TTL expires, the same offline status must not retain data.
-    gm._last_successful_data["v1r"].timestamp = time.time() - settings.cache_ttl - 1
+    # Once the TTL expires, the same offline status must not retain data,
+    # nor call itself cached data.
+    gm._last_cloud_data["v1r"].timestamp = time.time() - settings.cache_ttl - 1
     expired = gm.get_gateway("v1r")
     assert expired.online is False
     assert expired.data is None
+    assert expired.data_source is None
+    assert expired.local_online is False
 
     # Disabling graceful degradation must not expose stale data either.
     monkeypatch.setattr(settings, "graceful_degradation", False)
     assert gm.get_gateway("v1r").data is None
+    assert gm.get_gateway("v1r").data_source is None
+
+
+@pytest.mark.asyncio
+async def test_cloud_reads_leave_the_local_snapshot_alone(monkeypatch):
+    """History numbers Powerwalls from the last local snapshot
+    (get_last_data) and the multi-Powerwall guard compares against it; cloud
+    data has neither the battery blocks nor tedapi_config."""
+    gm = _manager(monkeypatch)
+    local = _data()
+    local.timestamp = time.time() - 10
+    gm._last_successful_data["v1r"] = local
+    _install_fetch(gm, cloud_data=_data(), calls=[])
+    await _enter_fallback(gm)
+    assert gm.cache["v1r"].data_source == "cloud"
+    assert gm.get_last_data("v1r") is local
+    assert gm._last_cloud_data["v1r"] is gm.cache["v1r"].data
+
+    # Offline after a failed cloud refresh: the newer (cloud) copy is served
+    _install_fetch(gm, cloud_data=None, calls=[])
+    gm._next_cloud_read_time["v1r"] = 0
+    assert await gm._maybe_cloud_read("v1r") is False
+    assert gm.get_gateway("v1r").data is gm._last_cloud_data["v1r"]
+
+    # Local recovery drops the cloud copy
+    _install_fetch(gm, local_data=_data(source="local"), calls=[])
+    gm._next_poll_time["v1r"] = 0
+    await gm._poll_gateway("v1r")
+    assert "v1r" not in gm._last_cloud_data
 
 
 @pytest.mark.asyncio
@@ -612,9 +695,7 @@ async def test_failed_cloud_fallback_read_counts_as_cloud_link_failure(monkeypat
         raise RuntimeError("cloud down" if pw is gm._cloud_control else "local down")
 
     gm._fetch_gateway_data = fake_fetch
-    for _ in range(3):
-        gm._next_poll_time["v1r"] = 0
-        await gm._poll_gateway("v1r")
+    await _enter_fallback(gm)
 
     assert gm._cloud_read_state_for("v1r")["failures"] == 1
     assert gm._cloud_failures == 1
@@ -624,6 +705,7 @@ async def test_failed_cloud_fallback_read_counts_as_cloud_link_failure(monkeypat
     gm._next_poll_time["v1r"] = 0
     gm._next_cloud_read_time["v1r"] = 0
     await gm._poll_gateway("v1r")
+    await gm._maybe_cloud_read("v1r")   # the cloud-read loop's tick
     assert gm._cloud_read_state_for("v1r")["failures"] == 2
     assert gm._cloud_failures == 2
 
@@ -656,12 +738,14 @@ async def test_local_gateway_internal_cloud_failover_is_reported_as_cloud(monkey
 
 
 @pytest.mark.asyncio
-async def test_internal_cloud_failover_reported_without_the_flag(monkeypatch):
-    """data_source/local_online and /health follow the live connection even
-    with PW_CLOUD_READ_FALLBACK off (documented in RELEASE.md)."""
+@pytest.mark.parametrize("flag, health", [(False, "healthy"), (True, "degraded")])
+async def test_internal_cloud_failover_reported_without_the_flag(monkeypatch, flag, health):
+    """data_source/local_online follow the live connection either way; /health
+    only reports the new degraded state with PW_CLOUD_READ_FALLBACK on, so it
+    is unchanged for everyone else."""
     import app.main as main
 
-    gm = _manager(monkeypatch, flag=False)
+    gm = _manager(monkeypatch, flag=flag)
     data = _data()
     data.connection_mode = "Cloud"
     _install_fetch(gm, local_data=data, calls=[])
@@ -673,11 +757,13 @@ async def test_internal_cloud_failover_reported_without_the_flag(monkeypatch):
 
     assert gm.cache["v1r"].data_source == "cloud"
     assert gm.cache["v1r"].local_online is False
-    assert result["status"] == "degraded"
+    assert result["status"] == health
 
 
 @pytest.mark.asyncio
-async def test_internal_cloud_failover_does_not_clear_fallback_state(monkeypatch):
+async def test_any_successful_poll_ends_the_fallback(monkeypatch):
+    """Even through the library's own failover to Cloud: polls succeed, so no
+    fallback reads run and /health and /stats must not keep reporting one."""
     gm = _manager(monkeypatch)
     gm._cloud_read_state["v1r"] = gm._new_cloud_read_state()
     gm._cloud_read_state["v1r"]["active"] = True
@@ -688,7 +774,7 @@ async def test_internal_cloud_failover_does_not_clear_fallback_state(monkeypatch
 
     await gm._poll_gateway("v1r")
 
-    assert "v1r" in gm._cloud_read_state
+    assert "v1r" not in gm._cloud_read_state
     assert gm.cache["v1r"].data_source == "cloud"
     assert gm.cache["v1r"].local_online is False
 
@@ -739,15 +825,14 @@ async def test_local_and_cloud_failure_preserves_offline_snapshot(monkeypatch):
     gm = _manager(monkeypatch)
     calls = []
     _install_fetch(gm, cloud_data=_data(), calls=calls)
-    for _ in range(3):
-        gm._next_poll_time["v1r"] = 0
-        await gm._poll_gateway("v1r")
+    await _enter_fallback(gm)
     assert gm.cache["v1r"].data_source == "cloud"
 
     _install_fetch(gm, cloud_data=None, calls=calls)
     gm._next_poll_time["v1r"] = 0
     gm._next_cloud_read_time["v1r"] = 0
     await gm._poll_gateway("v1r")
+    await gm._maybe_cloud_read("v1r")   # the cloud-read loop's tick
 
     status = gm.cache["v1r"]
     assert status.online is False
@@ -763,13 +848,12 @@ async def test_local_retry_between_cloud_refreshes_keeps_offline_snapshot(monkey
     gm = _manager(monkeypatch)
     calls = []
     _install_fetch(gm, cloud_data=_data(), calls=calls)
-    for _ in range(3):
-        gm._next_poll_time["v1r"] = 0
-        await gm._poll_gateway("v1r")
+    await _enter_fallback(gm)
     _install_fetch(gm, cloud_data=None, calls=calls)
     gm._next_poll_time["v1r"] = 0
     gm._next_cloud_read_time["v1r"] = 0
     await gm._poll_gateway("v1r")
+    await gm._maybe_cloud_read("v1r")   # the cloud-read loop's tick
     assert gm.cache["v1r"].data_source == "cache"
 
     gm._next_poll_time["v1r"] = 0   # local retry due, cloud read not due

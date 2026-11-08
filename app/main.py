@@ -724,9 +724,9 @@ async def health_check():
     """Health check endpoint with actual gateway status.
 
     Returns:
-        - healthy: All gateways online on their local link
-        - degraded: Some gateways offline, or a local gateway served from
-          cloud (cloud read fallback or the library's failover to cloud)
+        - healthy: All gateways online
+        - degraded: Some gateways offline, or (with PW_CLOUD_READ_FALLBACK)
+          a local gateway served from cloud
         - unhealthy: All gateways offline
     """
     total = len(gateway_manager.gateways)
@@ -749,7 +749,13 @@ async def health_check():
         is_online = status.online if status else False
         if is_online:
             online_count += 1
-        if status and status.online and status.local_online is False:
+        # Only with the flag: without it /health stays as it always was.
+        if (
+            settings.cloud_read_fallback
+            and status
+            and status.online
+            and status.local_online is False
+        ):
             local_degraded = True
 
         detail = {
