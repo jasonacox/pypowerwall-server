@@ -36,6 +36,9 @@
   Powerwall 2 over an ESP32 bridge, and read-only cold failover on 2x
   Powerwall 3 (@jasonacox-sam); max backup and islanding were not exercised on
   hardware. Thanks @erikgieseler! (#186)
+- **`/json` `soe_scaled`** - the Tesla-app-scaled battery level, the same value
+  as `/api/system_status/soe`, next to the raw `soe`/`soe_raw`, which are
+  unchanged. Thanks @erikgieseler! (#192)
 
 **Fixed:**
 - **MQTT controls no longer bind to the wrong Tesla site** after a configured
