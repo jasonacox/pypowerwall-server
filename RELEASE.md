@@ -4,6 +4,18 @@
 
 ### [0.15.1] - Upcoming
 
+**Changed:**
+- **pypowerwall upgraded to 0.25.0** (from 0.24.0; `requirements.txt` pin and
+  `pyproject.toml` minimum). Library changes that reach server users, both in
+  TEDAPI/v1r modes:
+  - `/aggregates` and `/api/meters/aggregates` include a `generator` section
+    when the gateway config declares a generator meter, so generator data
+    no longer disappears after switching from local mode. Other sites are
+    unchanged (jasonacox/pypowerwall#473).
+  - `/api/status` reports `start_time` and `up_time_seconds` on gateways that
+    leave `SYNC_Uptime` null, such as a Backup Gateway 2 with Powerwall 2s
+    (jasonacox/pypowerwall#474).
+
 **Fixed:**
 - **Console HTML escaping** - gateway names, hosts, modes, firmware, errors,
   alerts, string names and section headers now render as text. A gateway
