@@ -2,7 +2,11 @@
 
 ## Version History
 
-### [0.15.1] - Upcoming
+### [0.15.1] - 2026-11-09
+
+pypowerwall 0.25.0 (a generator section in aggregates, and gateway uptime on
+Powerwall 2 sites) and two Console fixes. Thanks @clonea1 for both library
+changes!
 
 **Changed:**
 - **pypowerwall upgraded to 0.25.0** (from 0.24.0; `requirements.txt` pin and
