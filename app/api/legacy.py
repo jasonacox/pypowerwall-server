@@ -56,7 +56,6 @@ Adding New Endpoints:
 """
 import asyncio
 import logging
-import math
 import os
 import time
 from datetime import datetime, timedelta
@@ -71,7 +70,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.api.auth import bearer_token, token_matches, verify_control_token
-from app.utils.control import is_error_result
+from app.utils.control import (
+    dispatch_acknowledged,
+    is_error_result,
+    valid_dispatch_parameters,
+)
 from app.core.gateway_manager import (
     IslandingCommandInProgressError,
     IslandingCooldownError,
@@ -198,23 +201,6 @@ def powerwall_unit_labels(
         else:
             labels[serial] = {"label": f"PW{index}", "order": index * 100}
     return labels
-
-
-def _dispatch_acknowledged(method: str, args: tuple, result: Any) -> bool:
-    """True if result acknowledges this command: matching power and duration
-    for a dispatch, resume_battery_operation True for a resume."""
-    if not isinstance(result, dict) or is_error_result(result):
-        return False
-    if method == "dispatch_battery_power":
-        watts, seconds = result.get("power_watts"), result.get("duration_seconds")
-        # bool is an int in Python (False == 0, True == 1): not an ack
-        return (
-            not isinstance(watts, bool)
-            and not isinstance(seconds, bool)
-            and watts == args[0]
-            and seconds == args[1]
-        )
-    return result.get("resume_battery_operation") is True
 
 
 @router.get("/control/status")
@@ -653,19 +639,7 @@ async def _control_json(path: str, data: dict):
         method = "resume_battery_operation"
         if path == "dispatch":
             watts, seconds = data.get("power_watts"), data.get("duration_seconds")
-            try:
-                valid_power = (
-                    isinstance(watts, (int, float))
-                    and not isinstance(watts, bool)
-                    and math.isfinite(watts)
-                )
-            except OverflowError:
-                valid_power = False
-            if (
-                not valid_power
-                or type(seconds) is not int
-                or not 1 <= seconds <= 86400
-            ):
+            if not valid_dispatch_parameters(watts, seconds):
                 raise HTTPException(
                     status_code=400,
                     detail="power_watts must be finite and duration_seconds "
@@ -684,7 +658,7 @@ async def _control_json(path: str, data: dict):
         result = await gateway_manager.local_control(
             gateway_id, method, *args, timeout=max(10.0, settings.timeout + 5.0)
         )
-        if not _dispatch_acknowledged(method, args, result):
+        if not dispatch_acknowledged(method, args, result):
             raise HTTPException(
                 status_code=503,
                 detail="Battery dispatch not confirmed by the gateway. Check "

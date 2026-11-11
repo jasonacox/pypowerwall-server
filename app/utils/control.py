@@ -1,11 +1,43 @@
 """Control helpers shared by the HTTP API, the MQTT controls and the gateway
 manager (kept here so none of them imports another's module for them)."""
+import math
 from typing import Any
+
+
+def valid_dispatch_parameters(watts: object, seconds: object) -> bool:
+    """Validate the shared HTTP/MQTT battery dispatch parameters."""
+    try:
+        return (
+            isinstance(watts, (int, float))
+            and not isinstance(watts, bool)
+            and math.isfinite(watts)
+            and type(seconds) is int
+            and 1 <= seconds <= 86400
+        )
+    except OverflowError:
+        return False
 
 
 def is_error_result(result: object) -> bool:
     """True when a library response reports an error instead of a value."""
     return isinstance(result, dict) and ("error" in result or "ERROR" in result)
+
+
+def dispatch_acknowledged(method: str, args: tuple, result: Any) -> bool:
+    """True if result acknowledges this command: matching power and duration
+    for a dispatch, resume_battery_operation True for a resume."""
+    if not isinstance(result, dict) or is_error_result(result):
+        return False
+    if method == "dispatch_battery_power":
+        watts, seconds = result.get("power_watts"), result.get("duration_seconds")
+        # bool is an int in Python (False == 0, True == 1): not an ack
+        return (
+            not isinstance(watts, bool)
+            and not isinstance(seconds, bool)
+            and watts == args[0]
+            and seconds == args[1]
+        )
+    return result.get("resume_battery_operation") is True
 
 
 def is_v1r_gateway(gateway: Any, data: Any) -> bool:

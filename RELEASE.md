@@ -2,6 +2,19 @@
 
 ## Version History
 
+### [0.16.0] - Upcoming
+
+**Added:**
+- **MQTT battery dispatch and resume** with a separate `MQTT_CONTROLS` bit `32`.
+  Home Assistant gets prepared power/duration inputs and Start/Resume buttons,
+  and automations can send an atomic power/duration command. **Use at your own
+  risk: battery dispatch could void or limit your Tesla Powerwall warranty.**
+  Dispatch also needs `PW_BATTERY_DISPATCH=yes` (resume doesn't), requires
+  `confirm:true`, uses the gateway's live local v1r connection and shares the
+  HTTP write lock, including across timeouts. Existing masks are unchanged;
+  `63` enables all controls. Retained commands are ignored and cleared. Thanks
+  @longzheng, and @BJReplay for the early test run! (#184)
+
 ### [0.15.1] - 2026-11-09
 
 pypowerwall 0.25.0 (a generator section in aggregates, and gateway uptime on
