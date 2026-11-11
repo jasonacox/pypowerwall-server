@@ -23,6 +23,23 @@ def is_error_result(result: object) -> bool:
     return isinstance(result, dict) and ("error" in result or "ERROR" in result)
 
 
+def dispatch_acknowledged(method: str, args: tuple, result: Any) -> bool:
+    """True if result acknowledges this command: matching power and duration
+    for a dispatch, resume_battery_operation True for a resume."""
+    if not isinstance(result, dict) or is_error_result(result):
+        return False
+    if method == "dispatch_battery_power":
+        watts, seconds = result.get("power_watts"), result.get("duration_seconds")
+        # bool is an int in Python (False == 0, True == 1): not an ack
+        return (
+            not isinstance(watts, bool)
+            and not isinstance(seconds, bool)
+            and watts == args[0]
+            and seconds == args[1]
+        )
+    return result.get("resume_battery_operation") is True
+
+
 def is_v1r_gateway(gateway: Any, data: Any) -> bool:
     """True when a gateway uses the v1r transport (signed-command capable).
 

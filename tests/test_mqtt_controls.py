@@ -829,6 +829,11 @@ async def test_mqtt_dispatch_and_resume_stay_local(
     monkeypatch.setattr(settings, "local_first", True)
     monkeypatch.setattr(settings, "timeout", 12)
     gm.connections["hybrid"].tedapi_mode = "v1r"
+    # Replies as the library sends them, so both log as acknowledged
+    gm.local_control.side_effect = [
+        {"power_watts": watts, "duration_seconds": seconds},
+        {"resume_battery_operation": True},
+    ]
     with caplog.at_level(logging.INFO, logger=LOGGER):
         await run_commands(
             cmd(
@@ -992,6 +997,49 @@ async def test_dispatch_failure_is_not_acknowledged(
     assert gm.local_control.await_count == 1
     gm.cloud_control.assert_not_awaited()
     assert "failed" in caplog.text and "acknowledged" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "control,payload,result",
+    [
+        # Copilot on #184: these were logged as acknowledged
+        ("resume", {}, {"resume_battery_operation": False}),
+        ("dispatch", {"confirm": True}, {"power_watts": 400, "duration_seconds": 30}),
+        ("dispatch", {"confirm": True}, {"power_watts": -500, "duration_seconds": 60}),
+        # bool is an int in Python (False == 0, True == 1): not an ack
+        (
+            "dispatch",
+            {"confirm": True, "power_watts": 0, "duration_seconds": 1},
+            {"power_watts": False, "duration_seconds": True},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_mismatched_or_false_ack_is_not_acknowledged(
+    dispatch_env, gm, caplog, control, payload, result
+) -> None:
+    gm.local_control.return_value = result
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await run_commands(cmd("v1r", control, payload))
+    assert gm.local_control.await_count == 1
+    assert "failed" in caplog.text and "acknowledged" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "control,payload,result",
+    [
+        ("resume", {}, {"resume_battery_operation": True}),
+        ("dispatch", {"confirm": True}, {"power_watts": -500, "duration_seconds": 30}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_matching_ack_is_acknowledged(
+    dispatch_env, gm, caplog, control, payload, result
+) -> None:
+    gm.local_control.return_value = result
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await run_commands(cmd("v1r", control, payload))
+    assert "acknowledged" in caplog.text and "failed" not in caplog.text
 
 
 @pytest.mark.asyncio

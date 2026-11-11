@@ -116,6 +116,7 @@ import logging
 import ssl
 from typing import Dict, List, Optional, Set, Tuple
 from app.utils.control import (
+    dispatch_acknowledged,
     is_error_result,
     is_v1r_gateway,  # noqa: F401
     valid_dispatch_parameters,
@@ -1512,7 +1513,8 @@ class MqttPublisher:
         result = await gateway_manager.local_control(
             gateway_id, method, *args, timeout=max(10.0, settings.timeout + 5.0)
         )
-        if isinstance(result, dict) and result and not is_error_result(result):
+        # Same check as HTTP: a reply must confirm this exact command
+        if dispatch_acknowledged(method, args, result):
             logger.info(f"{label} acknowledged ({audit}); check actual battery power")
         else:
             logger.warning(
