@@ -210,10 +210,22 @@ How commands run:
 
 #### Battery dispatch (bit `32`)
 
+> **⚠️ USE AT YOUR OWN RISK. IT COULD VOID YOUR WARRANTY.**
+> **Battery dispatch could void or limit your Tesla Powerwall warranty.** The
+> Powerwall warranty quoted in [pypowerwall#450](https://github.com/jasonacox/pypowerwall/issues/450)
+> gives unlimited cycles only for solar self-consumption, time-based control
+> and backup; any other use is limited to 37.8 MWh of total energy throughput.
+> Check your warranty first, and read the full warning in
+> [API.md](API.md#timed-battery-dispatch-post-controldispatch-and-post-controlresume).
+
 Set `MQTT_CONTROLS=32` for dispatch only, `47` for value controls plus dispatch,
 or `63` for all controls. Existing masks such as `15` and `31` keep their previous
 behavior. Broker credentials and `PW_CONTROL_SECRET` are still required; the
-secret is never included in an MQTT payload.
+secret is never included in an MQTT payload. Dispatch also needs
+`PW_BATTERY_DISPATCH=yes`, the same opt-in as HTTP dispatch. Without it, Start
+and the prepared inputs are rejected and Home Assistant gets no dispatch
+entities, but Resume still works, so turning the opt-in off can't strand a
+running dispatch.
 
 Dispatch and resume require the target gateway's **live local v1r connection**,
 the same capability checked by HTTP dispatch. No cloud call or automatic retry
@@ -221,7 +233,8 @@ is made, including in hybrid mode or with `PW_LOCAL_FIRST=yes`. The shared write
 lock orders MQTT and HTTP commands, including when a worker continues after a
 timeout. The timeout is the greater of 10 seconds and `PW_TIMEOUT + 5` seconds.
 Home Assistant removes the four entities when that connection loses v1r
-capability or the bit is disabled, and restores them when it becomes available.
+capability, the bit is disabled or `PW_BATTERY_DISPATCH` is off, and restores
+them when all three allow it again.
 
 Home Assistant adds two prepared inputs and two buttons:
 

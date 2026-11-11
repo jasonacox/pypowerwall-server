@@ -690,7 +690,7 @@ By default MQTT only publishes. Set `MQTT_CONTROLS` to let Home Assistant (or an
 | `4` | Grid charging | switch |
 | `8` | Grid export (`battery_ok`, `pv_only`, `never`) | select |
 | `16` | Go off grid / reconnect (TEDAPI v1r only) | two buttons |
-| `32` | Timed battery dispatch / resume (TEDAPI v1r only) | power and duration numbers, Start and Resume buttons |
+| `32` | Timed battery dispatch / resume (TEDAPI v1r only; also needs `PW_BATTERY_DISPATCH=yes`). **Use at your own risk: it could void your warranty** | power and duration numbers, Start and Resume buttons |
 
 For example `MQTT_CONTROLS=15` enables reserve, mode and the grid settings;
 `31` also enables islanding. Battery dispatch needs its own `32` (`63` = all),
@@ -704,7 +704,8 @@ With bit `32`, set **Dispatch Power (positive discharges)** and **Dispatch
 Duration**, then press **Start Battery Dispatch**. Changing either input only
 prepares the next command. **Resume Battery Operation** releases it early.
 Discharge can export despite Grid Export settings and drain below Backup
-Reserve; pressing Start acknowledges these risks. See
+Reserve, and **battery dispatch could void or limit your Tesla Powerwall
+warranty**; pressing Start acknowledges these risks. See
 [MQTT battery dispatch](MQTT.md#battery-dispatch-bit-32) for details and atomic
 commands for automations.
 

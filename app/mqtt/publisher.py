@@ -131,6 +131,8 @@ logger = logging.getLogger(__name__)
 MAX_CONTROL_PAYLOAD_BYTES = 1024
 MAX_QUEUED_CONTROL_MESSAGES = 100
 CONTROL_COALESCE_WINDOW_S = 0.05
+# Commands that end a coalescing run: never merged across (see _latest_commands)
+_DISPATCH_BARRIER_TOPICS = ("/control/dispatch/set", "/control/resume/set")
 CONTROL_MAX_BATCH = 100
 
 # Stale retained topics (#101): a gated topic (published only while its value
@@ -176,6 +178,9 @@ class MqttPublisher:
         # battery; only an explicit dispatch command starts a timed operation.
         # Reset on server restart; a broker reconnect preserves them.
         self._dispatch_parameters: Dict[str, Tuple[float, int]] = {}
+        # Serializes publishing the prepared inputs per gateway, so an older
+        # snapshot can never overwrite a newer accepted input.
+        self._dispatch_publish_locks: Dict[str, asyncio.Lock] = {}
         # Per gateway: retained data topics published by recent publishes,
         # mapped to how many consecutive complete publishes have missed them
         # (0 = sent last time). See STALE_TOPIC_CLEAR_POLLS (#101).
@@ -278,7 +283,8 @@ class MqttPublisher:
             settings.mqtt_controls,
             _write_path(gateway_manager, gateway_id) is not None,
             _gateway_can_v1r_write(gateway_manager, gateway_id),
-            _gateway_can_dispatch(gateway_manager, gateway_id),
+            settings.battery_dispatch
+            and _gateway_can_dispatch(gateway_manager, gateway_id),
         )
 
     async def _publish_ha_discovery(
@@ -1064,13 +1070,24 @@ class MqttPublisher:
                                     "Restrict broker access and ACL %s/+/control/#",
                                     settings.mqtt_topic_prefix,
                                 )
-                            if settings.mqtt_control_allowed("dispatch"):
+                            if (
+                                settings.mqtt_control_allowed("dispatch")
+                                and settings.battery_dispatch
+                            ):
                                 logger.warning(
-                                    "MQTT BATTERY DISPATCH control is enabled: "
-                                    "discharge may export despite Grid Export "
-                                    "settings and drain below Backup Reserve. "
-                                    "Restrict broker access and ACL %s/+/control/#",
+                                    "MQTT BATTERY DISPATCH control is enabled. "
+                                    "USE AT YOUR OWN RISK: it could void your "
+                                    "Tesla warranty, and discharge may export "
+                                    "despite Grid Export settings and drain "
+                                    "below Backup Reserve. Restrict broker "
+                                    "access and ACL %s/+/control/#",
                                     settings.mqtt_topic_prefix,
+                                )
+                            elif settings.mqtt_control_allowed("dispatch"):
+                                logger.warning(
+                                    "MQTT_CONTROLS bit 32 is set but "
+                                    "PW_BATTERY_DISPATCH is off: MQTT dispatch "
+                                    "commands are rejected (resume still works)"
                                 )
                             control_task = asyncio.create_task(
                                 self._control_message_loop(client),
@@ -1200,8 +1217,12 @@ class MqttPublisher:
         """[(topic, payload, retained)] with the latest message per topic.
 
         Empty payloads are dropped: that is how a retained topic is cleared,
-        including the echo of our own clear.
+        including the echo of our own clear. Dispatch and resume are barriers:
+        messages are only coalesced between them, so Start runs with the
+        inputs sent before it and inputs sent after it can't change it.
+        Repeated presses with nothing in between still collapse to one.
         """
+        commands: list = []
         latest: dict = {}
         for message in batch:
             topic = str(message.topic)
@@ -1211,9 +1232,19 @@ class MqttPublisher:
             if not payload:
                 logger.debug(f"MQTT control: empty payload on {topic!r} ignored")
                 continue
+            entry = (topic, bytes(payload), bool(message.retain))
+            if topic.endswith(_DISPATCH_BARRIER_TOPICS):
+                if not latest and commands and commands[-1][0] == topic:
+                    commands[-1] = entry  # same button again: keep the latest
+                else:
+                    commands.extend((t, p, r) for t, (p, r) in latest.items())
+                    latest = {}
+                    commands.append(entry)
+                continue
             latest.pop(topic, None)  # keep the order of the latest messages
-            latest[topic] = (bytes(payload), bool(message.retain))
-        return [(topic, p, r) for topic, (p, r) in latest.items()]
+            latest[topic] = entry[1:]
+        commands.extend((t, p, r) for t, (p, r) in latest.items())
+        return commands
 
     @staticmethod
     async def _clear_command(client, topic: str) -> None:
@@ -1384,17 +1415,29 @@ class MqttPublisher:
             logger.warning(f"MQTT control handler error for {topic!r}: {e}")
 
     async def _publish_dispatch_parameters(self, gateway_id: str) -> None:
-        """Publish prepared inputs, never an inferred active dispatch state."""
+        """Publish prepared inputs, never an inferred active dispatch state.
+
+        The poll and an input command can publish at the same time. Taking
+        the snapshot under a per-gateway lock means the last publish always
+        carries the latest accepted values.
+        """
         from app.config import settings
 
-        watts, seconds = self._dispatch_parameters.get(gateway_id, (-500, 30))
-        for name, value in (("dispatch_power", watts), ("dispatch_duration", seconds)):
-            await self._safe_publish(
-                f"{settings.mqtt_topic_prefix}/{gateway_id}/{name}",
-                str(value),
-                settings.mqtt_retain,
-                settings.mqtt_qos,
-            )
+        lock = self._dispatch_publish_locks.get(gateway_id)
+        if lock is None:
+            lock = self._dispatch_publish_locks[gateway_id] = asyncio.Lock()
+        async with lock:
+            watts, seconds = self._dispatch_parameters.get(gateway_id, (-500, 30))
+            for name, value in (
+                ("dispatch_power", watts),
+                ("dispatch_duration", seconds),
+            ):
+                await self._safe_publish(
+                    f"{settings.mqtt_topic_prefix}/{gateway_id}/{name}",
+                    str(value),
+                    settings.mqtt_retain,
+                    settings.mqtt_qos,
+                )
 
     async def _handle_dispatch_command(
         self, gateway_id: str, control: str, payload: dict, label: str
@@ -1403,6 +1446,15 @@ class MqttPublisher:
         from app.config import settings
         from app.core.gateway_manager import gateway_manager
 
+        # Like HTTP: dispatch is opt-in, resume isn't, so turning the opt-in
+        # off can never strand a running dispatch.
+        if control != "resume" and not settings.battery_dispatch:
+            logger.warning(
+                f"{label} rejected: battery dispatch is off. Set "
+                "PW_BATTERY_DISPATCH=yes to enable it (use at your own risk; "
+                "it could void your warranty)"
+            )
+            return
         # Same live connection check as HTTP dispatch/resume. Cached polling
         # modes can lag a transport change, and the shared cloud must never win.
         if not _gateway_can_dispatch(gateway_manager, gateway_id):

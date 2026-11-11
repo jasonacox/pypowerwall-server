@@ -26,6 +26,12 @@ from app.mqtt.publisher import CONTROL_COALESCE_WINDOW_S, MqttPublisher
 
 LOGGER = "app.mqtt.publisher"
 
+
+@pytest.fixture(autouse=True)
+def _battery_dispatch_opted_in(monkeypatch):
+    """Dispatch tests run opted in; the opt-in tests below turn it off."""
+    monkeypatch.setattr(settings, "battery_dispatch", True)
+
 # Gateway id -> (Gateway kwargs, tedapi_mode). "hybrid" is bound to the
 # shared cloud connection; "full" (TEDAPI full) can't write anything.
 GATEWAYS = {
@@ -990,7 +996,7 @@ async def test_dispatch_failure_is_not_acknowledged(
 
 @pytest.mark.asyncio
 async def test_dispatch_retained_messages_and_bursts(dispatch_env, gm) -> None:
-    # The final command per topic wins, while dispatch/resume ordering is kept.
+    # Dispatch and resume are barriers: each runs, in the order sent.
     await run_commands(
         cmd(
             "v1r",
@@ -1005,6 +1011,7 @@ async def test_dispatch_retained_messages_and_bursts(dispatch_env, gm) -> None:
         ),
     )
     assert [c.args for c in gm.local_control.call_args_list] == [
+        ("v1r", "dispatch_battery_power", 500, 1),
         ("v1r", "resume_battery_operation"),
         ("v1r", "dispatch_battery_power", -500, 30),
     ]
@@ -1159,6 +1166,7 @@ async def test_says_why_controls_are_off(env, monkeypatch, caplog, missing):
     [
         (31, "reserve, mode, grid_charging, grid_export, islanding", "MQTT ISLANDING"),
         (32, "dispatch", "MQTT BATTERY DISPATCH"),
+        (32, "dispatch", "could void your Tesla warranty"),
     ],
 )
 @pytest.mark.asyncio
@@ -1327,3 +1335,136 @@ async def test_shared_cloud_binds_only_to_an_unambiguous_site(
     assert ("PW_SITEID" in caplog.text) == (not bound)
     # PW_SITEID reaches the cloud client as the integer it compares with
     assert created.get("siteid") == (123 if siteid else None)
+
+
+# --- Dispatch: burst ordering, prepared-input publishing, opt-in (#184) -------
+
+
+def _message(topic, payload, retain=False):
+    return Message(
+        topic,
+        json.dumps(payload).encode(),
+        qos=1,
+        retain=retain,
+        mid=1,
+        properties=None,
+    )
+
+
+def test_latest_commands_treats_start_and_resume_as_barriers() -> None:
+    power = "pypowerwall/v1r/control/dispatch_power/set"
+    start = "pypowerwall/v1r/control/dispatch/set"
+    resume = "pypowerwall/v1r/control/resume/set"
+    batch = [
+        _message(power, {"value": 100}),
+        _message(power, {"value": 500}),  # coalesced with the 100 before it
+        _message(start, {"confirm": True}),
+        _message(start, {"confirm": True}),  # a second press: collapsed
+        _message(power, {"value": -1000}),
+        _message(resume, {}),
+    ]
+    commands = MqttPublisher._latest_commands(batch)
+    assert [(t, json.loads(p)) for t, p, _ in commands] == [
+        (power, {"value": 500}),
+        (start, {"confirm": True}),
+        (power, {"value": -1000}),
+        (resume, {}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_start_uses_inputs_sent_before_it_in_a_burst(dispatch_env, gm) -> None:
+    # Copilot on #184: power 500, Start, power -1000 in one burst used the old
+    # prepared power, because coalescing moved Start ahead of both inputs.
+    await run_commands(
+        cmd("v1r", "dispatch_power", {"value": 500}),
+        cmd("v1r", "dispatch", {"confirm": True}),
+        cmd("v1r", "dispatch_power", {"value": -1000}),
+    )
+    assert [c.args for c in gm.local_control.call_args_list] == [
+        ("v1r", "dispatch_battery_power", 500, 30),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_publish_cannot_overwrite_a_newer_input() -> None:
+    # Copilot on #184: a poll snapshots duration 30 and pauses mid-publish; an
+    # input sets 120 and publishes. The poll must not publish 30 last.
+    pub = MqttPublisher()
+    published, paused, resume = [], asyncio.Event(), asyncio.Event()
+
+    async def safe_publish(topic, value, *_args):
+        published.append((topic.rsplit("/", 1)[-1], value))
+        if len(published) == 1:  # the poll's first topic
+            paused.set()
+            await resume.wait()
+
+    pub._safe_publish = safe_publish
+    poll = asyncio.create_task(pub._publish_dispatch_parameters("v1r"))
+    await paused.wait()
+    pub._dispatch_parameters["v1r"] = (-500, 120)  # an accepted input
+    command = asyncio.create_task(pub._publish_dispatch_parameters("v1r"))
+    await asyncio.sleep(0.01)
+    resume.set()
+    await asyncio.gather(poll, command)
+    last = {}
+    for name, value in published:
+        last[name] = value
+    assert last == {"dispatch_power": "-500", "dispatch_duration": "120"}
+
+
+@pytest.mark.parametrize(
+    "control,payload",
+    [
+        ("dispatch", {"confirm": True}),
+        ("dispatch", {"confirm": True, "power_watts": 500, "duration_seconds": 30}),
+        ("dispatch_power", {"value": 500}),
+        ("dispatch_duration", {"value": 60}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_dispatch_needs_the_opt_in(
+    dispatch_env, gm, monkeypatch, caplog, control, payload
+) -> None:
+    monkeypatch.setattr(settings, "battery_dispatch", False)
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        await run_commands(cmd("v1r", control, payload))
+    gm.local_control.assert_not_awaited()
+    assert "PW_BATTERY_DISPATCH=yes" in caplog.text
+    assert "could void your warranty" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_resume_works_without_the_opt_in(dispatch_env, gm, monkeypatch) -> None:
+    # Like HTTP: turning the opt-in off must never strand a running dispatch.
+    monkeypatch.setattr(settings, "battery_dispatch", False)
+    await run_commands(cmd("v1r", "resume", {}))
+    assert [c.args for c in gm.local_control.call_args_list] == [
+        ("v1r", "resume_battery_operation"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_entities_need_the_opt_in(dispatch_env, gm, monkeypatch) -> None:
+    announced, _ = await _discover(GATEWAYS)
+    assert announced.get("v1r") == DISPATCH
+    monkeypatch.setattr(settings, "battery_dispatch", False)
+    announced, _ = await _discover(GATEWAYS)
+    assert "v1r" not in announced
+
+
+@pytest.mark.asyncio
+async def test_startup_says_bit_32_needs_the_opt_in(env, monkeypatch, caplog):
+    monkeypatch.setattr(settings, "mqtt_controls", 32)
+    monkeypatch.setattr(settings, "battery_dispatch", False)
+    pub = MqttPublisher()
+
+    def enter():
+        pub._shutdown = True
+        return MagicMock(subscribe=AsyncMock(), messages=MagicMock())
+
+    _fake_aiomqtt(monkeypatch, enter)
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        await asyncio.wait_for(pub._connection_loop(), timeout=5)
+    assert "PW_BATTERY_DISPATCH is off" in caplog.text
+    assert "MQTT BATTERY DISPATCH control is enabled" not in caplog.text

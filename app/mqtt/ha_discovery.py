@@ -377,7 +377,8 @@ def build_discovery_payloads(
                    FleetAPI, bound hybrid cloud or v1r); those four need it.
         is_v1r:    The gateway uses the v1r transport; the islanding buttons
                    (PW2 and PW3) need it.
-        can_dispatch: The live connection is v1r (same check as HTTP dispatch).
+        can_dispatch: PW_BATTERY_DISPATCH is on and the live connection is v1r
+                      (same checks as HTTP dispatch).
         grid_metrics:  Grid health metrics the gateway actually reports
                        (subset of {"grid_voltage", "grid_current"} from the
                        site CT averages, #177).  Sensors whose metric is not

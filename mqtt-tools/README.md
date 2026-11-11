@@ -166,7 +166,7 @@ services:
 | `MQTT_HA_PREFIX` | `homeassistant` | Home Assistant discovery prefix |
 | `MQTT_CLIENT_ID` | `pypowerwall-server` | MQTT client identifier |
 | `MQTT_KEEPALIVE` | `60` | Connection keepalive in seconds |
-| `MQTT_CONTROLS` | `0` | Opt-in Home Assistant controls: `1` reserve, `2` mode, `4` grid charging, `8` grid export, `16` go off grid / reconnect, `32` battery dispatch / resume (the last two need v1r). Add them up, e.g. `15`; `63` = all. Existing `15`/`31` masks do not enable dispatch. `0` = monitoring only. **Use at your own risk:** read the warning in [Controls](#controls-optional) first |
+| `MQTT_CONTROLS` | `0` | Opt-in Home Assistant controls: `1` reserve, `2` mode, `4` grid charging, `8` grid export, `16` go off grid / reconnect, `32` battery dispatch / resume (the last two need v1r; dispatch also needs `PW_BATTERY_DISPATCH=yes` and **could void your warranty**). Add them up, e.g. `15`; `63` = all. Existing `15`/`31` masks do not enable dispatch. `0` = monitoring only. **Use at your own risk:** read the warning in [Controls](#controls-optional) first |
 
 ---
 
@@ -496,9 +496,10 @@ action:
 Add bit `32` for local v1r battery dispatch (`47` = value controls plus dispatch,
 `63` = all). Home Assistant adds **Dispatch Power (positive discharges)**,
 **Dispatch Duration**, **Start Battery Dispatch** and **Resume Battery
-Operation**. Input changes only prepare a command; Start sends it. Discharge
-can export despite Grid Export settings and drain below Backup Reserve;
-pressing Start acknowledges these risks. For defaults, atomic automation
+Operation**. It also needs `PW_BATTERY_DISPATCH=yes`. Input changes only
+prepare a command; Start sends it. Discharge can export despite Grid Export
+settings and drain below Backup Reserve, and **battery dispatch could void or
+limit your Tesla Powerwall warranty**; pressing Start acknowledges these risks. For defaults, atomic automation
 payloads and the difference between prepared inputs and actual battery power,
 see [MQTT battery dispatch](../MQTT.md#battery-dispatch-bit-32).
 
