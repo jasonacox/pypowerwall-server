@@ -23722,6 +23722,7 @@
                     ft(this, "_handleIslandingClick", this._handleIslandingClick.bind(this)),
                     (this.state = {
                         activeIcons: [],
+                        viewportWidth: window.innerWidth,
                         colors: {
                             batteryToHome: et.c,
                             batteryToGrid: et.c,
@@ -23739,9 +23740,18 @@
             componentWillReceiveProps(e) {
                 this.setState({ activeIcons: bt.getActiveIcons(e) });
             }
+            componentDidMount() {
+                this._handleViewportResize = () => this.setState({ viewportWidth: window.innerWidth });
+                window.addEventListener("resize", this._handleViewportResize);
+            }
+            componentWillUnmount() {
+                window.removeEventListener("resize", this._handleViewportResize);
+            }
+            _getEffectiveGridWidth() {
+                return Math.min(this.props.gridWidth, Math.max(0, window.innerWidth - 136));
+            }
             render() {
                 const {
-                        gridWidth: e,
                         gridHeight: t,
                         activeTypes: i,
                         activeGlowRadius: n,
@@ -23791,7 +23801,8 @@
                         gridServicesActive: H,
                         soe: K,
                     } = this.props,
-                    { activeIcons: Y, colors: Q } = this.state,
+                    { activeIcons: Y, colors: Q, viewportWidth: V0 } = this.state,
+                    e = this._getEffectiveGridWidth(),
                     Z = 0 === i.length,
                     J = e / 2,
                     X = t / 2,
@@ -24290,8 +24301,9 @@
                         case et.h.GRID:
                             ((b = this.props.gridPower && f),
                                 (I.top = g ? 0.5 * s + 0.5 * o + 2 * _ : 1.5 * s + 0.5 * o + 3 * _ + T + l + d),
-                                (I.left = 0),
-                                (I.right = a + s + 2 * _),
+                                (I.left = `calc(50% - ${a / 2 + s / 2 + _}px)`),
+                                (I.right = "auto"),
+                                (I.transform = "translateX(-50%)"),
                                 (I.color = et.d));
                             break;
                         case et.h.BATTERY:
@@ -24305,8 +24317,9 @@
                         case et.h.USAGE:
                             ((b = this.props.loadPower && v),
                                 (I.top = g ? 0.5 * s + 0.5 * o + 2 * _ : 1.5 * s + 0.5 * o + 3 * _ + T + l + d),
-                                (I.left = a + s + 2 * _),
-                                (I.right = 0),
+                                (I.left = `calc(50% + ${a / 2 + s / 2 + _}px)`),
+                                (I.right = "auto"),
+                                (I.transform = "translateX(-50%)"),
                                 (I.color = et.g));
                     }
                     const O = !t.includes(n),
@@ -24386,6 +24399,9 @@
                         s = e ? 267 : 94,
                         _ = e ? 212 : 94,
                         l = e ? 172 : 157;
+                    const labelTop = n + (_ * (100 - a)) / 100 - i / 2,
+                        labelBottomAligned = labelTop > s - i - 1,
+                        gridWidth = this._getEffectiveGridWidth();
                     ((d = c.createElement(
                         "svg",
                         { className: "powerwall-soe", width: r, height: s, viewBox: `0 0 ${r} ${s}` },
@@ -24410,10 +24426,12 @@
                                 "data-testid": "234320a0-eab5-4528-bc42-aab6c7282f13",
                                 className: "label-container soe-label",
                                 style: {
-                                    top: Math.max(0, n + (_ * (100 - a)) / 100 - i / 2),
+                                    top: labelBottomAligned ? "auto" : Math.max(0, labelTop),
+                                    bottom: labelBottomAligned ? 0 : "auto",
+                                    lineHeight: labelBottomAligned ? "normal" : void 0,
                                     left: e
-                                        ? 0.5 * this.props.gridWidth - t + 191
-                                        : r + (0.5 * this.props.gridWidth - t) + 12,
+                                        ? 0.5 * gridWidth - t + 191
+                                        : r + (0.5 * gridWidth - t) + 12,
                                     color: o ? "white" : "black",
                                 },
                             },

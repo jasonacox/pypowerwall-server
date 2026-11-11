@@ -79,12 +79,18 @@ header {
 }
 
 .header-links a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 36px;
     color: var(--text-secondary);
     text-decoration: none;
-    padding: 8px 16px;
+    padding: 0 16px;
     border-radius: 6px;
     transition: all 0.2s ease;
     font-size: 0.9em;
+    line-height: 1;
+    box-sizing: border-box;
 }
 
 .header-links a:hover,
