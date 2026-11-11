@@ -2,7 +2,10 @@
 
 ## Version History
 
-### [0.16.0] - Upcoming
+### [0.16.0] - 2026-11-10
+
+MQTT and Home Assistant battery dispatch, off by default. It needs both
+`MQTT_CONTROLS` bit `32` and `PW_BATTERY_DISPATCH=yes`. Thanks @longzheng!
 
 **Added:**
 - **MQTT battery dispatch and resume** with a separate `MQTT_CONTROLS` bit `32`.
