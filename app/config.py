@@ -48,7 +48,12 @@ Environment Variables (Proxy Compatible):
         PW_BIND_ADDRESS      - Server bind address (default: "0.0.0.0")
         PW_PORT              - Server port (default: 8675)
         PW_DEBUG             - Enable debug logging "yes"/"no" (default: "no")
-        PW_HTTPS             - Enable HTTPS mode (default: "no")
+        PW_HTTPS             - "yes" also serves HTTPS on PW_HTTPS_PORT; HTTP on
+                               PW_PORT is unchanged (default: "no")
+        PW_HTTPS_PORT        - HTTPS port when PW_HTTPS=yes (default: 8775)
+        PW_HTTPS_CERT        - Path to a PEM certificate file for HTTPS (default: a
+                               self-signed one generated once in the data dir)
+        PW_HTTPS_KEY         - Path to the PEM private key file for PW_HTTPS_CERT (unencrypted)
 
     Performance Settings:
         PW_CACHE_EXPIRE      - Polling frequency in seconds (default: 5)
@@ -81,10 +86,19 @@ Environment Variables (Proxy Compatible):
         PW_CONTROL_SECRET    - Enable control commands (default: none/disabled)
         PW_ISLANDING_COOLDOWN - Seconds between islanding commands per gateway
                                (default: 30; 0 disables)
+        PW_BATTERY_DISPATCH  - Enable battery dispatch "yes"/"no" (default: "no");
+                               use at your own risk (could void your warranty)
         PW_LOCAL_FIRST       - Prefer local v1r writes "yes"/"no" (default: "no")
+        PW_WIFI_V1R_FALLBACK
+                             - Use signed WiFi-v1r for reads and writes after the
+                               v1r LAN failover trips "yes"/"no" (default: "no")
         PW_CLOUD_HYBRID      - Start the hybrid cloud connection for a local gateway
                                with PW_EMAIL even without PW_CONTROL_SECRET, for its
                                read-only values "yes"/"no" (default: "no")
+        PW_CLOUD_READ_FALLBACK
+                             - When a local gateway's polling fails, read the same
+                               dataset from the bound Cloud/FleetAPI connection
+                               "yes"/"no" (default: "no")
         PW_NEG_SOLAR         - Allow negative solar values "yes"/"no" (default: "yes")
         PW_RSA_KEY_PATH      - Path to RSA-4096 private key PEM for TEDAPI v1r LAN access (default: none)
         PW_WIFI_HOST         - WiFi host IP for TEDAPI v1r WiFi fallback (default: none)
@@ -255,7 +269,7 @@ def _scalar_kind(annotation):
 
 
 # Server version
-SERVER_VERSION = "0.13.0"
+SERVER_VERSION = "0.15.1"
 
 # MQTT control bitmask values for MQTT_CONTROLS (bits only, no names).
 # Default 0 keeps MQTT monitoring-only, exactly as before controls existed.
@@ -361,6 +375,13 @@ class Settings(BaseSettings):
         default=15, alias="PW_POOL_MAXSIZE"
     )  # Connection pool size
     https_mode: bool = Field(default=False, alias="PW_HTTPS")
+    https_port: int = Field(default=8775, alias="PW_HTTPS_PORT")
+    https_cert: Optional[str] = Field(
+        default=None, alias="PW_HTTPS_CERT"
+    )  # Path to a PEM certificate file
+    https_key: Optional[str] = Field(
+        default=None, alias="PW_HTTPS_KEY"
+    )  # Path to the PEM private key file (unencrypted)
 
     # Network robustness settings
     suppress_network_errors: bool = Field(
@@ -404,12 +425,21 @@ class Settings(BaseSettings):
     cloud_hybrid: bool = Field(
         default=False, alias="PW_CLOUD_HYBRID"
     )  # Hybrid cloud connection without PW_CONTROL_SECRET (read-only values)
+    cloud_read_fallback: bool = Field(
+        default=False, alias="PW_CLOUD_READ_FALLBACK"
+    )  # Use the bound cloud connection for reads after local poll failures
     local_first: bool = Field(
         default=False, alias="PW_LOCAL_FIRST"
     )  # Try local v1r writes before cloud (default: no = cloud first)
+    wifi_v1r_fallback: bool = Field(
+        default=False, alias="PW_WIFI_V1R_FALLBACK"
+    )  # Use signed WiFi v1r after the LAN failover (default: no)
     islanding_cooldown: int = Field(
         default=30, alias="PW_ISLANDING_COOLDOWN"
     )  # Server-enforced seconds between islanding commands per gateway (0 disables)
+    battery_dispatch: bool = Field(
+        default=False, alias="PW_BATTERY_DISPATCH"
+    )  # Battery dispatch opt-in (also needs PW_CONTROL_SECRET)
     proxy_base_url: str = Field(default="/", alias="PROXY_BASE_URL")
     pw_rsa_key_path: Optional[str] = Field(
         default=None, alias="PW_RSA_KEY_PATH"
@@ -495,8 +525,8 @@ class Settings(BaseSettings):
             word = text.lower()
             if word in _TRUE_WORDS:
                 return True
-            # PW_HTTPS=http is the proxy's Secure-cookie mode behind a TLS
-            # proxy; this server always serves plain HTTP
+            # The proxy's PW_HTTPS=http (Secure cookies behind a TLS proxy)
+            # means no HTTPS listener here: cookies follow the request scheme
             proxy_http = info.field_name == "https_mode" and word == "http"
             if word in _FALSE_WORDS or proxy_http:
                 return False

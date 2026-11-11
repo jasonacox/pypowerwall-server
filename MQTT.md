@@ -161,10 +161,15 @@ Base path: `{MQTT_TOPIC_PREFIX}/{gateway_id}/`
 | `pypowerwall/{gw}/grid_charging` | `true` or `false` | — (grid charging allowed) |
 | `pypowerwall/{gw}/grid_export` | `battery_ok`/`pv_only`/`never` | — (grid export policy) |
 | `pypowerwall/{gw}/time_remaining` | `5.50` | `h` (backup time remaining, rounded 2 dp; `status` JSON keeps raw precision) |
+| `pypowerwall/{gw}/alerts` | `["FWUpdateSucceeded","SystemConnectedToGrid"]` | — (active gateway alerts, sorted JSON list; same alerts as `/alerts`) |
+| `pypowerwall/{gw}/alert_count` | `2` | — (number of active alerts; HA sensor "Active Alerts" with the list as its `alerts` attribute) |
 | `pypowerwall/{gw}/online` | `true` or `false` | — |
 
-Optional topics are published only when the source value is available; the
-last retained value persists until the gateway's `availability` goes `offline`.
+Optional topics are published only when the source value is available. If a
+retained topic stops being published while the gateway stays online (say, a
+mode without that value, or a removed battery or string), the server deletes it
+after 3 consecutive publishes without it. Nothing is cleared while the gateway
+is offline, and topics from before a server restart aren't tracked.
 
 ### Control command topics (opt-in `MQTT_CONTROLS`)
 
@@ -195,10 +200,11 @@ last retained value persists until the gateway's `availability` goes `offline`.
 How commands run:
 
 - **Where they can run.** Reserve, mode and the two grid settings need a gateway that can write them: cloud, FleetAPI, the hybrid cloud connection (only for the gateway it was built for, and only when its Tesla site is certain, see below), or a v1r connection. Islanding needs a confirmed v1r connection (Powerwall 2 or 3) and goes over it directly, with the server's islanding cooldown (`PW_ISLANDING_COOLDOWN`, 30 s by default). It is reported as applied only when the gateway acknowledges it (`result == 1`). Home Assistant only gets the controls a gateway can run; commands for anything else are rejected with a warning.
-- **One write per command.** Each command runs on exactly one connection and is never retried on another one. A burst of commands for the same control (a slider drag) collapses to the latest one. Exception: with `PW_LOCAL_FIRST=yes`, a confirmed local v1r transport whose LAN is up and which has a local connection is tried first; otherwise the command runs through the normal path above. A dispatched attempt — even a timed-out one — is final, since it may still have been applied.
+- **One write per command.** Each command runs on exactly one connection and is never retried on another one. A burst of commands for the same control (a slider drag) collapses to the latest one. Exception: with `PW_LOCAL_FIRST=yes`, a confirmed local v1r transport whose LAN is up and which has a local connection is tried first; otherwise the command runs through the normal path above. With `PW_WIFI_V1R_FALLBACK=yes`, a gateway whose LAN failover has tripped probes signed WiFi-v1r first and takes the write there (islanding included); if the probe fails, value controls use the normal path and islanding is rejected. A dispatched attempt — even a timed-out one — is final, since it may still have been applied.
 - **Not retained.** Publish with `retain=false` (Home Assistant does). A retained command is never replayed: after each command the server deletes any retained copy of it, and a retained command found on connect is ignored with a warning.
 - **Logged.** Every applied command is logged at INFO with gateway, control, value and connection; rejected or failed commands at WARNING.
 - **Bits off.** Turning a bit off (or controls off) removes the entity from Home Assistant on the next start.
+- **Cloud read fallback.** With `PW_CLOUD_READ_FALLBACK=yes`, sensor values continue from the bound Cloud/FleetAPI connection after three consecutive failed local polls, and availability stays `online`. `/stats` and `/health` show `data_source=cloud`, `local_online=false`. Controls are unchanged.
 - **Releasing a hold.** `reserve_hold` sets the reserve once from a live poll. To release it, set the reserve back with `{prefix}/{gw}/control/reserve/set` or the Backup Reserve number. Tesla caps the backup reserve at 80%, so a hold above 80% charge sets 80%. Anyone with MQTT bit `1` gets the new **Hold Battery** button on upgrade.
 - **Hybrid site.** If the Tesla account has more than one site, set `PW_SITEID` (or pick the site with `pypowerwall setup`); otherwise the hybrid cloud connection could point at another site, so MQTT controls don't use it.
 
@@ -465,6 +471,7 @@ Sensors to auto-discover per gateway:
 | Battery Energy Discharged | `energy` | `Wh` | `mdi:battery-minus` |
 | Grid Export | — | — | `mdi:transmission-tower-export` |
 | Time Remaining | `duration` | `h` | `mdi:timer-outline` |
+| Active Alerts (diagnostic; alert names in its `alerts` attribute) | — | — | `mdi:alert-circle-outline` |
 
 Binary sensors:
 | Sensor | HA device_class |

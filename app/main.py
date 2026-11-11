@@ -120,6 +120,23 @@ if not settings.debug:
 logger = logging.getLogger(__name__)
 
 
+def _log_battery_dispatch_opt_in() -> None:
+    """Log a startup warning when PW_BATTERY_DISPATCH is on."""
+    if not settings.battery_dispatch:
+        return
+    if settings.control_enabled:
+        logger.warning(
+            "Battery dispatch is ON (PW_BATTERY_DISPATCH=yes). USE AT YOUR OWN "
+            "RISK: a dispatch overrides the backup reserve and grid export "
+            "settings, could void your Tesla warranty, and its effects on your "
+            "home, system and the grid are not fully known."
+        )
+    else:
+        logger.warning(
+            "PW_BATTERY_DISPATCH=yes has no effect without PW_CONTROL_SECRET"
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
@@ -133,6 +150,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Server listening on {settings.server_host}:{settings.server_port}")
     if _proxy_base:
         logger.info(f"Reverse proxy base path (PROXY_BASE_URL): {_proxy_base}")
+    _log_battery_dispatch_opt_in()
 
     # Initialize gateway manager
     await gateway_manager.initialize(
@@ -158,12 +176,17 @@ async def lifespan(app: FastAPI):
             f"MQTT publisher enabled — broker: {settings.mqtt_host}:{settings.mqtt_port}"
         )
 
+    # Optional HTTPS listener (PW_HTTPS=yes)
+    from app.core.https_listener import start_https_listener, stop_https_listener
+    https_listener = await start_https_listener(app, settings)
+
     yield
 
-    # Shutdown.  Order matters: stop polling first (so nothing new is
-    # scheduled), then flush per-gateway offline states while the MQTT
-    # connection is still alive, then disconnect from the broker.
+    # Shutdown.  Order matters: stop the HTTPS listener and polling first (so
+    # nothing new is scheduled), then flush per-gateway offline states while
+    # the MQTT connection is still alive, then disconnect from the broker.
     logger.info("Shutting down PyPowerwall Server...")
+    await stop_https_listener(https_listener)
     await gateway_manager.shutdown()
     await mqtt_publisher.publish_offline(list(gateway_manager.gateways))
     await mqtt_publisher.stop()
@@ -354,19 +377,20 @@ async def track_requests(request: Request, call_next):
                 if k.lower() == "set-cookie" and "AuthCookie" in v
             ]
             if not existing_set_cookie:
+                cookie = legacy.auth_cookie_options(request)
                 response.set_cookie(
                     key="AuthCookie",
                     value="1234567890",
                     max_age=_AUTH_COOKIE_MAX_AGE,
                     path="/",
-                    samesite="lax",
+                    **cookie,
                 )
                 response.set_cookie(
                     key="UserRecord",
                     value="1234567890",
                     max_age=_AUTH_COOKIE_MAX_AGE,
                     path="/",
-                    samesite="lax",
+                    **cookie,
                 )
 
         return response
@@ -701,7 +725,8 @@ async def health_check():
 
     Returns:
         - healthy: All gateways online
-        - degraded: Some gateways online, some offline
+        - degraded: Some gateways offline, or (with PW_CLOUD_READ_FALLBACK)
+          a local gateway served from cloud
         - unhealthy: All gateways offline
     """
     total = len(gateway_manager.gateways)
@@ -717,23 +742,35 @@ async def health_check():
     # Count online gateways
     online_count = 0
     gateway_details = []
+    local_degraded = False
 
     for gateway_id in gateway_manager.gateways.keys():
         status = gateway_manager.get_gateway(gateway_id)
         is_online = status.online if status else False
         if is_online:
             online_count += 1
+        # Only with the flag: without it /health stays as it always was.
+        if (
+            settings.cloud_read_fallback
+            and status
+            and status.online
+            and status.local_online is False
+        ):
+            local_degraded = True
 
         detail = {
             "id": gateway_id,
             "online": is_online,
+            "data_source": status.data_source if status else None,
+            "local_online": status.local_online if status else None,
             "error": status.error if status and status.error else None,
         }
 
         gateway_details.append(detail)
 
-    # Determine overall health
-    if online_count == total:
+    # Determine overall health. Cloud read fallback keeps data available but
+    # the local link is still down, so report the gateway as degraded.
+    if online_count == total and not local_degraded:
         health_status = "healthy"
     elif online_count > 0:
         health_status = "degraded"
@@ -742,6 +779,7 @@ async def health_check():
 
     # SolarOnly fallback state per tracked gateway (upstream proxy t97 format)
     fallback_summary = gateway_manager.get_all_fallback_states()
+    cloud_read_summary = gateway_manager.get_all_cloud_read_states()
 
     return {
         "status": health_status,
@@ -752,6 +790,7 @@ async def health_check():
         "gateway_ids": list(gateway_manager.gateways.keys()),
         "gateway_details": gateway_details,
         "fallback_mode": fallback_summary,
+        "cloud_read_fallback": cloud_read_summary,
     }
 
 
@@ -800,6 +839,8 @@ Environment Variables:
   PW_DEBUG           Enable debug logging (default: false)
   PW_PORT            Server port (default: 8675)
   PW_BIND_ADDRESS    Server bind address (default: 0.0.0.0)
+  PW_HTTPS           Also serve HTTPS on PW_HTTPS_PORT (default: no)
+  PW_HTTPS_PORT      HTTPS port (default: 8775)
   PW_CONFIG          Path to YAML/JSON configuration file
   PW_RATE_LIMIT_ENABLED         Enable per-IP rate limiting (default: false)
   PW_RATE_LIMIT_MAX_REQUESTS    Requests per window per IP (default: 1000)
@@ -936,6 +977,8 @@ For more information, visit: https://github.com/jasonacox/pypowerwall-server
     print(f"Console UI: http://{settings.server_host}:{settings.server_port}/console")
     print(f"History:    http://{settings.server_host}:{settings.server_port}/history")
     print(f"API Docs: http://{settings.server_host}:{settings.server_port}/docs")
+    if settings.https_mode:
+        print(f"HTTPS:    https://{settings.server_host}:{settings.https_port}/console")
     print()
 
     try:

@@ -103,6 +103,10 @@ PW_GATEWAYS='[
 |----------|---------|:-----:|-------------|
 | `PW_BIND_ADDRESS` | `0.0.0.0` | ✓ | Address to listen on. Also `server.host` in the config file. |
 | `PW_PORT` | `8675` | ✓ | Port to listen on. Also `server.port` in the config file. |
+| `PW_HTTPS` | `no` | ✓ | `yes` also serves HTTPS on `PW_HTTPS_PORT`; HTTP on `PW_PORT` keeps working for existing clients and health checks. Unlike the proxy (which switches its one port to HTTPS), the server adds a second port. The proxy's `http` reads as `no`: cookies follow each request's scheme. See [HTTPS](README.md#https-optional). |
+| `PW_HTTPS_PORT` | `8775` | | HTTPS port when `PW_HTTPS=yes`. Not 8676, which Powerwall-Dashboard's weather service uses. |
+| `PW_HTTPS_CERT` | none | | Path to a PEM certificate file for HTTPS, with `PW_HTTPS_KEY` (both or neither). Without them the server generates a self-signed certificate once, unique to this install, in `/data/tls` (else `data/tls`), and reuses it. |
+| `PW_HTTPS_KEY` | none | | Path to the PEM private key file for `PW_HTTPS_CERT` (unencrypted). |
 
 `PW_BIND_ADDRESS` and `PW_PORT` apply when the server is started with the
 `pypowerwall-server` command. The Docker image starts uvicorn directly on
@@ -136,8 +140,11 @@ PW_GATEWAYS='[
 |----------|---------|------------|:-----:|-------------|
 | `PW_CONTROL_SECRET` | none | All | ✓ | Enables all write routes; clients send it as the control token (see [Control and security](#control-and-security)). Unset means read-only. The proxy's form-encoded `token` requests work too. |
 | `PW_ISLANDING_COOLDOWN` | `30` | v1r | | Minimum seconds between islanding commands per gateway; `0` disables the cooldown. |
+| `PW_BATTERY_DISPATCH` | `no` | v1r | | `yes` enables timed battery dispatch (`POST /control/dispatch` and the Console panel). Needs `PW_CONTROL_SECRET`. **Use at your own risk; it could void your warranty. Read the [warning](#timed-battery-dispatch-post-controldispatch-and-post-controlresume) first.** `POST /control/resume` works without it. |
 | `PW_CLOUD_HYBRID` | `no` | Local with `PW_EMAIL` | | `yes` starts the hybrid cloud connection without `PW_CONTROL_SECRET`, for its read-only values (Basic LAN mode and reserve, grid charging/export settings). With `PW_CONTROL_SECRET` set it starts anyway. Like the proxy, `PW_EMAIL` alone doesn't start it. |
+| `PW_CLOUD_READ_FALLBACK` | `no` | Local with `PW_EMAIL` and Cloud/FleetAPI auth | | `yes` reads the Cloud-Mode data set from the bound Cloud/FleetAPI connection after three consecutive failed local polls. Needs an unambiguous site (`PW_SITEID`, `.pypowerwall.site`, a single-site account or a live FleetAPI connection); `PW_FAILOVER=no` disables it. Data is marked `data_source=cloud`, `local_online=false`, and `online` stays true, so check `data_source`/`local_online` to tell it from local data. Cloud reads run every `PW_CACHE_EXPIRE` (at least 30 s for FleetAPI) on their own schedule; local retries keep their backoff (5, 10, 30, 60, then 120 s). |
 | `PW_LOCAL_FIRST` | `no` | v1r, Hybrid | | `yes` sends reserve, mode and grid writes over a confirmed local v1r connection first, even when a hybrid cloud connection exists (see [write path](#post-controlpath)). |
+| `PW_WIFI_V1R_FALLBACK` | `no` | v1r with `PW_WIFI_HOST` | | `yes` makes signed WiFi-v1r the only leader route after the library's LAN failover trips, for reads and for reserve/mode/grid, max backup and islanding writes; there is no legacy WiFi TEDAPI fallback. Independent of `PW_LOCAL_FIRST`. See [write path](#post-controlpath). |
 
 `MQTT_CONTROLS` (below) separately enables control over MQTT.
 
@@ -214,7 +221,7 @@ clients share the proxy's IP.
 
 These proxy variables are accepted (and some echoed in `/stats`) so an existing
 proxy environment starts cleanly, but they change nothing in the server:
-`PW_BROWSER_CACHE` (default `0`), `PW_HTTPS` (`no`; the proxy's `http` is accepted and reads as `no`, since the server always serves plain HTTP), `PW_AUTH_MODE` (`cookie`),
+`PW_BROWSER_CACHE` (default `0`), `PW_AUTH_MODE` (`cookie`),
 `PW_SUPPRESS_NETWORK_ERRORS` (`no`), `PW_NETWORK_ERROR_RATE_LIMIT` (`5`),
 `PW_FAIL_FAST` (`no`) and `PW_HEALTH_CHECK` (`yes`).
 
@@ -250,7 +257,7 @@ dashboards, Telegraf and Home Assistant configurations keep working.
 | GET | `/fans/pw` | | `FANn_actual` / `FANn_target` RPM; Powerwall 3 fans add `FANn_duty` (%) and have a null target. |
 | GET | `/freq` | | Per-Powerwall frequency, voltage and power, island/meter readings and `grid_status` (1 up, 0 down, -1 syncing, `null` unknown). |
 | GET | `/pod` | | Per-Powerwall battery data (`PWn_*`), pack energy, time remaining and reserve. |
-| GET | `/json` | | Power flows, battery level, grid status, reserve, time remaining, pack energy and strings in one object. |
+| GET | `/json` | | Power flows, battery level, grid status, reserve, time remaining, pack energy and strings in one object. `soe`/`soe_raw` are the gateway's raw level; `soe_scaled` is the Tesla App scale, as in `/api/system_status/soe`. |
 | GET | `/battery` | | `{"power"}`: battery power (W). |
 | GET | `/csv` | | Text: `Grid,Home,Solar,Battery,BatteryLevel`. Missing readings are 0. Add `?headers` for a header row. |
 | GET | `/csv/v2` | | Text: adds `GridStatus,Reserve`. Add `?headers` for a header row. |
@@ -334,7 +341,7 @@ for the request format and write path.
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
-| GET | `/control/status` | | `{"enabled": bool, "battery_dispatch": bool}`: whether `PW_CONTROL_SECRET` is set and battery dispatch is available on the default gateway's live v1r connection. Both fields are booleans; no credentials or gateway identifiers are exposed. |
+| GET | `/control/status` | | `{"enabled": bool, "battery_dispatch": bool}`: whether `PW_CONTROL_SECRET` is set, and whether battery dispatch is opted in (`PW_BATTERY_DISPATCH`) and available on the default gateway's live v1r connection. Both fields are booleans; no credentials or gateway identifiers are exposed. |
 | GET | `/control/reserve` | | `{"reserve"}`, as in the proxy. Error when control is off. |
 | GET | `/control/mode` | | `{"mode"}` (`"unknown"` when not known), as in the proxy. |
 | GET | `/control/grid_charging` | | `{"grid_charging": true \| false}`, as in the proxy. |
@@ -342,8 +349,8 @@ for the request format and write path.
 | GET | `/control/max_backup` | | Current backup events (TEDAPI v1r), as in the proxy, cached 30 seconds. With a valid token (the `Authorization` header, preferred, or `?token=`, which can end up in access logs), an expired manual backup event is cancelled, decided on fresh data. |
 | POST | `/control/{path}` | token | Set `reserve`, `mode`, `grid_charging`, `grid_export`, `reserve_hold` or `max_backup`; returns the library result. Also takes the proxy's form-encoded requests (below). |
 | POST | `/control/islanding` | token | Go off grid or reconnect (TEDAPI v1r only). |
-| POST | `/control/dispatch` | token | Timed local battery power setpoint (TEDAPI v1r only). |
-| POST | `/control/resume` | token | Release a local battery dispatch. |
+| POST | `/control/dispatch` | token | Timed local battery power setpoint (TEDAPI v1r only). Off unless `PW_BATTERY_DISPATCH=yes`; **use at your own risk; could void your warranty**. |
+| POST | `/control/resume` | token | Release a local battery dispatch. Works without `PW_BATTERY_DISPATCH`. |
 | GET | `/api/tesla/tariff_rate` | | The site's Tesla tariff from the cloud. Cached 5 minutes; the last good value is served if a refresh fails. |
 | POST | `/api/tesla/time_of_use_settings` | token | Update the Time-of-Use tariff. Body `{"tou_settings": {..., "tariff_content_v2": {...}}}`; only `tou_settings` is sent to Tesla. |
 
@@ -360,7 +367,7 @@ HTTP `200`, with an `{"error": ...}` body when they can't.
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
-| GET | `/api/gateways/` | | Status of every gateway, keyed by id: `gateway` (config without secrets), `data`, `online`, `last_updated`, `error`. `data.connection_mode` is the connection in use (`TEDAPI v1r`, `TEDAPI`, `Local`, `Basic LAN`, `Cloud`, `FleetAPI`), which failover can move off the configured mode. |
+| GET | `/api/gateways/` | | Status of every gateway, keyed by id: `gateway` (config without secrets), `data`, `online`, `data_source`, `local_online`, `last_updated`, `error`. `data.connection_mode` is the connection in use (`TEDAPI v1r`, `TEDAPI`, `Local`, `Basic LAN`, `Cloud`, `FleetAPI`), which failover can move off the configured mode. |
 | GET | `/api/gateways/{gateway_id}` | | That gateway's status. |
 | GET | `/api/gateways/{gateway_id}/vitals` | | That gateway's vitals. |
 | GET | `/api/gateways/{gateway_id}/strings` | | That gateway's strings. |
@@ -417,9 +424,9 @@ Each pushes one JSON message per second.
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
-| GET | `/health` | | `status` (`healthy`, `degraded`, `unhealthy` or `no_gateways`), server version, online/offline counts, per-gateway errors and SolarOnly fallback state. Also `HEAD`. |
+| GET | `/health` | | `status` (`healthy`, `degraded`, `unhealthy` or `no_gateways`), server version, online/offline counts, per-gateway errors, `data_source`/`local_online` and SolarOnly/cloud-read fallback state. Also `HEAD`. |
 | POST | `/health/reset` | token | Clears the SolarOnly fallback state for all gateways. |
-| GET | `/stats` | | Proxy-style server stats: versions, mode (the live connection once polled), request counters, uptime, memory, connection flags, masked `config`, connection health, hybrid cloud link, per-gateway status. |
+| GET | `/stats` | | Proxy-style server stats: versions, mode (the live connection once polled), request counters, uptime, memory, connection flags, masked `config`, connection health, hybrid cloud link, cloud-read fallback state, per-gateway status including `data_source`/`local_online`. |
 | GET | `/api/mqtt/status` | | MQTT enabled/connected state and broker settings (no credentials). |
 
 ### UI pages and static files
@@ -506,26 +513,74 @@ up and a local connection, writes over that local connection first, even when
 a hybrid cloud connection exists. A write that was sent is final: there's no
 second attempt through the cloud, even after a timeout, since it may already
 have been applied. When the LAN is down (the library's LAN failover tripped, or the last poll failed) or there's no local connection, the
-path above applies. Islanding is unaffected.
+path above applies. With `PW_LOCAL_FIRST=yes` alone, islanding is unaffected.
+
+With `PW_WIFI_V1R_FALLBACK=yes`, a gateway with `PW_WIFI_HOST` and an RSA key
+uses signed WiFi-v1r as its only leader transport after the LAN failover trips.
+A failed read is a normal poll failure (backoff, cached data); there is no
+legacy WiFi TEDAPI retry. Before each write, the server makes one read-only
+signed config read over WiFi. If it succeeds, reserve/mode/grid, max backup and
+islanding writes go over signed WiFi-v1r. If it fails, value controls use the
+write path above (cloud, which during a LAN outage may accept a write without
+applying it, #149) and max backup and islanding return `503`. A dispatched write
+is final and never retried.
 
 ### Timed battery dispatch: `POST /control/dispatch` and `POST /control/resume`
 
-MQTT clients can use the same local operations with `MQTT_CONTROLS` bit `32`.
-Home Assistant discovers prepared power/duration inputs and Start/Resume
-buttons. See [MQTT battery dispatch](MQTT.md#battery-dispatch-bit-32) for command
-topics, atomic payloads and the required acknowledgement of dispatch risks.
+> **⚠️ WARNING: USE AT YOUR OWN RISK. IT COULD VOID YOUR WARRANTY.**
+>
+> Battery dispatch takes direct control of your Powerwall's battery through an
+> undocumented Tesla command. It is meant only for people who know what they
+> are doing.
+>
+> **Battery dispatch could void or limit your Tesla Powerwall warranty.** The
+> Powerwall warranty quoted in [pypowerwall#450](https://github.com/jasonacox/pypowerwall/issues/450) gives unlimited
+> cycles only for solar self-consumption, time-based control and backup; any
+> other use is limited to 37.8 MWh of total energy throughput. Check your
+> warranty first.
+>
+> - A **discharge** overrides the backup reserve and the grid export setting.
+>   It can drain the battery below your reserve, leaving you **without backup
+>   power** if the grid goes down, and it can **export to the grid** even with
+>   export set to `pv_only` or `never`, which may conflict with your utility
+>   agreement.
+> - A **charge** can draw power from the grid at your current rate, and may
+>   ignore the grid charging setting (not yet verified).
+> - Behavior during a grid outage, and on firmware we haven't tested, is
+>   unknown, and any Tesla firmware update could change it.
+>
+> **We have no idea whether incorrect use could damage your home, your
+> Powerwall system or the grid.** This software is provided "as is", without
+> warranty of any kind (see the [MIT license](LICENSE)), and is not made or
+> supported by Tesla. Battery dispatch is off unless you set
+> `PW_BATTERY_DISPATCH=yes`. **By setting it, you accept these risks and full
+> responsibility for the results.**
+
+Dispatch is off unless `PW_BATTERY_DISPATCH=yes` (with `PW_CONTROL_SECRET`).
+Without it, `POST /control/dispatch` returns 403 (forms: the proxy's
+`{"error": ...}`), `/control/status` reports `battery_dispatch: false`, and the
+Console hides the panel. `POST /control/resume` works either way, so turning
+the opt-in off never strands a running dispatch.
+
+MQTT clients can use the same local operations with `MQTT_CONTROLS` bit `32`,
+which also needs `PW_BATTERY_DISPATCH=yes`. Home Assistant discovers prepared
+power/duration inputs and Start/Resume buttons. See [MQTT battery
+dispatch](MQTT.md#battery-dispatch-bit-32) for command topics, atomic payloads
+and the required acknowledgement of dispatch risks.
 
 The Console's **Powerwall Control → Battery Dispatch** panel provides charge /
-discharge selection, power in watts, duration in seconds, **Start dispatch**
-and **Resume normal operation**. It appears when control is enabled and the
-default gateway uses local v1r, and uses the shared authorization token. Its
-availability follows `battery_dispatch` from `/control/status`, refreshed as
-live connections change, independently of other gateways' modes in `/stats`. These
-actions are independent of Save. The UI validates power and duration, prevents
-duplicate requests while a command is pending, and reports acknowledgements;
-the power flow shows actual battery power. Before starting a discharge, the
-Console uses the same confirmation dialog as grid-export controls to warn
-about grid export and draining below the backup reserve.
+discharge selection, power in watts, a duration of up to 4 hours, **Start
+dispatch** and **Resume normal operation**. It appears when dispatch is opted
+in and the default gateway uses local v1r, and uses the shared authorization
+token. Its availability follows `battery_dispatch` from `/control/status`,
+refreshed as live connections change, independently of other gateways' modes
+in `/stats`. These actions are independent of Save. The UI validates power and
+duration, prevents duplicate requests while a command is pending, and reports
+acknowledgements with an estimated end time; the power flow shows actual
+battery power. Every dispatch, including 0 W, opens a confirmation with its
+risks. A success needs the method-specific acknowledgement (matching power and
+duration, or `"resume_battery_operation": true`); anything else returns 503
+"not confirmed", since the gateway may still have applied it.
 
 Dispatch takes `{"power_watts": -500, "duration_seconds": 30}` and an
 `Authorization: Bearer <PW_CONTROL_SECRET>` header. Resume takes `{}` with the
@@ -551,20 +606,19 @@ limits apply.
 Success returns `{"power_watts": -500.0, "duration_seconds": 30}` or
 `{"resume_battery_operation": true}`. An acknowledgement confirms acceptance;
 observe the polled `/aggregates` to check battery power. Bad input returns
-400; an unsupported connection, gateway rejection or timeout returns 503.
+400; an unsupported connection, a missing or wrong acknowledgement, or a
+timeout returns 503 (outcome unknown: check battery power before retrying).
 JSON errors use `{"detail": ...}`; forms use the proxy's `{"error": ...}`
 and status 400. Both require `PW_CONTROL_SECRET`; an invalid token returns 401.
 Requires pypowerwall 0.22.0 or later. An older library returns a command failure without
 falling back to cloud.
 
-> **Warning:** A discharge can override the backup reserve and grid-export
-> setting, export electricity to the grid, and drain below the backup reserve.
-> On Powerwall 2 with Backup Gateway 1 (firmware 26.34.0), discharge ran with
-> reserve at 100% and export set to `pv_only` or `never`, exported the excess,
-> and raised `BackfeedLimited` and `BatteryUnexpectedPower` alerts. Do not rely
-> on those settings to prevent export or protect backup energy during dispatch.
-> The Console asks for confirmation before a discharge; API clients must account
-> for this behavior themselves.
+On Powerwall 2 with Backup Gateway 1 (firmware 26.34.0), a discharge ran with
+the reserve at 100% and export set to `pv_only` or `never`, exported the excess,
+and raised `BackfeedLimited` and `BatteryUnexpectedPower` alerts. Don't rely on
+those settings to prevent export or protect backup energy during a dispatch. The
+Console asks for confirmation before every dispatch; API clients must account
+for this behavior themselves.
 
 Observed on Powerwall 3 (firmware 26.26.4, v1r LAN, export `battery_ok`):
 discharge beyond the home load exports to the grid, `0` W holds the battery

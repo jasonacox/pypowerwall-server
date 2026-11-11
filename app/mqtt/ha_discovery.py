@@ -78,6 +78,8 @@ Binary sensor:
 
 Numeric sensors:
     time_remaining — Backup time remaining (h, device_class=duration)
+    alerts         — Active alert count (diagnostic); the alert names are in
+                     its "alerts" attribute (from the {gw}/alerts JSON list)
 
 Controls (MQTT_CONTROLS bitmask + PW_CONTROL_SECRET set, broker-trust;
 only bits in the mask are announced — 1 reserve, 2 mode, 4 grid_charging,
@@ -411,6 +413,8 @@ def build_discovery_payloads(
         icon: Optional[str] = None,
         entity_category: Optional[str] = None,
         device_override: Optional[dict] = None,
+        json_attributes_topic: Optional[str] = None,
+        json_attributes_template: Optional[str] = None,
     ) -> tuple[str, str]:
         """Build a single numeric/text sensor discovery entry."""
         unique_id = f"pypowerwall_{gateway_id}_{uid_suffix}"
@@ -433,6 +437,10 @@ def build_discovery_payloads(
             payload["icon"] = icon
         if entity_category:
             payload["entity_category"] = entity_category
+        if json_attributes_topic:
+            payload["json_attributes_topic"] = json_attributes_topic
+        if json_attributes_template:
+            payload["json_attributes_template"] = json_attributes_template
         return disc_topic, json.dumps(payload)
 
     def binary_sensor(
@@ -797,6 +805,18 @@ def build_discovery_payloads(
             device_class="duration",
             state_class="measurement",
             icon="mdi:timer-outline",
+        ),
+        # --- Active alerts (#178): count as state, list as attribute ---
+        sensor(
+            "alerts", "Active Alerts",
+            f"{data_prefix}/alert_count",
+            unit=None,
+            device_class=None,
+            state_class="measurement",
+            icon="mdi:alert-circle-outline",
+            entity_category="diagnostic",
+            json_attributes_topic=f"{data_prefix}/alerts",
+            json_attributes_template="{{ {'alerts': value_json} | tojson }}",
         ),
     ]
 

@@ -193,6 +193,86 @@ def test_pod_marks_powerwall_expansion_as_attached_to_leader(
     assert response.json()["PW3_attached_to"] == "PW1"
 
 
+@pytest.mark.parametrize(
+    "system_status, tedapi_config",
+    [
+        # "battery_blocks": null, which pypowerwall itself guards with `or []`
+        ({"battery_blocks": [{"PackageSerialNumber": "LEADER"}]},
+         {"battery_blocks": None}),
+        ({"battery_blocks": None}, {"battery_blocks": None}),
+        ({"battery_blocks": None, "nominal_full_pack_energy": 0}, None),
+        # Malformed entries are skipped, not a 500
+        ({"battery_blocks": [None, {"PackageSerialNumber": "LEADER"}]},
+         {"battery_blocks": [None, {"vin": None, "type": "Powerwall3"}]}),
+    ],
+)
+def test_pod_tolerates_null_battery_blocks(
+    client, connected_gateway, system_status, tedapi_config
+):
+    """/pod must not 500 when battery_blocks is null or holds null entries."""
+    connected_gateway.data.system_status = system_status
+    connected_gateway.data.tedapi_config = tedapi_config
+
+    response = client.get("/pod")
+
+    assert response.status_code == 200
+    data = response.json()
+    blocks = (system_status or {}).get("battery_blocks") or []
+    if blocks:
+        # Numbered by position, like the Console labels: a null entry keeps
+        # its slot so later Powerwalls keep their PW numbers
+        leader = next(
+            i for i, b in enumerate(blocks, 1)
+            if isinstance(b, dict) and b.get("PackageSerialNumber") == "LEADER"
+        )
+        pw = f"PW{leader}"
+        assert data[f"{pw}_PackageSerialNumber"] == "LEADER"
+    else:
+        assert not any(key.startswith("PW") for key in data)
+
+
+@pytest.mark.parametrize("endpoint", ["/pod", "/freq", "/pw/battery_blocks"])
+def test_null_system_status_block_entry(client, connected_gateway, endpoint):
+    """A null entry in system_status battery_blocks is skipped everywhere."""
+    connected_gateway.data.system_status = {
+        "battery_blocks": [None, {"PackageSerialNumber": "LEADER"}]
+    }
+    connected_gateway.data.tedapi_config = None
+
+    response = client.get(endpoint)
+
+    assert response.status_code == 200
+
+
+def test_battery_blocks_skips_block_without_serial(client, connected_gateway):
+    """/pw/battery_blocks is keyed by serial: a block without one is skipped."""
+    connected_gateway.data.system_status = {
+        "battery_blocks": [
+            {"nominal_energy_remaining": 1},
+            {"PackageSerialNumber": "", "nominal_energy_remaining": 2},
+            {"PackageSerialNumber": "LEADER", "nominal_energy_remaining": 3},
+        ]
+    }
+    connected_gateway.data.vitals = {}
+
+    response = client.get("/pw/battery_blocks")
+
+    assert response.status_code == 200
+    assert response.json() == {"LEADER": {"nominal_energy_remaining": 3}}
+
+
+@pytest.mark.parametrize("endpoint", ["/pod", "/freq"])
+def test_null_vin_in_tedapi_config(client, connected_gateway, endpoint):
+    """A config battery block with a null vin (or a null block) is skipped."""
+    connected_gateway.data.tedapi_config = {
+        "battery_blocks": [None, {"vin": None, "type": "Powerwall3"}]
+    }
+
+    response = client.get(endpoint)
+
+    assert response.status_code == 200
+
+
 def test_expansion_parent_indexes_ignore_unknown_expansions():
     """Only expansions present in the current system-status snapshot are mapped."""
     system_status = {

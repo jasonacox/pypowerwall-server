@@ -110,10 +110,11 @@ Topic layout
     TEDAPI modes; Basic LAN skips vitals) - absent when no remote meter.
 """
 import asyncio
+import contextvars
 import json
 import logging
 import ssl
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 from app.utils.control import (
     is_error_result,
     is_v1r_gateway,  # noqa: F401
@@ -131,6 +132,21 @@ MAX_CONTROL_PAYLOAD_BYTES = 1024
 MAX_QUEUED_CONTROL_MESSAGES = 100
 CONTROL_COALESCE_WINDOW_S = 0.05
 CONTROL_MAX_BATCH = 100
+
+# Stale retained topics (#101): a gated topic (published only while its value
+# is present) that stops being published while the gateway stays online is
+# cleared from the broker with one empty retained payload, so subscribers stop
+# seeing the last value as live. A topic must be missing from this many
+# consecutive complete publishes first: a single poll that misses a value
+# (e.g. a timed-out fetch) must not blank it for a cycle.
+STALE_TOPIC_CLEAR_POLLS = 3
+
+# Topics sent during the current publish_gateway() call. A context variable,
+# not an attribute, so concurrent publishes for different gateways (separate
+# tasks, separate contexts) can't record into each other's set.
+_published_topics: contextvars.ContextVar[Optional[Set[str]]] = contextvars.ContextVar(
+    "mqtt_published_topics", default=None
+)
 
 
 class MqttPublisher:
@@ -160,6 +176,10 @@ class MqttPublisher:
         # battery; only an explicit dispatch command starts a timed operation.
         # Reset on server restart; a broker reconnect preserves them.
         self._dispatch_parameters: Dict[str, Tuple[float, int]] = {}
+        # Per gateway: retained data topics published by recent publishes,
+        # mapped to how many consecutive complete publishes have missed them
+        # (0 = sent last time). See STALE_TOPIC_CLEAR_POLLS (#101).
+        self._retained_topics: Dict[str, Dict[str, int]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -257,7 +277,7 @@ class MqttPublisher:
         return (
             settings.mqtt_controls,
             _write_path(gateway_manager, gateway_id) is not None,
-            _gateway_is_v1r(gateway_manager, gateway_id),
+            _gateway_can_v1r_write(gateway_manager, gateway_id),
             _gateway_can_dispatch(gateway_manager, gateway_id),
         )
 
@@ -419,6 +439,8 @@ class MqttPublisher:
             self._discovery_sent[gateway_id] = (announced or frozenset()) | signature
             self._discovery_controls_state[gateway_id] = controls_state
 
+        published: Set[str] = set()
+        token = _published_topics.set(published)
         try:
             from app.config import settings  # late import
             prefix = f"{settings.mqtt_topic_prefix}/{gateway_id}"
@@ -634,6 +656,19 @@ class MqttPublisher:
                         retain, qos,
                     )
 
+                # Active gateway alerts (#178): the same list /alerts serves,
+                # sorted and de-duplicated so an unchanged set republishes the
+                # same retained payload. Skipped when alerts weren't fetched
+                # (None), so a failed fetch never reads as "no alerts".
+                if isinstance(data.alerts, list):
+                    alerts = sorted({str(a) for a in data.alerts if a})
+                    await self._safe_publish(
+                        f"{prefix}/alerts", json.dumps(alerts), retain, qos
+                    )
+                    await self._safe_publish(
+                        f"{prefix}/alert_count", str(len(alerts)), retain, qos
+                    )
+
                 # Solar string topics (voltage, current, power per string)
                 if data.strings and isinstance(data.strings, dict):
                     strings_prefix = f"{prefix}/strings"
@@ -831,13 +866,63 @@ class MqttPublisher:
                 retain, qos,
             )
 
+            if retain:
+                # Only a complete publish of an online gateway with data says
+                # which topics are really gone: offline is covered by
+                # availability, and a publish cut short by a broker error saw
+                # only part of the topics.
+                complete = status.online and data is not None and self._connected
+                await self._clear_stale_retained(
+                    gateway_id, prefix, published, qos, complete
+                )
+
         except Exception as e:
             # Catch-all: MQTT must never raise into the poll loop
             logger.debug(f"MQTT publish_gateway error for {gateway_id}: {e}")
+        finally:
+            _published_topics.reset(token)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    async def _clear_stale_retained(
+        self, gateway_id: str, prefix: str, published: Set[str], qos: int,
+        complete: bool,
+    ) -> None:
+        """Clear retained data topics this gateway no longer publishes (#101).
+
+        Every retained topic under the gateway's prefix is tracked. One missed
+        by STALE_TOPIC_CLEAR_POLLS consecutive complete publishes gets a
+        single empty retained payload, which deletes it from the broker, and
+        is then forgotten until it is published again. An incomplete publish
+        only records the topics it sent. Tracking is in memory: topics left
+        by a previous server run are not cleared.
+
+        The counters are updated before the first await, so a publish task
+        cancelled mid-clear (latest-wins) never leaves them half-updated; a
+        topic whose clear did not go out stays due and is retried next time.
+        """
+        topic_root = f"{prefix}/"
+        current = {t for t in published if t.startswith(topic_root)}
+        previous = self._retained_topics.get(gateway_id, {})
+        if not complete:
+            self._retained_topics[gateway_id] = {**previous, **dict.fromkeys(current, 0)}
+            return
+        tracked = dict.fromkeys(current, 0)
+        stale = []
+        for topic, misses in previous.items():
+            if topic not in current:
+                tracked[topic] = misses + 1
+                if tracked[topic] >= STALE_TOPIC_CLEAR_POLLS:
+                    stale.append(topic)
+        self._retained_topics[gateway_id] = tracked
+        for topic in stale:
+            await self._safe_publish(topic, "", True, qos)
+            if not self._connected:
+                return  # broker error: the rest stay due for next time
+            tracked.pop(topic, None)
+            logger.info("MQTT: cleared retained topic %s (no longer published)", topic)
 
     async def _safe_publish(
         self, topic: str, payload: str, retain: bool, qos: int
@@ -851,6 +936,10 @@ class MqttPublisher:
             logger.debug(f"MQTT publish failed on {topic}: {e}")
             # Signal the connection loop to reconnect
             self._connected = False
+            return
+        published = _published_topics.get()
+        if published is not None and retain:
+            published.add(topic)
 
     async def _connection_loop(self) -> None:
         """Maintain a persistent MQTT connection with exponential-backoff reconnect.
@@ -1185,12 +1274,20 @@ class MqttPublisher:
                         "with confirm:true"
                     )
                     return
-                if not _gateway_is_v1r(gateway_manager, gateway_id):
+                if not _gateway_can_v1r_write(gateway_manager, gateway_id):
                     logger.warning(f"{label} rejected: no confirmed v1r transport")
                     return
                 method = "go_off_grid" if action == "off_grid" else "reconnect_grid"
                 kwargs = {"confirm": True} if action == "off_grid" else {}
                 try:
+                    # Check safety before awaiting the probe; local_control()
+                    # checks again immediately before dispatch.
+                    gateway_manager.check_islanding_safety(gateway_id)
+                    if not await gateway_manager.wifi_v1r_write_allowed(gateway_id):
+                        logger.warning(
+                            f"{label} rejected: WiFi v1r unavailable for islanding"
+                        )
+                        return
                     # Local v1r only, never the shared cloud connection, same
                     # 10 s timeout as HTTP, never retried
                     result = await gateway_manager.local_control(
@@ -1199,7 +1296,12 @@ class MqttPublisher:
                 except Exception as e:  # cooldown or a command in progress
                     logger.warning(f"{label} action={action} failed: {e}")
                     return
-                audit = f"action={action} via local v1r"
+                route = (
+                    "local v1r (wifi)"
+                    if gateway_manager._is_lan_failed(gateway_id)
+                    else "local v1r"
+                )
+                audit = f"action={action} via {route}"
                 ok = _island_ack_ok(result)
             else:
                 if control == "reserve_hold":
@@ -1430,9 +1532,30 @@ def _write_path(gateway_manager, gateway_id: str) -> Optional[str]:
         and gateway_manager._cloud_control_gateway_id == gateway_id
     ):
         return "hybrid cloud"
-    if _gateway_is_v1r(gateway_manager, gateway_id):
+    if _gateway_can_v1r_write(gateway_manager, gateway_id):
         return "local v1r"
     return None
+
+
+def _gateway_can_v1r_write(gateway_manager, gateway_id: str) -> bool:
+    """True when the gateway can write over v1r or the opt-in WiFi-v1r path.
+
+    The cached-status check is preferred. When status is unknown but the
+    gateway has the opt-in signed WiFi-v1r transport configured, controls
+    stay announced; the write route still probes before dispatching.
+    """
+    if _gateway_is_v1r(gateway_manager, gateway_id):
+        return True
+    from app.config import settings
+
+    if not settings.wifi_v1r_fallback or not settings.failover:
+        return False
+    connection = gateway_manager.connections.get(gateway_id)
+    tedapi = getattr(connection, "tedapi", None)
+    return bool(
+        getattr(tedapi, "v1r", False)
+        and getattr(tedapi, "wifi_v1r_transport", None) is not None
+    )
 
 
 def _gateway_is_v1r(gateway_manager, gateway_id: str) -> bool:

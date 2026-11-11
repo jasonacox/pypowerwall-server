@@ -55,6 +55,8 @@ VOLUME /data
 
 # Expose port
 EXPOSE 8675
+# HTTPS when PW_HTTPS=yes (PW_HTTPS_PORT)
+EXPOSE 8775
 
 # Health check - use /health which always returns HTTP 200 (gateway status is in
 # the JSON body). This makes it safe as a process-level liveness check.

@@ -18,7 +18,7 @@ The **Energy** panel toggles between **Energy Summary** (current kW totals) and 
 
 <img alt="PyPowerwall Server Console - Trend" src="https://github.com/user-attachments/assets/3fac475e-aebd-46a8-8c2d-8c4d294b2360" />
 
-The **Control** panel allows you to manage the Powerwall's operation mode, reserve percentage, grid charging (with eligibility warnings) and grid export (with PTO confirmation). Requires setting the `PW_CONTROL_SECRET` environment variable.
+The **Control** panel allows you to manage the Powerwall's operation mode, reserve percentage, grid charging (with eligibility warnings) and grid export (with PTO confirmation). Requires setting the `PW_CONTROL_SECRET` environment variable. Battery dispatch is a separate opt-in (`PW_BATTERY_DISPATCH=yes`): **use at your own risk; it could void your warranty**. Read the [warning](#battery-dispatch-opt-in) first.
 
 <img alt="PyPowerwall Server Console - Control" src="https://github.com/user-attachments/assets/2f33dc25-8f9c-412c-893f-087d6ba9c57d" />
 
@@ -62,7 +62,9 @@ Not sure which mode to run? Pick the row that matches your setup — then follow
 | **Cloud** | No local network access to the system | `PW_EMAIL` + `PW_AUTH_PATH` (one-time `python -m pypowerwall setup`) | Standard cloud metrics | Yes |
 | **FleetAPI** | Remote access via Tesla's official Fleet API | `PW_AUTH_PATH` holding `.pypowerwall.fleetapi` (one-time `python -m pypowerwall setup -fleetapi`) with no `PW_HOST`, or a `PW_GATEWAYS` (or `gateways.yaml`) entry with `email` + `authpath` + `fleetapi: true` | Standard cloud metrics | Yes |
 
-Local v1r and Basic LAN modes can perform supported control operations when `PW_CONTROL_SECRET` is set. Without cloud credentials, `/control/reserve`, `/control/mode`, and `/control/grid_charging` use the gateway's local connection. With `PW_EMAIL` and `PW_AUTH_PATH` configured (hybrid mode), those operations use the cloud connection while monitoring remains local. Set `PW_LOCAL_FIRST=yes` to try a confirmed local v1r transport first while the LAN is up and a local connection exists; when nothing local can be attempted, the write runs through the normal dispatch as before (covers the LAN-up / internet-down case). On some older Powerwall 3 firmware (26.10.4), the gateway stored local config writes without acting on them right away (jasonacox/pypowerwall#321); on 26.18.1 it acted within about 30–45 s. `POST /control/islanding` is different: it is available only in TEDAPI v1r mode, requires a registered RSA key, always uses the local gateway connection, and does not fall back to cloud control.
+Local v1r and Basic LAN modes can perform supported control operations when `PW_CONTROL_SECRET` is set. Without cloud credentials, `/control/reserve`, `/control/mode`, and `/control/grid_charging` use the gateway's local connection. With `PW_EMAIL` and `PW_AUTH_PATH` configured (hybrid mode), those operations use the cloud connection while monitoring remains local. Set `PW_LOCAL_FIRST=yes` to try a confirmed local v1r transport first while the LAN is up and a local connection exists; when nothing local can be attempted, the write runs through the normal dispatch as before (covers the LAN-up / internet-down case). `PW_WIFI_V1R_FALLBACK=yes` (needs `PW_WIFI_HOST` and an RSA key) makes signed WiFi-v1r the only leader route after the library's LAN failover trips: reads and reserve/mode/grid, max backup and islanding writes all use it, with no fallback to legacy WiFi TEDAPI. Each write first runs a read-only probe; if it fails, value controls use the historical path (cloud, which during a LAN outage may accept a write without applying it, #149) and max backup/islanding return `503`. On some older Powerwall 3 firmware (26.10.4), the gateway stored local config writes without acting on them right away (jasonacox/pypowerwall#321); on 26.18.1 it acted within about 30–45 s. `POST /control/islanding` is different: it is available only in TEDAPI v1r mode, requires a registered RSA key, always uses the local gateway connection, and does not fall back to cloud control.
+
+`PW_CLOUD_READ_FALLBACK=yes` keeps data flowing when the local gateway is unreachable: after three consecutive failed local polls, the server reads the Cloud-Mode data set from the bound Cloud/FleetAPI connection (needs `PW_EMAIL` and cloud auth, an unambiguous site such as `PW_SITEID` on a multi-site account, and `PW_FAILOVER=yes`). That data is marked `data_source=cloud`, `local_online=false`. It never writes.
 
 #### TEDAPI Mode (Local Access)
 ```bash
@@ -483,6 +485,33 @@ gateways:
 - `rsa_key_path`: RSA-4096 private key PEM path for TEDAPI v1r LAN authentication (requires `gw_pwd` — see above)
 - `wifi_host`: the gateway's WiFi access point for TEDAPI v1r (normally `192.168.91.1`, or the address that forwards to it, e.g. behind a travel router; not set by default). Follower Powerwalls are queried over it
 
+### HTTPS (optional)
+
+Set `PW_HTTPS=yes` to also serve HTTPS on port **8775** (`PW_HTTPS_PORT`). HTTP
+on 8675 keeps working, so Powerwall-Dashboard, Home Assistant, scripts and
+health checks need no changes.
+
+```bash
+docker run -d -p 8675:8675 -p 8775:8775 -e PW_HTTPS=yes ... jasonacox/pypowerwall-server
+```
+
+Then open `https://<server>:8775/console`. By default the server generates a
+self-signed certificate once, unique to this install, and keeps it in
+`/data/tls`. Mount `/data` so it survives container updates, or the browser asks
+again. Browsers warn about a self-signed certificate until you accept or trust
+it. To use your own certificate (for example from your home CA or Let's
+Encrypt), set `PW_HTTPS_CERT` and `PW_HTTPS_KEY` to the paths of its PEM
+certificate and unencrypted key files. Over HTTPS the power-flow page's cookies are
+`SameSite=None; Secure`, so it works inside an HTTPS iframe such as a Home
+Assistant dashboard.
+
+HTTPS uses `PW_PORT` and `PW_BIND_ADDRESS`, not uvicorn's own options. If you
+start uvicorn yourself with `--port` or `--host`, set `PW_PORT` and
+`PW_BIND_ADDRESS` to match, so the listeners can't collide and a loopback-only
+setup stays loopback-only (the Docker image and the `pypowerwall-server` command
+already match). For access from outside your network, a reverse proxy with a
+real certificate (below) is still the better choice.
+
 ### Reverse Proxy / HTTPS Proxy
 
 You can serve pypowerwall-server from a sub-path alongside other services (e.g. Grafana on `/`) using `PROXY_BASE_URL`. This is the recommended setup for HTTPS via nginx.
@@ -541,7 +570,7 @@ server {
 
 | Browser URL | Forwarded to pypowerwall as |
 |---|---|
-| `https://lab.lan/pypowerwall/` | `GET /` — Power Flow animation |
+| `https://lab.lan/pypowerwall/` | `GET /` — Power Flow animation in an iframe, else redirects to the console |
 | `https://lab.lan/pypowerwall/console` | `GET /console` — Management console |
 | `https://lab.lan/pypowerwall/api/...` | `GET /api/...` — API endpoints |
 | `https://lab.lan/pypowerwall/static/...` | `GET /static/...` — Static assets |
@@ -576,7 +605,10 @@ The default budget (1000 requests / 60s per IP) is set well above a normal dashb
 
 ## Console
 
-The management console is at `/console` (the Power Flow animation is at `/`).
+The management console is at `/console`, and opening the server's root `/` in a
+browser also lands there. `/` serves the Power Flow animation for embedding
+in an iframe (for example `/?style=clear`, as the Console's Power Flow card
+does); see `/example.html` for a working embed example.
 The **History** link in the console header (and on the Daily Energy card)
 opens the History page at `/history` (see **History page** under Environment Variables).
 
@@ -861,26 +893,57 @@ call, plus separate `POST /control/grid_charging {"value": true/false}` and
 `POST /control/grid_export {"value": "battery_ok"|"pv_only"|"never"}` calls when
 grid charging or export changed. Controls the default gateway.
 
-**Battery Dispatch** appears in the Control card when the default gateway uses
-local v1r. Choose **Charge** or **Discharge**, enter power in watts and a duration
-from 1 to 86400 whole seconds, then select **Start dispatch**. Defaults are
-500 W for 30 seconds. **Resume normal operation** releases a dispatch early;
-these actions are independent of Save. Starting a discharge opens a confirmation
-warning that it can export to the grid and drain below the backup reserve.
-Zero watts requests no battery power. Both actions use the same control token,
-disable while confirmation or a request is pending, and report whether the
-request was acknowledged. Check the power flow for actual power. The gateway
-returns to its configured mode when the duration ends. Requires pypowerwall
-0.22.0 or later.
+#### Battery Dispatch (opt-in)
 
-> **Warning:** A discharge can override the backup reserve and grid-export
-> setting, export electricity to the grid, and drain below the backup reserve.
-> On Powerwall 2 with Backup Gateway 1 (firmware 26.34.0), discharge ran with
-> reserve at 100% and export set to `pv_only` or `never`, exported the excess,
-> and raised `BackfeedLimited` and `BatteryUnexpectedPower` alerts. Do not rely
-> on those settings to prevent export or protect backup energy during dispatch.
-> The Console asks for confirmation before a discharge; API clients must account
-> for this behavior themselves.
+> **⚠️ WARNING: USE AT YOUR OWN RISK. IT COULD VOID YOUR WARRANTY.**
+>
+> Battery dispatch takes direct control of your Powerwall's battery through an
+> undocumented Tesla command. It is meant only for people who know what they
+> are doing.
+>
+> **Battery dispatch could void or limit your Tesla Powerwall warranty.** The
+> Powerwall warranty quoted in [pypowerwall#450](https://github.com/jasonacox/pypowerwall/issues/450) gives unlimited
+> cycles only for solar self-consumption, time-based control and backup; any
+> other use is limited to 37.8 MWh of total energy throughput. Check your
+> warranty first.
+>
+> - A **discharge** overrides the backup reserve and the grid export setting.
+>   It can drain the battery below your reserve, leaving you **without backup
+>   power** if the grid goes down, and it can **export to the grid** even with
+>   export set to `pv_only` or `never`, which may conflict with your utility
+>   agreement.
+> - A **charge** can draw power from the grid at your current rate, and may
+>   ignore the grid charging setting (not yet verified).
+> - Behavior during a grid outage, and on firmware we haven't tested, is
+>   unknown, and any Tesla firmware update could change it.
+>
+> **We have no idea whether incorrect use could damage your home, your
+> Powerwall system or the grid.** This software is provided "as is", without
+> warranty of any kind (see the [MIT license](LICENSE)), and is not made or
+> supported by Tesla. Battery dispatch is off unless you set
+> `PW_BATTERY_DISPATCH=yes`. **By setting it, you accept these risks and full
+> responsibility for the results.**
+
+**Battery Dispatch** appears in the Control card only when you set
+`PW_BATTERY_DISPATCH=yes` (with `PW_CONTROL_SECRET`) and the default gateway
+uses local v1r. Without the opt-in the panel stays hidden and
+`POST /control/dispatch` returns 403. Choose **Charge** or **Discharge**, enter
+power in watts and a duration from 1 to 14400 whole seconds (4 hours; the API
+allows up to 86400), then select **Start dispatch**. Defaults are 500 W for 30
+seconds. Every dispatch, including 0 W, opens a confirmation with its risks, and
+the result shows its estimated end time. **Resume normal
+operation** releases a dispatch early, and `POST /control/resume` works even
+without the opt-in, so turning it off never strands a running dispatch. These
+actions are independent of Save and use the same control token. Check the power
+flow for actual power. The gateway returns to its configured mode when the
+duration ends.
+
+On Powerwall 2 with Backup Gateway 1 (firmware 26.34.0), a discharge ran with
+the reserve at 100% and export set to `pv_only` or `never`, exported the excess,
+and raised `BackfeedLimited` and `BatteryUnexpectedPower` alerts. Don't rely on
+those settings to prevent export or protect backup energy during a dispatch. The
+Console asks for confirmation before every dispatch; API clients must account
+for this behavior themselves.
 
 Observed on Powerwall 3 (firmware 26.26.4, v1r LAN, export `battery_ok`):
 discharge beyond the home load exports to the grid, `0` W holds the battery

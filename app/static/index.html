@@ -457,6 +457,11 @@
             font-size: 0.85em;
         }
         
+        .alert-item > span:last-child {
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
         .alert-item.notice {
             border-left: 3px solid #10b981;
         }
@@ -617,7 +622,7 @@
            Grid spans the full width below them. */
         .control-section-columns {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
             gap: 16px;
             margin-bottom: 16px;
         }
@@ -634,6 +639,17 @@
         }
         #control-dispatch-section {
             margin-bottom: 16px;
+        }
+        .control-dispatch-caution {
+            margin-bottom: 12px;
+            font-size: 0.85em;
+            color: var(--text-primary);
+        }
+        .control-dispatch-caution > svg {
+            flex: none;
+            width: 16px;
+            height: 16px;
+            color: var(--accent-yellow);
         }
         .control-dispatch-actions {
             display: flex;
@@ -665,6 +681,9 @@
             text-align: left;
             cursor: pointer;
             font-family: inherit;
+        }
+        .control-section.collapsed .control-section-toggle {
+            margin-bottom: 0;
         }
         .control-section-toggle:hover {
             color: var(--text-primary);
@@ -750,6 +769,7 @@
         }
         .control-reserve-row input[type="range"] {
             flex: 1;
+            min-width: 0;
             accent-color: var(--accent-green);
         }
         .control-reserve-row input[type="number"] {
@@ -1049,6 +1069,7 @@
             font-weight: 600;
         }
         .confirm-dialog-body {
+            white-space: pre-line;  /* paragraphs in info text */
             font-size: 0.92em;
             color: var(--text-secondary);
             line-height: 1.5;
@@ -1555,6 +1576,24 @@
             }
         }
 
+        /* Compact the seven-column daily table before it can overflow the
+           card. The card keeps its width and follows its content height. */
+        @media (max-width: 380px) {
+            .daily-table {
+                width: 100%;
+                table-layout: fixed;
+                font-size: 10px;
+            }
+            .daily-table th,
+            .daily-table td {
+                padding: 3px 2px;
+            }
+            .daily-table th:first-child,
+            .daily-table td:first-child {
+                width: 18%;
+            }
+        }
+
         /* When Solar Strings is hidden, Alerts + System Health share the row.
            Desktop only: at 900px and below every card spans the full width.
            NOTE: do not reuse the .no-strings class name here — that rule
@@ -1613,12 +1652,12 @@
             color: var(--text-secondary);
             text-transform: uppercase;
             letter-spacing: 0.06em;
-            border-top: 1px solid var(--border);
+            box-shadow: inset 0 1px 0 var(--border-color);
             margin-top: 8px;
             padding: 6px 0 3px 0;
         }
         .gateway-section-header:first-child {
-            border-top: none;
+            box-shadow: none;
             margin-top: 0;
             padding-top: 0;
         }
@@ -1653,7 +1692,6 @@
             <nav class="header-links" aria-label="Pages">
                 <a href="{PROXY_BASE}/console" aria-current="page">Console</a>
                 <a href="{PROXY_BASE}/history">History</a>
-                <a href="{PROXY_BASE}/">Power Flow</a>
                 <a href="{PROXY_BASE}/docs">API Docs</a>
                 <a href="{PROXY_BASE}/api/gateways">Gateways API</a>
                 <a href="https://github.com/jasonacox/pypowerwall-server" target="_blank" rel="noopener">GitHub</a>
@@ -1996,6 +2034,11 @@
                 <section class="control-section" id="control-dispatch-section" aria-labelledby="control-dispatch-title" style="display:none">
                     <div class="control-section-title" id="control-dispatch-title">Battery Dispatch</div>
                     <form class="control-section-body" id="control-dispatch-form" novalidate>
+                        <div class="control-label-row control-dispatch-caution" id="control-dispatch-caution">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                            <span>Takes direct control of your Powerwall and could void your warranty.</span>
+                            <button type="button" class="control-btn control-icon-btn control-info-btn" id="control-dispatch-info" title="About battery dispatch" aria-label="About battery dispatch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></button>
+                        </div>
                         <div class="control-section-row">
                             <div class="control-field">
                                 <div class="control-label" id="control-dispatch-direction-label">Direction</div>
@@ -2015,12 +2058,11 @@
                                 <input type="number" id="control-dispatch-power" min="0" step="any" value="500" inputmode="decimal" required disabled>
                             </div>
                             <div class="control-field">
-                                <label class="control-label" for="control-dispatch-duration">Duration (seconds)</label>
-                                <input type="number" id="control-dispatch-duration" min="1" max="86400" step="1" value="30" inputmode="numeric" required disabled>
+                                <label class="control-label" for="control-dispatch-duration">Duration (seconds, up to 4 hours)</label>
+                                <input type="number" id="control-dispatch-duration" min="1" max="14400" step="1" value="30" inputmode="numeric" required disabled>
                             </div>
                         </div>
-                        <p class="control-hint">Returns to your configured mode when the duration ends. Set 0 W to request no battery power. A full battery may not charge.</p>
-                        <p class="control-hint">Warning: discharge can export to the grid despite your Grid Export setting and drain below your Backup Reserve. You must confirm before starting a discharge.</p>
+                        <p class="control-hint">Note: The Powerwall returns to its operating mode when the duration ends.</p>
                         <div class="control-dispatch-actions">
                             <button type="submit" class="control-btn primary" id="control-dispatch-start" disabled>Start dispatch</button>
                             <button type="button" class="control-btn" id="control-dispatch-resume" disabled>Resume normal operation</button>
@@ -2394,6 +2436,14 @@
             return days ? `${days} day${days === 1 ? '' : 's'}, ${hms}` : hms;
         }
 
+        // Text for innerHTML: server and config strings (names, hosts, errors,
+        // alerts) must never be parsed as markup. null/undefined -> ''.
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+            })[c]);
+        }
+
         function formatPower(watts) {
             const kw = watts / 1000;
             return kw.toFixed(2);
@@ -2510,7 +2560,7 @@
                 return { alertText, type, icon };
             }).sort((a, b) => priority[a.type] - priority[b.type]);
             return sorted.slice(0, 10).map(({ alertText, type, icon }) =>
-                `<div class="alert-item ${type}"><span class="alert-icon">${icon}</span><span>${alertText}</span></div>`
+                `<div class="alert-item ${type}"><span class="alert-icon">${icon}</span><span>${escapeHtml(alertText)}</span></div>`
             ).join('') || noHtml;
         }
 
@@ -2531,7 +2581,7 @@
                     const byGateway = await response.json();
                     let html = '';
                     for (const [gwId, alerts] of Object.entries(byGateway)) {
-                        html += `<div class="gateway-section-header">${gatewayMeta[gwId]?.name || gwId}</div>`;
+                        html += `<div class="gateway-section-header">${escapeHtml(gatewayMeta[gwId]?.name || gwId)}</div>`;
                         html += formatAlerts(alerts);
                     }
                     container.innerHTML = html || '<div class="no-alerts"><span class="icon">✅</span>No active alerts</div>';
@@ -2561,10 +2611,10 @@
                 const power = data.Power || data.power || (voltage * current);
                 html += `<div class="string-item ${connected ? '' : 'disconnected'}">
                             <div class="string-icon ${connected ? 'connected' : 'disconnected'}">${connected ? sunIcon : moonIcon}</div>
-                            <span class="string-name">${name}</span>
-                            <span class="string-value voltage">${typeof voltage === 'number' ? voltage.toFixed(1) : voltage}V</span>
-                            <span class="string-value current">${typeof current === 'number' ? current.toFixed(2) : current}A</span>
-                            <span class="string-value power">${typeof power === 'number' ? power.toFixed(0) : power}W</span>
+                            <span class="string-name">${escapeHtml(name)}</span>
+                            <span class="string-value voltage">${typeof voltage === 'number' ? voltage.toFixed(1) : escapeHtml(voltage)}V</span>
+                            <span class="string-value current">${typeof current === 'number' ? current.toFixed(2) : escapeHtml(current)}A</span>
+                            <span class="string-value power">${typeof power === 'number' ? power.toFixed(0) : escapeHtml(power)}W</span>
                         </div>`;
             }
             return count ? { html, count } : { html: emptyHtml, count: 0 };
@@ -2594,7 +2644,7 @@
                     for (const [gwId, strings] of Object.entries(byGateway)) {
                         const part = formatStrings(strings);
                         if (part.count > 0) hasData = true;
-                        html += `<div class="gateway-section-header">${gatewayMeta[gwId]?.name || gwId}</div>`;
+                        html += `<div class="gateway-section-header">${escapeHtml(gatewayMeta[gwId]?.name || gwId)}</div>`;
                         html += part.html;
                     }
                     container.innerHTML = html || '<div class="no-strings">No string data available</div>';
@@ -2680,7 +2730,7 @@
                 const isMulti = Object.keys(gatewayMeta).length > 1;
 
                 for (const gwId of gwIds) {
-                    if (isMulti) html += `<div class="gateway-section-header">${gatewayMeta[gwId]?.name || gwId}</div>`;
+                    if (isMulti) html += `<div class="gateway-section-header">${escapeHtml(gatewayMeta[gwId]?.name || gwId)}</div>`;
                     const t = today.gateways[gwId] || {};
                     html += `<div class="daily-grid">
                         <div class="health-item cat-solar"><div class="health-label">Solar Today</div><div class="health-value">${fmt(t.solar_kwh, 2)} kWh</div></div>
@@ -2703,7 +2753,7 @@
                         </tr></thead><tbody>`;
                         for (const [day, gws] of rows) {
                             const r = gws[gwId];
-                            html += `<tr${day === todayKey ? ' class="today"' : ''}><td>${day}</td>
+                            html += `<tr${day === todayKey ? ' class="today"' : ''}><td>${escapeHtml(day)}</td>
                                 <td>${fmt(r.solar_kwh)}</td><td>${fmt(r.home_kwh)}</td>
                                 <td>${fmt(r.battery_charge_kwh)}</td><td>${fmt(r.battery_discharge_kwh)}</td>
                                 <td>${fmt(r.grid_import_kwh)}</td><td>${fmt(r.grid_export_kwh)}</td></tr>`;
@@ -3195,10 +3245,10 @@
             if (temps.overTempEvents > 0) {
                 const warning = `${temps.overTempEvents} over-temperature ` +
                     `event${temps.overTempEvents === 1 ? '' : 's'}`;
-                card += `<div class="pw-detail-warn">⚠ ${warning}</div>`;
+                card += `<div class="pw-detail-warn">⚠ ${escapeHtml(warning)}</div>`;
                 summary += `. Warning: ${warning}`;
             }
-            return `<td><span class="pw-detail" tabindex="0" aria-label="${summary}">` +
+            return `<td><span class="pw-detail" tabindex="0" aria-label="${escapeHtml(summary)}">` +
                 `${headline.toFixed(1)} °C<span class="pw-detail-card" aria-hidden="true">${card}</span></span></td>`;
         }
 
@@ -3338,7 +3388,7 @@
                 : 'powerwall-name';
             const name = isExpansion ? 'Expansion' : displayName;
 
-            return `<tr${rowClass}><td class="${nameClass}">${name}</td>` +
+            return `<tr${rowClass}><td class="${nameClass}">${escapeHtml(name)}</td>` +
                 `<td class="powerwall-model">${model}</td>` +
                 `<td>${capacityKwh} kWh <span class="${capacityClass}">(${capacityPct}%)</span></td>` +
                 `<td>${voltage} V</td>` +
@@ -3606,7 +3656,7 @@
                     const gwName = status.gateway?.name || gatewayMeta[gwId]?.name || gwId;
                     const sysStatus = status.data.system_status || {};
                     const blocks = sysStatus.battery_blocks || [];
-                    html += `<div class="gateway-section-header">${gwName}</div>`;
+                    html += `<div class="gateway-section-header">${escapeHtml(gwName)}</div>`;
                     if (!blocks.length) { html += '<div class="no-strings">No Powerwall data</div>'; continue; }
                     // Battery table (same columns as single-gateway view)
                     const rows = arrangePowerwallRows(
@@ -3698,13 +3748,13 @@
                     html += `
                         <div class="gateway-item ${isOnline ? 'online' : 'offline'}">
                             <div class="gateway-info">
-                                <div class="gateway-name">${gw.name || id}</div>
-                                <div class="gateway-host">${hostInfo}</div>
+                                <div class="gateway-name">${escapeHtml(gw.name || id)}</div>
+                                <div class="gateway-host">${escapeHtml(hostInfo)}</div>
                                 <div class="gateway-details">
-                                    <span class="gateway-mode">${mode}</span>
-                                    ${isOnline ? `<span class="gateway-firmware">Firmware: ${firmwareVersion}</span>` : ''}
+                                    <span class="gateway-mode">${escapeHtml(mode)}</span>
+                                    ${isOnline ? `<span class="gateway-firmware">Firmware: ${escapeHtml(firmwareVersion)}</span>` : ''}
                                 </div>
-                                ${status.error ? `<div class="gateway-error">${status.error}</div>` : ''}
+                                ${status.error ? `<div class="gateway-error">${escapeHtml(status.error)}</div>` : ''}
                             </div>
                             <div class="gateway-status">
                                 <div class="gateway-status-dot ${isOnline ? 'online' : 'offline'}"></div>
@@ -3972,6 +4022,10 @@
         const GRID_CHARGE_INFO = 'Only enable grid charging if your utility rate plan and local rules allow it. If you claim the U.S. federal Investment Tax Credit, verify how grid charging affects it (see the README). Rules differ by country and utility — you are responsible for complying with them; pypowerwall-server does not determine or enforce regulatory compliance.';
         const MODE_INFO = 'Self-Consumption uses solar first, the battery next, and the grid only as a last resort. Backup keeps the battery topped up toward your reserve level to be ready for outages. Time-Based (autonomous) shifts battery usage automatically to your utility\'s rate schedule to reduce cost.';
         const RESERVE_INFO = 'Backup Reserve is the percentage of battery capacity held back for outages. Capacity above this level is available for daily self-consumption or export, depending on your Mode and Grid Export settings.';
+        const DISPATCH_INFO = 'Use at your own risk. Battery dispatch takes direct control of your Powerwall\'s battery.\n\n'
+            + 'It could void or limit your Tesla warranty. Check your warranty terms before using it.\n\n'
+            + 'A discharge can export to the grid even when Grid Export is set to Solar or Never, and can drain the battery below your Backup Reserve. A charge can draw from the grid and may ignore Grid Charging. 0 W holds the battery idle, so your home may draw from the grid.\n\n'
+            + 'Behavior during a grid outage is untested. We don\'t know what incorrect use could do to your home, your Powerwall system or the grid.';
         const TOKEN_INFO = 'This is the PW_CONTROL_SECRET value set on the server. Paste it here to authorize changes to Mode, Backup Reserve, Battery Dispatch, Grid Charging, Grid Export and Grid Islanding. Check "Remember" to store it in this browser for next time.';
 
         // Styled confirmation modal (native <dialog>) replacing window.confirm.
@@ -4651,6 +4705,10 @@
             const gridExportInfo = document.getElementById('control-grid-export-info');
             if (gridExportInfo) gridExportInfo.addEventListener('click', () => {
                 confirmDialog({ title: 'Grid export eligibility (PTO)', body: PTO_INFO, confirmLabel: 'Got it', danger: false });
+            });
+            const dispatchInfo = document.getElementById('control-dispatch-info');
+            if (dispatchInfo) dispatchInfo.addEventListener('click', () => {
+                confirmDialog({ title: 'Battery dispatch', body: DISPATCH_INFO, confirmLabel: 'Got it', danger: false });
             });
             const tokenInfo = document.getElementById('control-token-info');
             if (tokenInfo) tokenInfo.addEventListener('click', () => {
