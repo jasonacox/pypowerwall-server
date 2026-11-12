@@ -166,6 +166,52 @@ def test_pod_endpoint(client, connected_gateway):
     assert any(key.startswith("PW1_POD_") for key in data.keys())
 
 
+_POD_FLAGS = (
+    "POD_ActiveHeating", "POD_ChargeComplete", "POD_ChargeRequest",
+    "POD_DischargeComplete", "POD_PermanentlyFaulted",
+    "POD_PersistentlyFaulted", "POD_enable_line",
+)
+
+
+def test_pod_status_flags_null_when_unavailable(client, connected_gateway):
+    """POD status flags stay null when vitals have no value, ints otherwise (#179)."""
+    connected_gateway.data.system_status = {
+        "battery_blocks": [
+            {"PackageSerialNumber": "TEDAPI1"},
+            {"PackageSerialNumber": "LOCAL2"},
+        ]
+    }
+    connected_gateway.data.vitals = {
+        # TEDAPI vitals: no source for the flags; serial only in the key
+        "TEPOD--1707000-11-L--TEDAPI1": {f: None for f in _POD_FLAGS},
+        # Local vitals: real booleans, one key missing
+        "TEPOD--2": {
+            "serialNumber": "LOCAL2",
+            "POD_ActiveHeating": False,
+            "POD_ChargeComplete": True,
+            "POD_ChargeRequest": 0,
+            "POD_DischargeComplete": 1,
+            "POD_PermanentlyFaulted": False,
+            "POD_PersistentlyFaulted": False,
+        },
+    }
+
+    response = client.get("/pod")
+
+    assert response.status_code == 200
+    data = response.json()
+    for flag in _POD_FLAGS:
+        assert f"PW1_{flag}" in data
+        assert data[f"PW1_{flag}"] is None, flag
+    assert data["PW2_POD_ActiveHeating"] == 0
+    assert data["PW2_POD_ChargeComplete"] == 1
+    assert data["PW2_POD_ChargeRequest"] == 0
+    assert data["PW2_POD_DischargeComplete"] == 1
+    assert data["PW2_POD_PermanentlyFaulted"] == 0
+    assert data["PW2_POD_PersistentlyFaulted"] == 0
+    assert data["PW2_POD_enable_line"] is None
+
+
 def test_pod_marks_powerwall_expansion_as_attached_to_leader(
     client, connected_gateway
 ):
