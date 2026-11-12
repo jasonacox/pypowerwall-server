@@ -5,6 +5,13 @@
 ### [0.16.1] - Upcoming
 
 **Fixed:**
+- **`/pod` status flags are `null` when the gateway has no value**, instead of
+  `0`. TEDAPI vitals have no source for `POD_ActiveHeating`,
+  `POD_ChargeComplete`, `POD_ChargeRequest`, `POD_DischargeComplete`,
+  `POD_PermanentlyFaulted`, `POD_PersistentlyFaulted` or `POD_enable_line`, so
+  the `0` read like a measured "not faulted". Values the gateway reports are
+  unchanged. Telegraf skips `null` fields, and no Powerwall-Dashboard panel
+  uses these flags. Same fix as proxy t115 (pypowerwall#179)
 - **Power Flow battery percentage at low state of charge** - the SoE label is
   bottom-aligned inside the battery graphic when it would otherwise overflow,
   so values such as `4%` are no longer cut off at the bottom of the Power Flow

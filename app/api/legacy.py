@@ -1571,6 +1571,18 @@ async def get_tedapi_controller():
     return controller
 
 
+# Per-battery status flags in /pod, in output order
+_POD_STATUS_FLAGS = (
+    "POD_ActiveHeating",
+    "POD_ChargeComplete",
+    "POD_ChargeRequest",
+    "POD_DischargeComplete",
+    "POD_PermanentlyFaulted",
+    "POD_PersistentlyFaulted",
+    "POD_enable_line",
+)
+
+
 @router.get("/pod")
 async def get_pod():
     """Get Powerwall battery data (legacy proxy endpoint).
@@ -1694,13 +1706,11 @@ async def get_pod():
                     device_name, v = tepod_map[serial]
                     # Populate POD vitals fields from TEPOD entry
                     pod[f"PW{idx}_name"] = device_name
-                    pod[f"PW{idx}_POD_ActiveHeating"] = int(v.get("POD_ActiveHeating") or 0)
-                    pod[f"PW{idx}_POD_ChargeComplete"] = int(v.get("POD_ChargeComplete") or 0)
-                    pod[f"PW{idx}_POD_ChargeRequest"] = int(v.get("POD_ChargeRequest") or 0)
-                    pod[f"PW{idx}_POD_DischargeComplete"] = int(v.get("POD_DischargeComplete") or 0)
-                    pod[f"PW{idx}_POD_PermanentlyFaulted"] = int(v.get("POD_PermanentlyFaulted") or 0)
-                    pod[f"PW{idx}_POD_PersistentlyFaulted"] = int(v.get("POD_PersistentlyFaulted") or 0)
-                    pod[f"PW{idx}_POD_enable_line"] = int(v.get("POD_enable_line") or 0)
+                    # Status flags stay null when the gateway gives no value
+                    # (TEDAPI vitals have no source for them), not a fake 0.
+                    for flag in _POD_STATUS_FLAGS:
+                        value = v.get(flag)
+                        pod[f"PW{idx}_{flag}"] = None if value is None else int(value or 0)
                     pod[f"PW{idx}_POD_available_charge_power"] = v.get("POD_available_charge_power")
                     pod[f"PW{idx}_POD_available_dischg_power"] = v.get("POD_available_dischg_power")
                     # Energy values from vitals (always overwrite system_status values per old proxy behavior)
