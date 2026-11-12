@@ -23748,6 +23748,8 @@
                 window.removeEventListener("resize", this._handleViewportResize);
             }
             _getEffectiveGridWidth() {
+                // Keep 68px per side for the grid and home circles, which sit
+                // outside the diagram's edges, so they fit narrow iframes
                 return Math.min(this.props.gridWidth, Math.max(0, window.innerWidth - 136));
             }
             render() {
@@ -23801,7 +23803,7 @@
                         gridServicesActive: H,
                         soe: K,
                     } = this.props,
-                    { activeIcons: Y, colors: Q, viewportWidth: V0 } = this.state,
+                    { activeIcons: Y, colors: Q } = this.state,
                     e = this._getEffectiveGridWidth(),
                     Z = 0 === i.length,
                     J = e / 2,
