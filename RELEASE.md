@@ -12,6 +12,23 @@
   the `0` read like a measured "not faulted". Values the gateway reports are
   unchanged. Telegraf skips `null` fields, and no Powerwall-Dashboard panel
   uses these flags. Same fix as proxy t115 (pypowerwall#179)
+- **Power Flow battery percentage at low state of charge** - the SoE label is
+  bottom-aligned inside the battery graphic when it would otherwise overflow,
+  so values such as `4%` are no longer cut off at the bottom of the Power Flow
+  card.
+- **Power Flow grid and home labels stay above their icons on narrow cards** -
+  the labels were anchored to the edges of the diagram, so the right-hand label
+  could run past the card. They are now centered over the respective icons, and
+  the two circles move closer together on narrow iframes instead of running
+  outside the card.
+- **Gateway firmware stays readable on narrow Console cards** - the mode and
+  firmware badges no longer split across lines or squeeze the connection
+  status; the status sits with the host/IP line, and gateway cards stay wide
+  enough when multiple gateways share a row.
+- **Console MQTT and control status pills are optically centered** - the
+  `Connected` and `Control enabled` labels use a centered flex line box instead
+  of sitting slightly low inside the pill; gateway mode/firmware tags and the
+  active header link use the same optical alignment.
 
 ### [0.16.0] - 2026-11-10
 

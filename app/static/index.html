@@ -1390,6 +1390,16 @@
             background: rgba(248, 81, 73, 0.15);
             color: var(--accent-red);
         }
+        .mqtt-status-badge,
+        .control-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 23px;
+            padding: 0 10px;
+            line-height: 1;
+            box-sizing: border-box;
+        }
         .mqtt-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -1405,14 +1415,16 @@
         
         .gateway-list {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
             gap: 16px;
         }
         
         .gateway-item {
-            display: flex;
-            justify-content: space-between;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
             align-items: center;
+            column-gap: 12px;
+            row-gap: 4px;
             padding: 16px;
             background: var(--bg-secondary);
             border-radius: 8px;
@@ -1433,25 +1445,33 @@
         }
         
         .gateway-info {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
+            display: contents;
         }
         
         .gateway-name {
+            grid-column: 1 / -1;
+            grid-row: 1;
+            min-width: 0;
             font-weight: 600;
             font-size: 1em;
+            overflow-wrap: anywhere;
         }
         
         .gateway-host {
+            grid-column: 1;
+            grid-row: 2;
+            min-width: 0;
             font-size: 0.85em;
             color: var(--text-muted);
+            overflow-wrap: anywhere;
         }
         
         .gateway-details {
             display: flex;
+            flex-wrap: wrap;
+            grid-column: 1 / -1;
+            grid-row: 3;
             gap: 8px;
-            margin-top: 4px;
         }
         
         .gateway-mode {
@@ -1460,6 +1480,7 @@
             border-radius: 4px;
             background: var(--bg-card);
             color: var(--text-secondary);
+            white-space: nowrap;
         }
         
         .gateway-firmware {
@@ -1468,10 +1489,23 @@
             border-radius: 4px;
             background: rgba(88, 166, 255, 0.15);
             color: var(--accent-blue);
+            white-space: nowrap;
         }
-        
+
+        .gateway-mode,
+        .gateway-firmware {
+            display: inline-flex;
+            align-items: center;
+            min-height: 20px;
+            padding: 1px 8px 3px;
+            line-height: 1;
+            box-sizing: border-box;
+        }
+
         .gateway-status {
             display: flex;
+            grid-column: 2;
+            grid-row: 2;
             align-items: center;
             gap: 8px;
         }
@@ -1503,9 +1537,9 @@
         }
         
         .gateway-error {
+            grid-column: 1 / -1;
             font-size: 0.75em;
             color: var(--accent-red);
-            margin-top: 4px;
         }
         
         /* Footer */
