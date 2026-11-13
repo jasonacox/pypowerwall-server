@@ -75,6 +75,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pypowerwall
 from pypowerwall.tedapi import GW_IP as TEDAPI_GW_IP
 from app.models.gateway import Gateway, GatewayStatus, PowerwallData, AggregateData
+from app.core.cloud_energy import apply_cloud_energy, fetch_cloud_energy
 from app.core.scaling import raw_to_tesla_battery_percent
 from app.config import GatewayConfig
 from app.utils.control import is_v1r_gateway
@@ -373,9 +374,17 @@ class GatewayManager:
         # full cloud reads. Cloud writes keep their existing finality path.
         self._cloud_read_state: Dict[str, Dict] = {}
         self._next_cloud_read_time: Dict[str, float] = {}
-        # True when PW_CLOUD_READ_FALLBACK is the only reason the shared cloud
-        # connection exists (no PW_CONTROL_SECRET, no PW_CLOUD_HYBRID).
+        # True when PW_CLOUD_READ_FALLBACK is the only reason the shared
+        # cloud connection exists (no control, hybrid reads or cloud energy).
         self._cloud_for_fallback_only = False
+        self._cloud_for_energy_only = False
+        self._cloud_energy_tasks: Dict[str, asyncio.Task] = {}
+        self._cloud_energy_totals: Dict[str, Dict[str, float]] = {}
+        self._cloud_energy_updated: Dict[str, float] = {}
+        self._cloud_energy_failures: Dict[str, int] = {}
+        self._cloud_energy_last_error: Dict[str, str] = {}
+        self._cloud_energy_inflight: Set[str] = set()
+        self._cloud_energy_lock: asyncio.Lock = asyncio.Lock()
         # Gateways with a cloud read in flight: a second caller skips instead
         # of queuing behind it, so reads never start closer than the interval.
         self._cloud_read_inflight: Set[str] = set()
@@ -682,10 +691,10 @@ class GatewayManager:
         # to 15s) doesn't block server startup and container health checks.
         # Like the proxy, the cloud login starts only when it is wanted:
         # PW_CONTROL_SECRET (writes need it), PW_CLOUD_HYBRID=yes (read-only
-        # values such as Basic LAN mode/reserve), or PW_CLOUD_READ_FALLBACK=yes
-        # (full cloud read set when the local poll fails). PW_EMAIL alone isn't
-        # enough: PW2 local logins need an email and never asked for a cloud
-        # session.
+        # values such as Basic LAN mode/reserve), PW_CLOUD_READ_FALLBACK=yes
+        # (full cloud read set when the local poll fails), or PW_CLOUD_ENERGY=yes
+        # (lifetime meter energy overlay). PW_EMAIL alone isn't enough: PW2
+        # local logins need an email and never asked for a cloud session.
         local_with_email = [
             config
             for config in gateway_configs
@@ -699,12 +708,19 @@ class GatewayManager:
             and config.email
             and not config.cloud_mode
         ]
-        hybrid_wanted = settings.control_enabled or settings.cloud_hybrid
+        hybrid_wanted = (
+            settings.control_enabled
+            or settings.cloud_hybrid
+            or settings.cloud_energy
+        )
         read_fallback = settings.cloud_read_fallback and settings.failover
         hybrid_configs = (
             local_with_email if hybrid_wanted or read_fallback else []
         )
         self._cloud_for_fallback_only = read_fallback and not hybrid_wanted
+        self._cloud_for_energy_only = settings.cloud_energy and not (
+            settings.control_enabled or settings.cloud_hybrid
+        )
         if settings.cloud_read_fallback:
             if not settings.failover:
                 logger.warning(
@@ -715,11 +731,22 @@ class GatewayManager:
                     "PW_CLOUD_READ_FALLBACK is set but no local gateway has "
                     "PW_EMAIL/cloud credentials; the flag has no effect"
                 )
+        if settings.cloud_energy:
+            cloud_gateways = [
+                gateway
+                for gateway in self.gateways.values()
+                if gateway.cloud_mode or gateway.fleetapi
+            ]
+            if not local_with_email and not cloud_gateways:
+                logger.warning(
+                    "PW_CLOUD_ENERGY is set but no gateway has Tesla Cloud "
+                    "credentials; the flag has no effect"
+                )
         if local_with_email and not hybrid_configs:
             logger.info(
                 "Hybrid cloud connection off: PW_EMAIL is set for a local gateway, "
-                "but neither PW_CONTROL_SECRET, PW_CLOUD_HYBRID=yes nor "
-                "PW_CLOUD_READ_FALLBACK=yes is"
+                "but neither PW_CONTROL_SECRET, PW_CLOUD_HYBRID=yes, "
+                "PW_CLOUD_READ_FALLBACK=yes nor PW_CLOUD_ENERGY=yes is"
             )
         # Hybrid configured => the cloud link exists as a tracked link even
         # while the connection itself is down (issue #87 per-link health).
@@ -743,6 +770,18 @@ class GatewayManager:
                     self._cloud_read_tasks[gateway_id] = asyncio.create_task(
                         self._cloud_read_loop(gateway_id),
                         name=f"cloud-read-{gateway_id}",
+                    )
+        if settings.cloud_energy:
+            local_energy_ids = {config.id for config in local_with_email}
+            for gateway_id, gw in self.gateways.items():
+                if (
+                    gw.cloud_mode
+                    or gw.fleetapi
+                    or gateway_id in local_energy_ids
+                ):
+                    self._cloud_energy_tasks[gateway_id] = asyncio.create_task(
+                        self._cloud_energy_loop(gateway_id),
+                        name=f"cloud-energy-{gateway_id}",
                     )
 
         # Start TEDAPI probe/recovery tasks for TEDAPI gateways.
@@ -865,13 +904,17 @@ class GatewayManager:
         Otherwise the cloud client defaults to the account's first site,
         which may not be this gateway's, so the binding is unsafe.
 
-        The binding is needed by MQTT controls and by the opt-in cloud read
-        fallback. When neither can use it, skip the check entirely.
+        The binding is needed by MQTT controls, the opt-in cloud read fallback
+        and the cloud energy overlay. When none can use it, skip the check.
         """
         from app.config import settings
 
         read_fallback = settings.cloud_read_fallback and settings.failover
-        if not settings.mqtt_controls_available and not read_fallback:
+        if (
+            not settings.mqtt_controls_available
+            and not read_fallback
+            and not settings.cloud_energy
+        ):
             return False
         client = getattr(self._cloud_control, "client", None)
         sitefile = getattr(client, "sitefile", None)
@@ -892,8 +935,9 @@ class GatewayManager:
             return True
         logger.warning(
             "Hybrid cloud connection: the Tesla account has %s sites and no "
-            "site is selected, so MQTT controls and the cloud read fallback "
-            "won't use it. Set PW_SITEID to this gateway's energy site id.",
+            "site is selected, so MQTT controls, the cloud read fallback and "
+            "the cloud energy overlay won't use it. Set PW_SITEID to this "
+            "gateway's energy site id.",
             len(sites) if isinstance(sites, list) else "an unknown number of",
         )
         return False
@@ -946,6 +990,9 @@ class GatewayManager:
             (t, f"cloud-read-{gid}") for gid, t in self._cloud_read_tasks.items()
         )
         named_tasks.extend(
+            (t, f"cloud-energy-{gid}") for gid, t in self._cloud_energy_tasks.items()
+        )
+        named_tasks.extend(
             (t, f"tedapi-probe-{gid}") for gid, t in self._probe_tasks.items()
         )
         if self._cloud_control_task:
@@ -966,6 +1013,7 @@ class GatewayManager:
 
         self._poll_tasks.clear()
         self._cloud_read_tasks.clear()
+        self._cloud_energy_tasks.clear()
         self._probe_tasks.clear()
         self._mqtt_tasks.clear()
 
@@ -1021,6 +1069,123 @@ class GatewayManager:
             except Exception as e:
                 logger.error(f"Error in cloud read task for {gateway_id}: {e}")
                 await asyncio.sleep(self._poll_interval)
+
+    async def _cloud_energy_loop(self, gateway_id: str):
+        """Refresh Tesla Cloud lifetime meter energy for one gateway.
+
+        Waits for the bound Cloud/FleetAPI connection, then refreshes on the
+        configured lifetime cadence. Failures back off and never clear the last
+        successful totals. A task per gateway keeps a slow Cloud request from
+        pausing local polling.
+        """
+        from app.config import settings
+
+        failures = 0
+        while True:
+            delay = 5.0
+            try:
+                cloud = self._cloud_energy_client(gateway_id)
+                if cloud is not None:
+                    if await self._refresh_cloud_energy(gateway_id, cloud):
+                        failures = 0
+                        delay = float(settings.cloud_energy_refresh)
+                    else:
+                        failures += 1
+                        delay = min(
+                            float(settings.cloud_energy_refresh),
+                            60.0 * (2 ** max(0, failures - 1)),
+                        )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(
+                    "Cloud energy refresh task for %s failed: %s", gateway_id, e
+                )
+                delay = 60.0
+            await asyncio.sleep(max(1.0, delay))
+
+    def _cloud_energy_client(self, gateway_id: str):
+        """Return the Cloud/FleetAPI client that supplies this gateway's totals.
+
+        A local gateway uses the shared, site-bound hybrid connection. A
+        Cloud/FleetAPI gateway uses its own connection.
+        """
+        if (
+            self._cloud_control is not None
+            and self._cloud_control_gateway_id == gateway_id
+        ):
+            return self._cloud_control
+        gateway = self.gateways.get(gateway_id)
+        if gateway is not None and (gateway.cloud_mode or gateway.fleetapi):
+            return self.connections.get(gateway_id)
+        return None
+
+    async def _refresh_cloud_energy(self, gateway_id: str, cloud) -> bool:
+        """Fetch and cache cloud lifetime energy, returning success.
+
+        The blocking Cloud call runs in the executor with a timeout. On
+        failure the previous totals stay available for the overlay; on success
+        the timestamp, totals and error bookkeeping are replaced atomically.
+        """
+        if gateway_id in self._cloud_energy_inflight:
+            return False
+        from app.config import settings
+
+        loop = asyncio.get_running_loop()
+        self._cloud_energy_inflight.add(gateway_id)
+        try:
+            async with self._cloud_energy_lock:
+                totals = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        self._executor, fetch_cloud_energy, cloud
+                    ),
+                    timeout=max(60.0, settings.timeout + 2.0),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._cloud_energy_failures[gateway_id] = (
+                self._cloud_energy_failures.get(gateway_id, 0) + 1
+            )
+            self._cloud_energy_last_error[gateway_id] = str(e) or type(e).__name__
+            logger.warning(
+                "Cloud energy refresh for %s failed: %s", gateway_id, e
+            )
+            return False
+        finally:
+            self._cloud_energy_inflight.discard(gateway_id)
+
+        self._cloud_energy_totals[gateway_id] = totals
+        self._cloud_energy_updated[gateway_id] = time.time()
+        self._cloud_energy_failures[gateway_id] = 0
+        self._cloud_energy_last_error.pop(gateway_id, None)
+        logger.info(
+            "Cloud energy refreshed for %s: grid import %.1f kWh, "
+            "grid export %.1f kWh",
+            gateway_id,
+            totals.get("grid_import", 0.0) / 1000.0,
+            totals.get("grid_export", 0.0) / 1000.0,
+        )
+        return True
+
+    def _apply_cloud_energy(self, gateway_id: str, data: PowerwallData) -> None:
+        """Overlay cached cloud totals and publish the active marker.
+
+        The `cloud_energy.active` marker is added only after values were
+        applied, so API consumers never see an active marker with stale local
+        energy values.
+        """
+        from app.config import settings
+
+        if not settings.cloud_energy or not data.aggregates:
+            return
+        totals = self._cloud_energy_totals.get(gateway_id)
+        if totals:
+            apply_cloud_energy(data.aggregates, totals)
+            data.aggregates["cloud_energy"] = {
+                "active": True,
+                "updated": time.time(),
+            }
 
     async def _fetch_gateway_data(
         self, gateway_id: str, pw, *, cloud_fallback: bool = False
@@ -1577,10 +1742,14 @@ class GatewayManager:
         """True when local polls may add the hybrid connection's read-only
         cloud values (Basic LAN mode/reserve, grid charging/export).
 
-        Not when PW_CLOUD_READ_FALLBACK alone started the connection: it must
-        not query Tesla on every healthy local poll.
+        Not when PW_CLOUD_READ_FALLBACK or PW_CLOUD_ENERGY alone started the
+        connection: they must not query Tesla on every healthy local poll.
         """
-        return self._cloud_control is not None and not self._cloud_for_fallback_only
+        return (
+            self._cloud_control is not None
+            and not self._cloud_for_fallback_only
+            and not self._cloud_for_energy_only
+        )
 
     @staticmethod
     def _is_cloud_gateway(gateway) -> bool:
@@ -1652,6 +1821,39 @@ class GatewayManager:
             gateway_id: self.get_cloud_read_state(gateway_id)
             for gateway_id in list(self._cloud_read_state)
         }
+
+    def get_all_cloud_energy_states(
+        self, *, include_totals: bool = True
+    ) -> Dict[str, Dict[str, Any]]:
+        """Cloud energy overlay states keyed by gateway for /health and /stats.
+
+        Mirrors ``get_all_cloud_read_states``: disabled features return an
+        empty map, and ``enabled`` is part of each gateway state. ``/health``
+        requests state only; ``/stats`` also exposes the last totals.
+        """
+        from app.config import settings
+
+        if not settings.cloud_energy:
+            return {}
+
+        now = time.time()
+        states: Dict[str, Dict[str, Any]] = {}
+        for gateway_id in self.gateways:
+            totals = self._cloud_energy_totals.get(gateway_id)
+            updated = self._cloud_energy_updated.get(gateway_id)
+            state = {
+                "enabled": True,
+                "refresh_seconds": settings.cloud_energy_refresh,
+                "active": totals is not None,
+                "updated": updated,
+                "age_seconds": now - updated if updated else None,
+                "failures": self._cloud_energy_failures.get(gateway_id, 0),
+                "last_error": self._cloud_energy_last_error.get(gateway_id),
+            }
+            if include_totals:
+                state["totals_wh"] = dict(totals) if totals else None
+            states[gateway_id] = state
+        return states
 
     def _cloud_read_interval(self) -> float:
         """Cloud fallback cadence: PW_CACHE_EXPIRE, with a 30 s FleetAPI floor."""
@@ -1778,6 +1980,7 @@ class GatewayManager:
         error = "Local gateway unavailable; serving cloud fallback"
         gateway.online = True
         gateway.last_error = error
+        self._apply_cloud_energy(gateway_id, data)
         self._last_cloud_data[gateway_id] = data
         self.cache[gateway_id] = GatewayStatus(
             gateway=gateway,
@@ -1999,6 +2202,7 @@ class GatewayManager:
                     f"Poll of {gateway_id} exceeded overall budget of {poll_budget:.0f}s"
                 )
 
+            self._apply_cloud_energy(gateway_id, data)
 
             # Update cache
             gateway = self.gateways[gateway_id]

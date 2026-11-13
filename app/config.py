@@ -99,6 +99,11 @@ Environment Variables (Proxy Compatible):
                              - When a local gateway's polling fails, read the same
                                dataset from the bound Cloud/FleetAPI connection
                                "yes"/"no" (default: "no")
+        PW_CLOUD_ENERGY      - Overlay lifetime meter energy from Tesla Cloud
+                               onto local reads "yes"/"no" (default: "no")
+        PW_CLOUD_ENERGY_REFRESH
+                             - Seconds between Cloud lifetime energy refreshes
+                               (default: 21600, minimum: 900)
         PW_NEG_SOLAR         - Allow negative solar values "yes"/"no" (default: "yes")
         PW_RSA_KEY_PATH      - Path to RSA-4096 private key PEM for TEDAPI v1r LAN access (default: none)
         PW_WIFI_HOST         - WiFi host IP for TEDAPI v1r WiFi fallback (default: none)
@@ -428,6 +433,12 @@ class Settings(BaseSettings):
     cloud_read_fallback: bool = Field(
         default=False, alias="PW_CLOUD_READ_FALLBACK"
     )  # Use the bound cloud connection for reads after local poll failures
+    cloud_energy: bool = Field(
+        default=False, alias="PW_CLOUD_ENERGY"
+    )  # Overlay Tesla Cloud lifetime meter energy onto local reads
+    cloud_energy_refresh: int = Field(
+        default=21600, ge=900, alias="PW_CLOUD_ENERGY_REFRESH"
+    )  # Seconds between cloud lifetime energy refreshes
     local_first: bool = Field(
         default=False, alias="PW_LOCAL_FIRST"
     )  # Try local v1r writes before cloud (default: no = cloud first)

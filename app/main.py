@@ -780,6 +780,7 @@ async def health_check():
     # SolarOnly fallback state per tracked gateway (upstream proxy t97 format)
     fallback_summary = gateway_manager.get_all_fallback_states()
     cloud_read_summary = gateway_manager.get_all_cloud_read_states()
+    cloud_energy_summary = gateway_manager.get_all_cloud_energy_states(include_totals=False)
 
     return {
         "status": health_status,
@@ -791,6 +792,7 @@ async def health_check():
         "gateway_details": gateway_details,
         "fallback_mode": fallback_summary,
         "cloud_read_fallback": cloud_read_summary,
+        "cloud_energy": cloud_energy_summary,
     }
 
 

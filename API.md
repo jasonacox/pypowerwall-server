@@ -143,8 +143,32 @@ PW_GATEWAYS='[
 | `PW_BATTERY_DISPATCH` | `no` | v1r | | `yes` enables timed battery dispatch (`POST /control/dispatch` and the Console panel). Needs `PW_CONTROL_SECRET`. **Use at your own risk; it could void your warranty. Read the [warning](#timed-battery-dispatch-post-controldispatch-and-post-controlresume) first.** `POST /control/resume` works without it. |
 | `PW_CLOUD_HYBRID` | `no` | Local with `PW_EMAIL` | | `yes` starts the hybrid cloud connection without `PW_CONTROL_SECRET`, for its read-only values (Basic LAN mode and reserve, grid charging/export settings). With `PW_CONTROL_SECRET` set it starts anyway. Like the proxy, `PW_EMAIL` alone doesn't start it. |
 | `PW_CLOUD_READ_FALLBACK` | `no` | Local with `PW_EMAIL` and Cloud/FleetAPI auth | | `yes` reads the Cloud-Mode data set from the bound Cloud/FleetAPI connection after three consecutive failed local polls. Needs an unambiguous site (`PW_SITEID`, `.pypowerwall.site`, a single-site account or a live FleetAPI connection); `PW_FAILOVER=no` disables it. Data is marked `data_source=cloud`, `local_online=false`, and `online` stays true, so check `data_source`/`local_online` to tell it from local data. Cloud reads run every `PW_CACHE_EXPIRE` (at least 30 s for FleetAPI) on their own schedule; local retries keep their backoff (5, 10, 30, 60, then 120 s). |
+| `PW_CLOUD_ENERGY` | `no` | Local or Cloud/FleetAPI with `PW_EMAIL` and cloud auth | | `yes` overlays Tesla Cloud lifetime energy counters onto meter aggregates. Grid import/export, battery charge/discharge, solar generation and home usage are summed from the Cloud `CALENDAR_HISTORY_DATA` lifetime series and refreshed by `PW_CLOUD_ENERGY_REFRESH`; local power, voltage and current values stay local. Needs an unambiguous site for a local gateway (`PW_SITEID`, `.pypowerwall.site`, or a single-site account). Cloud values may lag behind the live power values. |
+| `PW_CLOUD_ENERGY_REFRESH` | `21600` | `PW_CLOUD_ENERGY` | V | Seconds between Cloud lifetime energy refreshes (minimum 900). The lifetime series is aggregated over a 4-hour bucket history, so a multi-hour interval avoids unnecessary Cloud calls. |
 | `PW_LOCAL_FIRST` | `no` | v1r, Hybrid | | `yes` sends reserve, mode and grid writes over a confirmed local v1r connection first, even when a hybrid cloud connection exists (see [write path](#post-controlpath)). |
 | `PW_WIFI_V1R_FALLBACK` | `no` | v1r with `PW_WIFI_HOST` | | `yes` makes signed WiFi-v1r the only leader route after the library's LAN failover trips, for reads and for reserve/mode/grid, max backup and islanding writes; there is no legacy WiFi TEDAPI fallback. Independent of `PW_LOCAL_FIRST`. See [write path](#post-controlpath). |
+
+#### Cloud lifetime energy overlay
+
+`PW_CLOUD_ENERGY=yes` replaces only the lifetime energy counters in
+`/api/meters/aggregates` with values summed from Tesla Cloud's
+`CALENDAR_HISTORY_DATA` lifetime series. Power, voltage and current fields stay
+local. The Cloud response is a time series, so the server sums it once per
+`PW_CLOUD_ENERGY_REFRESH` interval (default `21600` seconds, minimum `900`)
+instead of on every meter poll.
+
+A local gateway needs Cloud access (`PW_EMAIL` + auth) and an unambiguous site
+(`PW_SITEID`, `.pypowerwall.site`, or a single-site account). Cloud and
+FleetAPI gateways use their own connection. Empty, all-zero or non-finite
+responses are rejected; a failed refresh keeps the last successful totals,
+and no successful refresh means the local values remain unchanged.
+
+When the overlay is applied, `/api/meters/aggregates` contains
+`cloud_energy.active=true`. `/health` and `/stats` expose `cloud_energy` as a
+per-gateway map, like `cloud_read_fallback`; each state has `enabled`,
+`refresh_seconds`, `active`, refresh age, failures and `last_error`. `/stats`
+additionally exposes `totals_wh`. Cloud lifetime values can lag behind the
+live local power values.
 
 `MQTT_CONTROLS` (below) separately enables control over MQTT.
 
@@ -269,7 +293,7 @@ dashboards, Telegraf and Home Assistant configurations keep working.
 | GET | `/tedapi/components` | | Component data. On demand, TEDAPI only. |
 | GET | `/tedapi/battery` | | Battery blocks. On demand, TEDAPI only. |
 | GET | `/tedapi/controller` | | Device controller data. On demand, TEDAPI only. |
-| GET | `/api/meters/aggregates` | | Same data as `/aggregates`. |
+| GET | `/api/meters/aggregates` | | Same data as `/aggregates`. With `PW_CLOUD_ENERGY=yes` and a loaded cloud total, includes `cloud_energy.active=true` for the conditional energy consumers; otherwise the marker is absent. |
 | GET | `/api/meters/site` | | Site meter CT configuration. On demand; `[]` when offline. |
 | GET | `/api/meters/solar` | | Solar meter data (array). |
 | GET | `/api/meters` | | Meter list; `[]` where the mode doesn't provide it. |
@@ -424,9 +448,9 @@ Each pushes one JSON message per second.
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|
-| GET | `/health` | | `status` (`healthy`, `degraded`, `unhealthy` or `no_gateways`), server version, online/offline counts, per-gateway errors, `data_source`/`local_online` and SolarOnly/cloud-read fallback state. Also `HEAD`. |
+| GET | `/health` | | `status` (`healthy`, `degraded`, `unhealthy` or `no_gateways`), server version, online/offline counts, per-gateway errors, `data_source`/`local_online`, SolarOnly/cloud-read fallback state and per-gateway `cloud_energy` overlay state (`enabled`, `active`, age, last error). Also `HEAD`. |
 | POST | `/health/reset` | token | Clears the SolarOnly fallback state for all gateways. |
-| GET | `/stats` | | Proxy-style server stats: versions, mode (the live connection once polled), request counters, uptime, memory, connection flags, masked `config`, connection health, hybrid cloud link, cloud-read fallback state, per-gateway status including `data_source`/`local_online`. |
+| GET | `/stats` | | Proxy-style server stats: versions, mode (the live connection once polled), request counters, uptime, memory, connection flags, masked `config`, connection health, hybrid cloud link, cloud-read fallback state, per-gateway `cloud_energy` overlay state including totals, per-gateway status including `data_source`/`local_online`. |
 | GET | `/api/mqtt/status` | | MQTT enabled/connected state and broker settings (no credentials). |
 
 ### UI pages and static files

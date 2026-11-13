@@ -2,6 +2,25 @@
 
 ## Version History
 
+### [0.17.0] - Upcoming
+
+**Added:**
+- **Cloud lifetime energy overlay (`PW_CLOUD_ENERGY`)** - opt-in (`no` by
+  default). Local power, voltage and current reads stay local, while the
+  lifetime grid import/export, battery charge/discharge, solar generation and
+  home usage counters are summed from Tesla Cloud's
+  `CALENDAR_HISTORY_DATA` lifetime series and overlaid on the meter
+  aggregates. This targets sites whose local gateway lifetime counters are
+  higher than the Tesla Cloud values. Needs
+  `PW_EMAIL` and cloud auth; local gateways also need an unambiguous site
+  (`PW_SITEID`, `.pypowerwall.site`, or a single-site account). The lifetime
+  series is refreshed every
+  `PW_CLOUD_ENERGY_REFRESH` seconds (default `21600`, minimum `900`) rather
+  than on every poll. `/api/meters/aggregates` marks active cloud values with
+  `cloud_energy.active=true`; `/health` exposes the state and `/stats` adds the last totals.
+  The Cloud path was validated on a Powerwall 2 with Tesla Cloud; local+Cloud
+  overlay and marker behavior are covered by unit tests.
+
 ### [0.16.1] - 2026-11-12
 
 Honest `/pod` status flags, and Power Flow and Console layout fixes for narrow
