@@ -166,9 +166,9 @@ and no successful refresh means the local values remain unchanged.
 When the overlay is applied, `/api/meters/aggregates` contains
 `cloud_energy.active=true`. `/health` and `/stats` expose `cloud_energy` as a
 per-gateway map, like `cloud_read_fallback`; each state has `enabled`,
-`refresh_seconds`, `active`, refresh age, failures and `last_error`. `/stats`
-additionally exposes `totals_wh`. Cloud lifetime values can lag behind the
-live local power values.
+`refresh_seconds`, `active`, the actual last refresh timestamp in `updated`,
+refresh age, failures and `last_error`. `/stats` additionally exposes
+`totals_wh`. Cloud lifetime values can lag behind the live local power values.
 
 `MQTT_CONTROLS` (below) separately enables control over MQTT.
 

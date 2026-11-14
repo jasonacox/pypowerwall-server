@@ -1182,10 +1182,11 @@ class GatewayManager:
         totals = self._cloud_energy_totals.get(gateway_id)
         if totals:
             apply_cloud_energy(data.aggregates, totals)
-            data.aggregates["cloud_energy"] = {
-                "active": True,
-                "updated": time.time(),
-            }
+            marker = {"active": True}
+            updated = self._cloud_energy_updated.get(gateway_id)
+            if updated:
+                marker["updated"] = updated
+            data.aggregates["cloud_energy"] = marker
 
     async def _fetch_gateway_data(
         self, gateway_id: str, pw, *, cloud_fallback: bool = False

@@ -119,18 +119,29 @@ def fetch_cloud_energy(cloud: Any) -> Dict[str, float]:
     client = getattr(cloud, "client", None)
     site_api = getattr(client, "_site_api", None)
     if site_api is not None:
-        response, _cached = site_api(
-            "CALENDAR_HISTORY_DATA",
-            0,
-            True,
-            kind="energy",
-            period="lifetime",
-        )
+        try:
+            response, _cached = site_api(
+                "CALENDAR_HISTORY_DATA",
+                0,
+                True,
+                kind="energy",
+                period="lifetime",
+            )
+        except (AttributeError, TypeError) as exc:
+            raise CloudEnergyError(
+                "pypowerwall cloud site API is incompatible"
+            ) from exc
         return summarize_cloud_energy(response)
     fleet = getattr(client, "fleet", None)
     get_history = getattr(fleet, "get_calendar_history", None)
     if get_history is not None:
-        return summarize_cloud_energy(get_history(kind="energy", duration="lifetime"))
+        try:
+            response = get_history(kind="energy", duration="lifetime")
+        except (AttributeError, TypeError) as exc:
+            raise CloudEnergyError(
+                "pypowerwall FleetAPI history adapter is incompatible"
+            ) from exc
+        return summarize_cloud_energy(response)
     raise CloudEnergyError(
         "pypowerwall cloud client does not expose lifetime energy history"
     )

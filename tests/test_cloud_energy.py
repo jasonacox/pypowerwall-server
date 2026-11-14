@@ -9,6 +9,7 @@ import pytest
 
 from app.config import settings
 from app.core.cloud_energy import (
+    CloudEnergyError,
     apply_cloud_energy,
     fetch_cloud_energy,
     summarize_cloud_energy,
@@ -121,6 +122,15 @@ def test_fetch_cloud_energy_uses_site_api():
     assert calls[0][1] == {"kind": "energy", "period": "lifetime"}
 
 
+def test_fetch_cloud_energy_wraps_incompatible_site_api():
+    class Client:
+        def _site_api(self, *args, **kwargs):
+            raise AttributeError("renamed")
+
+    with pytest.raises(CloudEnergyError, match="site API"):
+        fetch_cloud_energy(SimpleNamespace(client=Client()))
+
+
 def test_fetch_cloud_energy_uses_fleetapi_history():
     calls = []
 
@@ -218,6 +228,7 @@ async def test_poll_gateway_applies_cloud_energy(monkeypatch):
     gm.cache["home"] = Mock()
     gm.connections["home"] = Mock()
     gm._cloud_energy_totals["home"] = {"grid_import": 123.0}
+    gm._cloud_energy_updated["home"] = 123.0
     data = PowerwallData(
         aggregates={"site": {"energy_imported": 1, "instant_power": 500}},
         timestamp=1.0,
@@ -237,6 +248,7 @@ async def test_poll_gateway_applies_cloud_energy(monkeypatch):
     assert gm.cache["home"].data.aggregates["site"]["energy_imported"] == 123.0
     assert gm.cache["home"].data.aggregates["site"]["instant_power"] == 500
     assert gm.cache["home"].data.aggregates["cloud_energy"]["active"] is True
+    assert gm.cache["home"].data.aggregates["cloud_energy"]["updated"] == 123.0
 
 
 @pytest.mark.asyncio
@@ -279,6 +291,7 @@ def test_cloud_energy_status_includes_totals_for_stats(monkeypatch):
     gm = GatewayManager()
     gm.gateways["home"] = Gateway(id="home", name="home", host="10.0.0.2")
     gm._cloud_energy_totals["home"] = {"grid_import": 123.0}
+    gm._cloud_energy_updated["home"] = 123.0
     monkeypatch.setattr(settings, "cloud_energy", True)
 
     state = gm.get_all_cloud_energy_states()["home"]
@@ -349,6 +362,40 @@ async def test_initialize_starts_cloud_energy_for_local_gateway(monkeypatch):
         assert gm._cloud_for_energy_only is True
     finally:
         await gm.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_cloud_energy_skips_multisite_without_selection(monkeypatch, tmp_path):
+    gm = GatewayManager()
+    gm._cloud_control = SimpleNamespace(
+        client=SimpleNamespace(
+            sitefile=str(tmp_path / "missing.site"),
+            getsites=lambda: [{"energy_site_id": 1}, {"energy_site_id": 2}],
+        ),
+        cloudmode=True,
+        fleetapi=False,
+        mode="cloud",
+    )
+    monkeypatch.setattr(settings, "cloud_energy", True)
+    monkeypatch.setattr(settings, "cloud_read_fallback", False)
+    monkeypatch.setattr(settings, "mqtt_controls", 0)
+    monkeypatch.setattr(settings, "mqtt_host", None)
+    monkeypatch.setattr(settings, "mqtt_username", None)
+    monkeypatch.setattr(settings, "mqtt_password", None)
+    monkeypatch.setattr(settings, "control_secret", None)
+    monkeypatch.setattr(settings, "siteid", None)
+
+    assert await gm._cloud_site_unambiguous() is False
+    assert gm._cloud_energy_client("home") is None
+
+
+def test_unbound_cloud_energy_client_is_not_used():
+    gm = GatewayManager()
+    gm._cloud_control = Mock()
+    gm._cloud_control_gateway_id = None
+    gm.gateways["home"] = Gateway(id="home", name="home", host="10.0.0.2")
+
+    assert gm._cloud_energy_client("home") is None
 
 
 @pytest.mark.asyncio
