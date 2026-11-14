@@ -66,6 +66,8 @@ Local v1r and Basic LAN modes can perform supported control operations when `PW_
 
 `PW_CLOUD_READ_FALLBACK=yes` keeps data flowing when the local gateway is unreachable: after three consecutive failed local polls, the server reads the Cloud-Mode data set from the bound Cloud/FleetAPI connection (needs `PW_EMAIL` and cloud auth, an unambiguous site such as `PW_SITEID` on a multi-site account, and `PW_FAILOVER=yes`). That data is marked `data_source=cloud`, `local_online=false`. It never writes.
 
+`PW_CLOUD_ENERGY=yes` keeps local power, voltage and current reads, but overlays the lifetime energy counters (grid import/export, battery charge/discharge, solar generation and home usage) from Tesla Cloud. It needs `PW_EMAIL` and cloud auth plus an unambiguous site, and refreshes every `PW_CLOUD_ENERGY_REFRESH` seconds (default `21600`, minimum `900`) because Cloud lifetime data is bucketed. Active values are marked `cloud_energy.active=true` in `/api/meters/aggregates`; `/health` reports per-gateway state, age and last error; `/stats` additionally exposes the last cloud totals. The overlay is not a replacement for live local power values.
+
 #### TEDAPI Mode (Local Access)
 ```bash
 # TEDAPI Mode requires host network to access gateway at 192.168.91.1

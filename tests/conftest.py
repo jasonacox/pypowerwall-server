@@ -46,6 +46,13 @@ def _reset_singleton_state():
     gateway_manager._cloud_read_inflight.clear()
     gateway_manager._cloud_read_generation.clear()
     gateway_manager._cloud_for_fallback_only = False
+    gateway_manager._cloud_for_energy_only = False
+    gateway_manager._cloud_energy_tasks.clear()
+    gateway_manager._cloud_energy_totals.clear()
+    gateway_manager._cloud_energy_updated.clear()
+    gateway_manager._cloud_energy_failures.clear()
+    gateway_manager._cloud_energy_last_error.clear()
+    gateway_manager._cloud_energy_inflight.clear()
     gateway_manager._mqtt_tasks.clear()
     gateway_manager._consecutive_failures.clear()
     gateway_manager._next_poll_time.clear()

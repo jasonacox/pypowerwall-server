@@ -107,3 +107,18 @@ def test_rate_limit_from_env(monkeypatch):
     assert settings.rate_limit_max_requests == 500
     assert settings.rate_limit_window_seconds == 30
     assert settings.rate_limit_max_buckets == 5000
+
+
+def test_cloud_energy_defaults():
+    settings = Settings()
+    assert settings.cloud_energy is False
+    assert settings.cloud_energy_refresh == 21600
+
+
+def test_cloud_energy_from_env(monkeypatch):
+    monkeypatch.setenv("PW_CLOUD_ENERGY", "yes")
+    monkeypatch.setenv("PW_CLOUD_ENERGY_REFRESH", "3600")
+
+    settings = Settings()
+    assert settings.cloud_energy is True
+    assert settings.cloud_energy_refresh == 3600

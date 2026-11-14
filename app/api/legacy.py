@@ -2974,6 +2974,8 @@ async def get_stats():
         "PW_CLOUD_HYBRID": settings.cloud_hybrid,
         "PW_LOCAL_FIRST": settings.local_first,
         "PW_CLOUD_READ_FALLBACK": settings.cloud_read_fallback,
+        "PW_CLOUD_ENERGY": settings.cloud_energy,
+        "PW_CLOUD_ENERGY_REFRESH": settings.cloud_energy_refresh,
         "PW_WIFI_V1R_FALLBACK": settings.wifi_v1r_fallback,
     }
 
@@ -3042,6 +3044,7 @@ async def get_stats():
     # Add SolarOnly fallback mode state for each tracked gateway
     stats["fallback_mode"] = gateway_manager.get_all_fallback_states()
     stats["cloud_read_fallback"] = gateway_manager.get_all_cloud_read_states()
+    stats["cloud_energy"] = gateway_manager.get_all_cloud_energy_states()
 
     # Add default gateway info for backward compatibility
     if gateway_manager.gateways:
