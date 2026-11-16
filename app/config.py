@@ -227,12 +227,21 @@ Accessing Configuration:
         pass
 """
 
+import hashlib
 import json
 import logging
 import os
 import re
-from typing import List, Optional, Union, get_args, get_origin
-from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
+from pathlib import Path
+from typing import Annotated, List, Optional, Union, get_args, get_origin
+from pydantic import (
+    BaseModel,
+    Field,
+    PrivateAttr,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings
 from pypowerwall.cloud.pypowerwall_cloud import AUTHFILE as CLOUD_AUTH_FILE
 from pypowerwall.fleetapi.fleetapi import CONFIGFILE as FLEETAPI_FILE
@@ -301,6 +310,31 @@ _MQTT_CONTROL_NAMES = {
 }
 
 
+def default_config_path() -> str:
+    """Lowest-priority gateway config path used by the setup wizard."""
+    if os.path.isdir("/data"):
+        return "/data/gateways.yaml"
+    return os.path.join("data", "gateways.yaml")
+
+
+# Settings that are represented by gateway entries, the legacy single-gateway
+# fields, or the existing server block. The optional PW_CONFIG "settings"
+# block must not duplicate them.
+_SETTINGS_BLOCK_EXCLUDED = {
+    "gateways",
+    "pw_host",
+    "pw_gw_pwd",
+    "pw_password",
+    "pw_email",
+    "pw_timezone",
+    "pw_rsa_key_path",
+    "pw_wifi_host",
+    "server_host",
+    "server_port",
+    "cors_origins",
+}
+
+
 class GatewayConfig(BaseModel):
     """Configuration for a single Powerwall gateway.
 
@@ -323,7 +357,9 @@ class GatewayConfig(BaseModel):
         default=None, ge=1, le=65535
     )  # Non-standard HTTPS port (e.g. 8443 via travel router)
     gw_pwd: Optional[str] = None  # Gateway Wi-Fi password for TEDAPI mode
-    password: Optional[str] = None  # Customer password for local API (PW3 Basic LAN / PW2 local)
+    password: Optional[str] = (
+        None  # Customer password for local API (PW3 Basic LAN / PW2 local)
+    )
     rsa_key_path: Optional[str] = (
         None  # Path to RSA-4096 private key PEM for v1r LAN TEDAPI access
     )
@@ -336,6 +372,41 @@ class GatewayConfig(BaseModel):
     cloud_mode: bool = False
     fleetapi: bool = False
     type: str = "powerwall"  # "powerwall" | "inverter" (solar-only, no batteries)
+    siteid: Optional[str] = None  # Per-gateway Tesla site ID (optional)
+    tedapi_auth_mode: Optional[str] = None  # "basic" or "bearer"
+    tedapi_api_version: Optional[str] = None  # e.g. "V2024_06"
+
+    @field_validator("siteid", mode="before")
+    @classmethod
+    def _normalize_siteid(cls, v):
+        if v is None:
+            return None
+        text = str(v).strip()
+        return text or None
+
+    @field_validator("tedapi_auth_mode")
+    @classmethod
+    def _normalize_tedapi_auth_mode(cls, v):
+        if v is None:
+            return None
+        text = str(v).strip().lower()
+        if not text:
+            return None
+        if text not in {"basic", "bearer"}:
+            raise ValueError("tedapi_auth_mode must be 'basic' or 'bearer'")
+        return text
+
+    @field_validator("tedapi_api_version")
+    @classmethod
+    def _normalize_tedapi_api_version(cls, v):
+        if v is None:
+            return None
+        text = str(v).strip().upper()
+        if not text:
+            return None
+        if not re.fullmatch(r"V\d{4}_\d{2}", text):
+            raise ValueError("tedapi_api_version must look like V2024_06")
+        return text
 
     @model_validator(mode="after")
     def _default_name_to_id(self):
@@ -572,9 +643,7 @@ class Settings(BaseSettings):
 
     def mqtt_control_allowed(self, control: str) -> bool:
         """True when the MQTT_CONTROLS bitmask enables this control."""
-        return bool(
-            self.mqtt_controls & MQTT_CONTROL_BITS.get(control, 0)
-        )
+        return bool(self.mqtt_controls & MQTT_CONTROL_BITS.get(control, 0))
 
     @property
     def mqtt_enabled(self) -> bool:
@@ -602,6 +671,14 @@ class Settings(BaseSettings):
     # How the single-gateway settings picked FleetAPI/Cloud from auth files
     # (logged at startup); None when PW_HOST or PW_EMAIL decided
     _mode_source: Optional[str] = PrivateAttr(default=None)
+    # Read-only diagnostics for the setup wizard. These are runtime metadata,
+    # not Settings fields, so they never appear in API.md/env documentation.
+    _config_source: Optional[str] = PrivateAttr(default=None)
+    _config_path: Optional[str] = PrivateAttr(default=None)
+    _config_error: Optional[str] = PrivateAttr(default=None)
+    _config_warnings: List[str] = PrivateAttr(default_factory=list)
+    _config_revision: Optional[str] = PrivateAttr(default=None)
+    _config_partial: bool = PrivateAttr(default=False)
 
     # Computed properties
     @property
@@ -609,10 +686,43 @@ class Settings(BaseSettings):
         """Control features enabled if PW_CONTROL_SECRET is set."""
         return bool(self.control_secret)
 
+    @property
+    def config_source(self) -> Optional[str]:
+        """Where gateways were loaded from (setup wizard diagnostics)."""
+        return self._config_source
+
+    @property
+    def config_path(self) -> Optional[str]:
+        """Resolved gateway config path, if one was used."""
+        return self._config_path
+
+    @property
+    def config_error(self) -> Optional[str]:
+        """Sanitized config load error, if any."""
+        return self._config_error
+
+    @property
+    def config_warnings(self) -> List[str]:
+        """Sanitized non-fatal config warnings."""
+        return list(self._config_warnings)
+
+    @property
+    def config_revision(self) -> Optional[str]:
+        """SHA-256 of the loaded config file (None for env-only configs)."""
+        return self._config_revision
+
+    @property
+    def config_partial(self) -> bool:
+        """True when a config file had at least one invalid gateway entry."""
+        return self._config_partial
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        # Load gateways/settings first so a PW_CONFIG settings block can
+        # influence the defaults below.
+        self._initialize_gateways()
         # Set default cache_file based on auth path if not explicitly provided
         if self.cache_file is None:
             if self.pw_authpath:
@@ -635,9 +745,86 @@ class Settings(BaseSettings):
         # resolved value on, so /stats reports what the library uses.
         if self.fleetapi_http:
             os.environ["PW_FLEETAPI_HTTP"] = self.fleetapi_http
-        self._initialize_gateways()
 
-    def _load_config_file(self) -> bool:
+    def _reset_config_metadata(self) -> None:
+        self.gateways = []
+        self._config_source = None
+        self._config_path = None
+        self._config_error = None
+        self._config_warnings = []
+        self._config_revision = None
+        self._config_partial = False
+
+    def _coerce_setting(self, name: str, value):
+        """Validate one value from the optional PW_CONFIG settings block."""
+        field = type(self).model_fields[name]
+        if name == "mqtt_controls":
+            return self._parse_control_bits(value)
+        if (
+            name == "https_mode"
+            and isinstance(value, str)
+            and value.strip().lower() == "http"
+        ):
+            return False
+        kind = _scalar_kind(field.annotation)
+        if kind in (bool, int) and isinstance(value, str):
+            text = _INLINE_COMMENT.sub("", value.strip())
+            if text == "":
+                return field.default
+            if kind is bool:
+                word = text.lower()
+                if word in _TRUE_WORDS:
+                    return True
+                if word in _FALSE_WORDS:
+                    return False
+                raise ValueError(f"invalid boolean for {name}")
+            try:
+                return int(text)
+            except ValueError:
+                if _WHOLE_DECIMAL.fullmatch(text):
+                    return int(text.split(".")[0])
+                raise
+        annotation = field.annotation
+        if field.metadata:
+            annotation = Annotated[(field.annotation, *field.metadata)]
+        return TypeAdapter(annotation).validate_python(value)
+
+    def _apply_settings_block(self, doc: dict, config_path: str) -> None:
+        """Apply the optional settings block, preserving env/default values.
+
+        The block uses Settings field names (snake_case). Unknown, excluded,
+        or invalid entries are reported as warnings and ignored so a damaged
+        optional section cannot prevent monitoring from starting.
+        """
+        block = doc.get("settings")
+        if block is None:
+            return
+        if not isinstance(block, dict):
+            self._config_warnings.append(
+                f"{config_path}: 'settings' must be a mapping; ignored"
+            )
+            return
+        for key, value in block.items():
+            name = str(key)
+            if name not in type(self).model_fields:
+                self._config_warnings.append(
+                    f"{config_path}: unknown settings key {name!r}; ignored"
+                )
+                continue
+            if name in _SETTINGS_BLOCK_EXCLUDED:
+                self._config_warnings.append(
+                    f"{config_path}: settings.{name} is controlled by gateways "
+                    "or the server block; ignored"
+                )
+                continue
+            try:
+                setattr(self, name, self._coerce_setting(name, value))
+            except Exception:
+                self._config_warnings.append(
+                    f"{config_path}: invalid settings.{name}; ignored"
+                )
+
+    def _load_config_file(self, config_path: str, source: str) -> bool:
         """Load gateway (and optional server) config from a PW_CONFIG file.
 
         Supports the YAML format documented in the README (JSON works too —
@@ -652,30 +839,36 @@ class Settings(BaseSettings):
                 host: 192.168.91.1
                 gw_pwd: ...
 
-        Returns True when PW_CONFIG is set (the file takes precedence over
-        PW_GATEWAYS / legacy env config, even if it fails to parse — a broken
-        file must not silently reconfigure the server to a different mode).
+        `config_path` is the explicit PW_CONFIG path or the lowest-priority
+        default file. A broken file never falls through to a different
+        source; the caller decides whether the source is usable.
         """
-        config_path = os.getenv("PW_CONFIG")
-        if not config_path:
-            return False
-
+        self._config_source = source
+        self._config_path = os.path.abspath(config_path)
+        self._config_error = None
+        self._config_warnings = []
+        self._config_revision = None
+        self._config_partial = False
         self.gateways = []
+
         try:
+            raw = Path(config_path).read_bytes()
+            self._config_revision = hashlib.sha256(raw).hexdigest()
             import yaml
 
-            with open(config_path) as f:
-                doc = yaml.safe_load(f)
+            doc = yaml.safe_load(raw)
         except Exception as e:
+            self._config_error = f"Unable to read config file ({type(e).__name__})"
             logger.error(
-                f"Failed to read PW_CONFIG file {config_path}: {e} - "
-                "no gateways configured"
+                f"Failed to read config file {config_path} "
+                f"({type(e).__name__}) - no gateways configured"
             )
             return True
 
         if not isinstance(doc, dict):
+            self._config_error = "Config file must contain a mapping"
             logger.error(
-                f"PW_CONFIG file {config_path} must contain a mapping with a "
+                f"Config file {config_path} must contain a mapping with a "
                 "'gateways' list - no gateways configured"
             )
             return True
@@ -693,6 +886,9 @@ class Settings(BaseSettings):
                         raise ValueError(f"port out of range: {port}")
                     self.server_port = port
                 except (TypeError, ValueError) as e:
+                    self._config_warnings.append(
+                        f"Invalid server.port ({e}); keeping {self.server_port}"
+                    )
                     logger.error(
                         f"Invalid server.port in {config_path} ({e}) - "
                         f"keeping {self.server_port}"
@@ -700,10 +896,13 @@ class Settings(BaseSettings):
             if isinstance(server.get("cors_origins"), list):
                 self.cors_origins = [str(o) for o in server["cors_origins"]]
 
+        self._apply_settings_block(doc, config_path)
+
         entries = doc.get("gateways")
         if not isinstance(entries, list):
+            self._config_error = "Config file has no 'gateways' list"
             logger.error(
-                f"PW_CONFIG file {config_path} has no 'gateways' list - "
+                f"Config file {config_path} has no 'gateways' list - "
                 "no gateways configured"
             )
             return True
@@ -712,20 +911,31 @@ class Settings(BaseSettings):
             try:
                 self.gateways.append(GatewayConfig(**gw))
             except Exception as e:
+                self._config_partial = True
+                self._config_warnings.append(
+                    f"Invalid gateway entry {idx}; skipped ({type(e).__name__})"
+                )
                 logger.error(
                     f"Skipping invalid gateway entry {idx} in {config_path} "
-                    f"(id={gw.get('id', '?') if isinstance(gw, dict) else '?'}): {e}"
+                    f"(id={gw.get('id', '?') if isinstance(gw, dict) else '?'}): "
+                    f"{type(e).__name__}"
                 )
         if not self.gateways:
+            self._config_error = "Config file contained no valid gateway entries"
             logger.error(
-                f"PW_CONFIG file {config_path} contained no valid gateway entries"
+                f"Config file {config_path} contained no valid gateway entries"
             )
         return True
 
     def _initialize_gateways(self):
-        """Initialize gateway configurations from PW_CONFIG file or environment variables."""
-        # Config file (--config / PW_CONFIG) takes precedence
-        if self._load_config_file():
+        """Initialize gateways from file, JSON env, legacy env, or default file."""
+        self._reset_config_metadata()
+
+        # Config file (--config / PW_CONFIG) takes precedence. A missing or
+        # broken file intentionally does not fall through to another source.
+        config_path = os.getenv("PW_CONFIG")
+        if config_path:
+            self._load_config_file(config_path, "pw_config")
             return
 
         # Try to load from PW_GATEWAYS JSON
@@ -736,15 +946,18 @@ class Settings(BaseSettings):
             # discard the whole list and quietly reconfigure the server.
             # Validate each entry individually so one bad entry doesn't
             # take out the rest.
+            self._config_source = "pw_gateways"
             self.gateways = []
             try:
                 gateways_data = json.loads(gateways_json)
             except Exception as e:
+                self._config_error = f"PW_GATEWAYS is not valid JSON: {e}"
                 logger.error(
                     f"PW_GATEWAYS is not valid JSON ({e}) - " "no gateways configured"
                 )
                 return
             if not isinstance(gateways_data, list):
+                self._config_error = "PW_GATEWAYS must be a JSON array"
                 logger.error(
                     "PW_GATEWAYS must be a JSON array of gateway objects - "
                     "no gateways configured"
@@ -754,11 +967,20 @@ class Settings(BaseSettings):
                 try:
                     self.gateways.append(GatewayConfig(**gw))
                 except Exception as e:
+                    self._config_partial = True
+                    self._config_warnings.append(
+                        f"Invalid PW_GATEWAYS entry {idx}; skipped "
+                        f"({type(e).__name__})"
+                    )
                     logger.error(
                         f"Skipping invalid PW_GATEWAYS entry {idx} "
-                        f"(id={gw.get('id', '?') if isinstance(gw, dict) else '?'}): {e}"
+                        f"(id={gw.get('id', '?') if isinstance(gw, dict) else '?'}): "
+                        f"{type(e).__name__}"
                     )
             if not self.gateways:
+                self._config_error = (
+                    "PW_GATEWAYS was set but contained no valid gateway entries"
+                )
                 logger.error(
                     "PW_GATEWAYS was set but contained no valid gateway entries"
                 )
@@ -783,6 +1005,7 @@ class Settings(BaseSettings):
                         f"{CLOUD_AUTH_FILE} in PW_AUTH_PATH selected Cloud"
                     )
         if self.pw_host or email or fleetapi:
+            self._config_source = "legacy_env"
             self.gateways = [
                 GatewayConfig(
                     id="default",
@@ -799,6 +1022,16 @@ class Settings(BaseSettings):
                     fleetapi=fleetapi,
                 )
             ]
+            return
+
+        # Lowest priority: a wizard-managed default file. Only load it when
+        # no explicit source exists, so env/PW_GATEWAYS keep precedence.
+        default_path = default_config_path()
+        if os.path.exists(default_path):
+            self._load_config_file(default_path, "default_file")
+            return
+
+        self._config_source = "none"
 
 
 # Global settings instance

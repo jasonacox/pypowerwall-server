@@ -2,6 +2,19 @@
 
 ## Version History
 
+### [0.17.0] - Upcoming
+
+**Added:**
+- Graphical setup wizard at `/setup` with server-side diagnostics, atomic
+  configuration persistence, setup-token authentication and support for all
+  gateway connection modes.
+- Optional `settings` block in `PW_CONFIG` for persistent MQTT/Home Assistant,
+  time-series, cloud/fallback, HTTPS, rate-limit, control and expert settings.
+- Per-gateway `siteid`, TEDAPI bearer fields, and a lowest-priority
+  `/data/gateways.yaml` default configuration path.
+- `pyyaml` is included in the runtime requirements so `PW_CONFIG` works in the
+  Docker image.
+
 ### [0.16.1] - 2026-11-12
 
 Honest `/pod` status flags, and Power Flow and Console layout fixes for narrow

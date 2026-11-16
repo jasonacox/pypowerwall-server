@@ -809,10 +809,11 @@ class GatewayManager:
                         "auto_select": True,
                         "failover": settings.failover,
                     }
-                    if settings.siteid:
-                        # PW_SITEID picks the site on multi-site accounts. The
-                        # cloud client compares it with integer site ids.
-                        cloud_kwargs["siteid"] = _siteid_kwarg(settings.siteid)
+                    siteid = config.siteid or settings.siteid
+                    if siteid:
+                        # Per-gateway siteid (or global PW_SITEID) picks the
+                        # site on multi-site accounts.
+                        cloud_kwargs["siteid"] = _siteid_kwarg(siteid)
                     pw = await asyncio.wait_for(
                         loop.run_in_executor(
                             self._executor,
@@ -835,7 +836,9 @@ class GatewayManager:
                             f"(mode={getattr(pw, 'mode', 'unknown')})"
                         )
                     self._cloud_control = pw
-                    if await self._cloud_site_unambiguous():
+                    if await self._cloud_site_unambiguous(
+                        config.siteid or settings.siteid
+                    ):
                         self._cloud_control_gateway_id = config.id
                     logger.info(
                         "Cloud connection established (control/read bindings available)"
@@ -854,14 +857,14 @@ class GatewayManager:
                 retry_interval * 2, self._CLOUD_CONTROL_RETRY_MAX
             )
 
-    async def _cloud_site_unambiguous(self) -> bool:
+    async def _cloud_site_unambiguous(self, siteid=None) -> bool:
         """True when the shared cloud connection's Tesla site is certain.
 
-        That is when PW_SITEID is set, a site was chosen with pypowerwall
-        setup (the site file in the auth path), the live connection is
-        FleetAPI (its site comes from its own setup; a configured FleetAPI
-        gateway can fail over to Cloud, which has no such setup), or the
-        account has one site.
+        That is when PW_SITEID (or a per-gateway siteid) is set, a site was
+        chosen with pypowerwall setup (the site file in the auth path), the
+        live connection is FleetAPI (its site comes from its own setup; a
+        configured FleetAPI gateway can fail over to Cloud, which has no such
+        setup), or the account has one site.
         Otherwise the cloud client defaults to the account's first site,
         which may not be this gateway's, so the binding is unsafe.
 
@@ -870,13 +873,14 @@ class GatewayManager:
         """
         from app.config import settings
 
+        siteid = siteid or settings.siteid
         read_fallback = settings.cloud_read_fallback and settings.failover
         if not settings.mqtt_controls_available and not read_fallback:
             return False
         client = getattr(self._cloud_control, "client", None)
         sitefile = getattr(client, "sitefile", None)
         fleetapi = getattr(self._cloud_control, "mode", None) == "fleetapi"
-        if settings.siteid or fleetapi or (sitefile and os.path.exists(sitefile)):
+        if siteid or fleetapi or (sitefile and os.path.exists(sitefile)):
             return True
         getsites = getattr(client, "getsites", None)
         sites = None
@@ -1849,10 +1853,11 @@ class GatewayManager:
                             cloud_kwargs["email"] = config.email
                         if config.authpath:
                             cloud_kwargs["authpath"] = config.authpath
-                        if settings.siteid:
-                            # PW_SITEID picks the site on multi-site accounts.
-                            # The cloud client compares it with integer ids.
-                            cloud_kwargs["siteid"] = _siteid_kwarg(settings.siteid)
+                        siteid = config.siteid or settings.siteid
+                        if siteid:
+                            # Per-gateway siteid (or global PW_SITEID) picks the
+                            # site on multi-site accounts.
+                            cloud_kwargs["siteid"] = _siteid_kwarg(siteid)
                         pw = await asyncio.wait_for(
                             loop.run_in_executor(
                                 self._executor,
@@ -2374,12 +2379,17 @@ class GatewayManager:
             tedapi_kwargs["authpath"] = config.authpath
         if settings.cache_file:
             tedapi_kwargs["cachefile"] = settings.cache_file
-        if settings.siteid:
-            tedapi_kwargs["siteid"] = _siteid_kwarg(settings.siteid)
+        siteid = config.siteid or settings.siteid
+        if siteid:
+            tedapi_kwargs["siteid"] = _siteid_kwarg(siteid)
         if config.rsa_key_path:
             tedapi_kwargs["rsa_key_path"] = config.rsa_key_path
         if config.wifi_host:
             tedapi_kwargs["wifi_host"] = config.wifi_host
+        if config.tedapi_auth_mode:
+            tedapi_kwargs["tedapi_auth_mode"] = config.tedapi_auth_mode
+        if config.tedapi_api_version:
+            tedapi_kwargs["tedapi_api_version"] = config.tedapi_api_version
         if settings.wifi_v1r_fallback:
             tedapi_kwargs["wifi_v1r_fallback"] = True
         return tedapi_kwargs

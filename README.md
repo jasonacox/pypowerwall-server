@@ -199,6 +199,49 @@ pypowerwall-server --setup # one-time setup
 pypowerwall-server --email "your@email.com"
 ```
 
+## Graphical Setup Wizard
+
+New installations can be configured from the browser at `/setup` without editing
+YAML or environment variables. The wizard supports TEDAPI, TEDAPI v1r, Local,
+Basic LAN, TEDAPI bearer for solar-only gateways, Hybrid TEDAPI, Cloud, FleetAPI
+and server hybrid setups, multiple gateways, and a persistent settings block.
+
+> **Docker Compose users:** the bundled `docker-compose.yml` still contains
+> example `PW_HOST` and `PW_GW_PWD` values. Remove or comment them out before
+> opening `/setup`; while they are set, the server treats the configuration as
+> environment-managed and the wizard cannot save.
+
+The setup API is protected by `PW_CONTROL_SECRET`, or by a bootstrap token printed
+once in the server log when no control secret is set:
+
+```bash
+docker logs pypowerwall-server | grep "Setup wizard access token"
+```
+
+When `PW_CONTROL_SECRET` is unset, the bootstrap token is a fresh
+43-character URL-safe random string and changes when the server restarts.
+
+Open `http://<server>:8675/setup`, enter the token, test the gateway and save.
+The token stays in the tab by default; **Remember my token on this device**
+stores it in this browser's `localStorage`, like the Console control token. The
+configuration is written atomically to `/data/gateways.yaml` (or the path in
+`PW_CONFIG`) with a backup. Restart the container/process to activate it. The
+wizard never executes Powerwall control commands. Cloud/FleetAPI OAuth and v1r
+RSA key registration are guided in the wizard; the physical Powerwall proof,
+Tesla developer app approval, public-key hosting and host network changes remain
+explicit steps. The FleetAPI panel can generate the EC key pair and shows the
+public PEM to host. The v1r registration panel reuses an existing
+`.pypowerwall.auth` login, walks through Tesla login, or imports a selected
+`.pypowerwall.auth` file, registers the public key, and shows the verification
+state and proof instructions while the key is pending. Cloud setup also accepts
+a Refresh Token and optional Access Token from a headless
+`python -m pypowerwall authtoken` session. The FleetAPI panel verifies the app's
+public-key URL, registers the partner account, completes the Tesla login and
+selects the energy site, writing `.pypowerwall.fleetapi`. A private-network scan
+can fill the gateway host from a `/24` (or smaller) CIDR.
+
+The existing manual YAML and environment-variable configuration is unchanged.
+
 ## Configuration
 
 The complete list of settings, with defaults and the modes they apply to, is in
@@ -412,7 +455,7 @@ shared by both pages in `app/static/js/page.js` and `app/static/css/page.css`.
 Pass a YAML (or JSON) config file with `--config gateways.yaml` or
 `PW_CONFIG=/path/to/gateways.yaml`. A template ships as
 `gateways.yaml.example` — copy it to `gateways.yaml` (which is gitignored,
-since it holds gateway passwords) and edit:
+since it holds gateway passwords) and edit it. When neither `PW_CONFIG` nor `PW_GATEWAYS` nor legacy `PW_*` gateway variables are set, the server also checks `/data/gateways.yaml` (or `data/gateways.yaml` outside Docker) as the lowest-priority source. The optional `settings` block accepts writable `Settings` field names, such as `failover`, `mqtt_host` or `timeseries_retention`.
 
 ```yaml
 server:

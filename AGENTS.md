@@ -410,6 +410,10 @@ The `track_requests` middleware in `app/main.py` does double duty: request stati
 | `app/api/gateways.py` | Multi-gateway REST API |
 | `app/api/aggregates.py` | Combined data from all gateways |
 | `app/api/websockets.py` | Real-time streaming |
+| `app/api/setup.py` | Setup wizard status, validation, diagnostics and save API |
+| `app/core/setup.py` | Setup token, config persistence, default path and diagnostics |
+| `app/models/setup.py` | Setup request/response models |
+| `app/static/setup.html` | Setup wizard page |
 | `app/models/gateway.py` | Pydantic models |
 | `app/utils/transform.py` | Static file serving and JS injection into HTML |
 | `app/utils/stats_tracker.py` | Request statistics |

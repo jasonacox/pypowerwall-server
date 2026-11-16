@@ -231,3 +231,37 @@ body.kiosk .kiosk-controls {
     font-size: 0.85em;
     cursor: pointer;
 }
+
+.setup-banner {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    margin: 0 0 20px;
+    padding: 13px 16px;
+    border: 1px solid rgba(210, 153, 34, 0.45);
+    border-radius: 10px;
+    background: rgba(210, 153, 34, 0.08);
+    color: var(--text-secondary);
+    font-size: 0.86rem;
+}
+
+.setup-banner strong {
+    color: var(--accent-yellow);
+}
+
+.setup-banner a {
+    color: var(--accent-blue);
+    font-weight: 700;
+}
+
+body.kiosk .setup-banner {
+    display: none;
+}
+
+@media (max-width: 600px) {
+    .setup-banner {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}

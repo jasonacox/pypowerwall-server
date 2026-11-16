@@ -41,7 +41,9 @@ The mode is chosen per gateway from the settings it has:
 |------|----------|-------|
 | TEDAPI | `PW_HOST` + `PW_GW_PWD` | Local data over the gateway WiFi (normally `192.168.91.1`). Read-only unless hybrid. |
 | TEDAPI v1r | `PW_HOST` + `PW_GW_PWD` + `PW_RSA_KEY_PATH` | Local data over the wired LAN with a registered RSA key. Can write settings and island locally. |
+| TEDAPI Bearer | `PW_HOST` + `PW_GW_PWD` + `tedapi_auth_mode: bearer` | Solar-only/inverter gateway login over the wired LAN; not supported by Powerwall 2/3. |
 | Local | `PW_HOST` + `PW_PASSWORD`, no gateway password or RSA key | Powerwall 2 local API, like the proxy's local mode. Detected on connect: the gateway answers `/api/status`. |
+| Hybrid TEDAPI | `PW_HOST` + `PW_PASSWORD` + `PW_GW_PWD` | Local customer login plus embedded TEDAPI; normally at the gateway WiFi address. |
 | Basic LAN | `PW_HOST` + `PW_PASSWORD`, no gateway password or RSA key | Powerwall 3 wired LAN, detected on connect when `/api/status` isn't served (re-checked after 5 minutes, then doubling up to 6 hours). Core metrics only: aggregates, battery level, grid status. |
 | Cloud | `PW_EMAIL` without `PW_HOST`, or `.pypowerwall.auth` in `PW_AUTH_PATH` (its account fills a missing `PW_EMAIL`) | Tesla cloud. Run `pypowerwall-server --setup` once to create the auth files. |
 | FleetAPI | `.pypowerwall.fleetapi` in `PW_AUTH_PATH` without `PW_HOST` (picked before Cloud, as the proxy does), or `fleetapi: true` on a gateway in `PW_GATEWAYS` or the config file | Tesla Fleet API. |
@@ -54,10 +56,12 @@ In the tables, **Local** means TEDAPI, TEDAPI v1r, the Powerwall 2 local API and
 The server uses the first of these that is set:
 
 1. **Config file:** `PW_CONFIG=/path/to/gateways.yaml` (or `--config`). YAML or
-   JSON with an optional `server` block (`host`, `port`, `cors_origins`) and a
-   `gateways` list. If the file is set but unreadable, no gateways are
-   configured (the server never falls back to another source). See
-   [gateways.yaml.example](gateways.yaml.example).
+   JSON with an optional `server` block (`host`, `port`, `cors_origins`), a
+   `gateways` list, and an optional `settings` block containing writable
+   `Settings` field names (for example `failover`, `mqtt_host`,
+   `timeseries_retention`). The setup wizard writes this format. If the file is
+   set but unreadable, no gateways are configured (the server never falls back
+   to another source). See [gateways.yaml.example](gateways.yaml.example).
 2. **`PW_GATEWAYS`:** a JSON array of gateway objects. Invalid entries are
    skipped and logged; invalid JSON configures no gateways.
 3. **Single gateway:** `PW_HOST`, `PW_GW_PWD`, `PW_PASSWORD`,
@@ -89,6 +93,9 @@ file:
 | `cloud_mode` | bool | `false` | Use the Tesla cloud. Set automatically when `email` is given without `host`. |
 | `fleetapi` | bool | `false` | Use the Tesla Fleet API. |
 | `type` | str | `powerwall` | `powerwall`, or `inverter` for a solar-only gateway (the Console hides battery panels). |
+| `siteid` | str | none | Per-gateway Tesla site id; overrides global `PW_SITEID` for Cloud/FleetAPI and hybrid control. |
+| `tedapi_auth_mode` | str | none | `basic` or `bearer`; bearer is only for solar-only/inverter gateways. |
+| `tedapi_api_version` | str | none | `V2024_06` or `V2026_06`; passed to pypowerwall. |
 
 ```bash
 PW_GATEWAYS='[
@@ -377,6 +384,43 @@ HTTP `200`, with an `{"error": ...}` body when they can't.
 
 An unknown `gateway_id` returns `404`.
 
+### Setup wizard
+
+The setup API is authenticated with `PW_CONTROL_SECRET` or, when that is
+unset, with the process-local bootstrap token printed once in the server log.
+The bootstrap token is a 43-character URL-safe random string and changes when
+the process restarts. Send it as `Authorization: Bearer <token>` or
+`X-PW-Setup-Token: <token>`. Setup writes are atomic and require a restart to
+activate.
+
+| Method | Path | Auth | Response |
+|--------|------|------|----------|
+| GET | `/api/setup/status` | setup | Masked setup state, config source, writable path, revision, gateway status and `setup_recommended`. |
+| GET | `/api/setup/schema` | setup | Supported connection modes, writable settings fields with defaults, and the server's sorted IANA time zones. |
+| POST | `/api/setup/validate` | setup | Validate a full gateway/options snapshot without writing. |
+| POST | `/api/setup/test-connection` | setup | Read-only DNS/TCP/auth/data check for one gateway; cloud modes verify auth files without refreshing tokens. |
+| POST | `/api/setup/auth/status` | setup | Report Cloud/FleetAPI auth files and the existing CLI command. |
+| POST | `/api/setup/auth/file` | setup | Validate and import a browser-selected Cloud `.pypowerwall.auth` or FleetAPI `.pypowerwall.fleetapi` file into the allowed auth path. |
+| POST | `/api/setup/auth/tokens` | setup | Save a Refresh Token and optional Access Token from a headless Tesla login as `.pypowerwall.auth`. |
+| POST | `/api/setup/scan` | setup | Scan a private IPv4 network (`/24` or smaller) for Tesla gateways. |
+| POST | `/api/setup/auth/cloud/start` | setup | Build a Tesla PKCE login URL using pypowerwall's existing auth helper; `region` is `us` or `cn`. |
+| POST | `/api/setup/auth/cloud/use` | setup | Reuse an existing Cloud auth file, connect to Tesla Cloud and select its site. |
+| POST | `/api/setup/auth/cloud/complete` | setup | Exchange the pasted callback URL, save auth files and select a site if unambiguous. |
+| POST | `/api/setup/auth/cloud/site` | setup | Persist a site selection after a multi-site login. |
+| GET | `/api/setup/docker/preflight` | setup | Check `/data`, writability, container detection and network namespace hints. |
+| GET | `/api/setup/import-env` | setup | Masked YAML preview for migrating env/`PW_GATEWAYS` configuration. |
+| POST | `/api/setup/import-env` | setup | Write the effective environment configuration to the setup YAML file (with backup); legacy env still takes precedence until removed. |
+| POST | `/api/setup/v1r/key` | setup | Explicitly generate or inspect the canonical v1r RSA key. |
+| POST | `/api/setup/v1r/auth-file` | setup | Validate and import a browser-selected `.pypowerwall.auth` file into the allowed auth path with owner-only permissions. |
+| POST | `/api/setup/v1r/register` | setup | Register the canonical public key using the Owner API login or the saved FleetAPI config; returns the site list if a site must be selected, otherwise the key state and physical-proof guidance. |
+| POST | `/api/setup/v1r/register/status` | setup | Check the gateway's verification state for the canonical v1r key and return the physical-proof guidance while it is pending. |
+| POST | `/api/setup/fleetapi/key` | setup | Generate or reuse the EC key pair for FleetAPI app public-key hosting; the private key is written with owner-only permissions and never returned. |
+| POST | `/api/setup/fleetapi/start` | setup | Verify the FleetAPI public-key URL, register the partner account, save the app configuration and return the Tesla login URL. |
+| POST | `/api/setup/fleetapi/complete` | setup | Exchange the FleetAPI callback code, save `.pypowerwall.fleetapi`, list the account's energy sites and select the only site when unambiguous. |
+| POST | `/api/setup/fleetapi/site` | setup | Verify and persist the selected FleetAPI energy site. |
+| POST | `/api/setup/configure` | setup | Validate and atomically save the snapshot; returns `restart_required`. |
+| POST | `/api/setup/reload` | setup | Report that a server restart is required; it never hot-reloads. |
+
 ### Aggregates (all gateways)
 
 Combined data from every gateway with data: power is summed and battery levels
@@ -435,6 +479,7 @@ Each pushes one JSON message per second.
 |--------|------|----------|
 | GET | `/` | Power Flow animation (HTML). Query: `style` overrides `PW_STYLE`. |
 | GET | `/console` | Management console (HTML). |
+| GET | `/setup` | Graphical setup and reconfiguration wizard (HTML, no-store). |
 | GET | `/history` | Daily energy and temperature/fan history (HTML). |
 | GET | `/example` | Power Flow iframe example (HTML). |
 | GET | `/example.html` | Same as `/example`. |
