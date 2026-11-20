@@ -8,6 +8,11 @@ server:
     - http://localhost:3000
     - http://localhost:8675
 
+# Optional writable Settings overrides. Matching environment/CLI values win.
+# settings:
+#   failover: false
+#   mqtt_host: broker.local
+
 gateways:
   # Example 1: Local TEDAPI connection (most common)
   - id: home

@@ -21,7 +21,7 @@ from app.core.setup import (
     cloud_auth_site,
     cloud_auth_start,
     cloud_auth_use,
-    docker_preflight,
+    delete_setup_config,
     env_import_activate,
     env_import_preview,
     import_auth_file,
@@ -51,6 +51,8 @@ from app.models.setup import (
     SetupCloudSiteResult,
     SetupConfigureRequest,
     SetupConfigureResult,
+    SetupDeleteConfigRequest,
+    SetupDeleteConfigResult,
     SetupDiagnosticResult,
     SetupEnvImportRequest,
     SetupEnvImportResult,
@@ -64,7 +66,6 @@ from app.models.setup import (
     SetupFleetStartResult,
     SetupGatewayInput,
     SetupKeyRequest,
-    SetupReloadResult,
     SetupScanRequest,
     SetupScanResult,
     SetupStatus,
@@ -218,11 +219,6 @@ async def scan_endpoint(request: SetupScanRequest):
         ) from exc
 
 
-@router.get("/docker/preflight")
-async def docker_preflight_endpoint():
-    return docker_preflight()
-
-
 @router.get("/import-env")
 async def import_env_endpoint():
     return env_import_preview()
@@ -343,14 +339,24 @@ async def fleetapi_site_endpoint(request: SetupFleetSiteRequest):
 async def test_connection(gateway: SetupGatewayInput) -> SetupDiagnosticResult:
     try:
         existing = load_existing_config()
+        lookup_id = gateway.original_id or gateway.id
         match = next(
             (
                 item
                 for item in existing.get("gateways", [])
-                if isinstance(item, dict) and item.get("id") == gateway.id
+                if isinstance(item, dict) and item.get("id") == lookup_id
             ),
             {},
         )
+        if not match and gateway.original_id:
+            match = next(
+                (
+                    item
+                    for item in existing.get("gateways", [])
+                    if isinstance(item, dict) and item.get("id") == gateway.id
+                ),
+                {},
+            )
         return await run_in_threadpool(test_gateway_connection, gateway, match)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -364,9 +370,9 @@ async def configure(request: SetupConfigureRequest) -> SetupConfigureResult:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/reload", response_model=SetupReloadResult)
-async def reload() -> SetupReloadResult:
-    return SetupReloadResult(
-        restart_required=True,
-        message="Restart the server/container to activate the saved configuration.",
-    )
+@router.post("/delete-config", response_model=SetupDeleteConfigResult)
+async def delete_config_endpoint(request: SetupDeleteConfigRequest):
+    try:
+        return delete_setup_config(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

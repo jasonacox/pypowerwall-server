@@ -12,6 +12,8 @@
         step: 1,
         initialSettings: {},
         validated: false,
+        envRevision: null,
+        envTarget: null,
     };
 
     function escapeHtml(value) {
@@ -70,8 +72,6 @@
             "Local data over the gateway WiFi (normally 192.168.91.1). Read-only unless hybrid.",
         tedapi_v1r:
             "Local data over the wired LAN with a registered RSA key. Can write settings and island locally.",
-        tedapi_bearer:
-            "Solar-only/inverter gateway login over the wired LAN; not supported by Powerwall 2/3.",
         local:
             "Powerwall 2 local API, like the proxy's local mode. Detected on connect: the gateway answers /api/status.",
         basic_lan:
@@ -83,6 +83,8 @@
         fleetapi: "Tesla Fleet API.",
         hybrid:
             "Reads stay local; control writes use a Tesla cloud connection, which also fills values the local API lacks (Basic LAN mode and reserve, grid charging/export settings).",
+        hybrid_fleetapi:
+            "Reads stay local; control writes use Tesla Fleet API. Requires a local credential, Tesla account email, auth path and FleetAPI login.",
     };
 
     const SETTING_LABELS = {
@@ -646,27 +648,12 @@
             warnings.hidden = true;
         }
         $("continue-to-gateways").disabled = false;
+        $("delete-config").hidden = !(
+            status.can_write &&
+            status.config_source === "default_file" &&
+            status.config_file_revision
+        );
         state.initialSettings = Object.assign({}, status.settings || {});
-        loadDockerStatus();
-    }
-
-    async function loadDockerStatus() {
-        const box = $("docker-status");
-        try {
-            const result = await api("/docker/preflight");
-            const statusWarnings = ((state.status && state.status.warnings) || []).join(" ");
-            const warnings = (result.warnings || []).filter((warning) => {
-                if (/\bdata\b/i.test(warning) && /\bdata\b/i.test(statusWarnings)) {
-                    return false;
-                }
-                return true;
-            });
-            box.hidden = !warnings.length;
-            box.className = "notice warning";
-            box.innerHTML = warnings.map((item) => "<div>" + escapeHtml(item) + "</div>").join("");
-        } catch (err) {
-            box.hidden = true;
-        }
     }
 
     function loadGateways() {
@@ -696,12 +683,14 @@
         const card = fragment.querySelector(".gateway-card");
         const index = state.gatewaySeq++;
         card.dataset.index = String(index);
+        card.dataset.originalId = config.id || "";
         card.querySelector(".gateway-index").textContent = "Gateway " + (index + 1);
         card.querySelector(".gateway-title").textContent = config.name || config.id || "New gateway";
         const set = (field, value) => {
             const input = card.querySelector('[data-field="' + field + '"]');
             if (input && value !== undefined && value !== null) {
                 input.value = value;
+                input.dataset.initial = String(value);
             }
         };
         [
@@ -712,19 +701,19 @@
             "host",
             "port",
             "timezone",
-            "siteid",
             "rsa_key_path",
             "wifi_host",
             "email",
             "authpath",
-            "tedapi_auth_mode",
-            "tedapi_api_version",
         ].forEach((field) => set(field, config[field]));
         if (!config.mode) {
             card.querySelector('[data-field="mode"]').value = "tedapi";
         }
         if (!config.timezone) {
-            card.querySelector('[data-field="timezone"]').value = "America/Los_Angeles";
+            const defaults =
+                (state.schema && state.schema.gateway_defaults) || {};
+            card.querySelector('[data-field="timezone"]').value =
+                defaults.timezone || "America/Los_Angeles";
         }
         const mode = card.querySelector('[data-field="mode"]');
         mode.addEventListener("change", () => updateModeFields(card));
@@ -792,34 +781,32 @@
             description.textContent = MODE_DESCRIPTIONS[mode] || "";
         }
         const show = {
-            gw_pwd: ["tedapi", "tedapi_v1r", "tedapi_bearer", "hybrid_tedapi"],
-            password: ["tedapi_v1r", "local", "basic_lan", "hybrid_tedapi", "hybrid"],
-            rsa_key_path: ["tedapi_v1r"],
-            wifi_host: ["tedapi_v1r"],
+            gw_pwd: ["tedapi", "tedapi_v1r", "hybrid_tedapi", "hybrid", "hybrid_fleetapi"],
+            password: ["tedapi_v1r", "local", "basic_lan", "hybrid_tedapi", "hybrid", "hybrid_fleetapi"],
+            rsa_key_path: ["tedapi_v1r", "hybrid", "hybrid_fleetapi"],
+            wifi_host: ["tedapi_v1r", "hybrid", "hybrid_fleetapi"],
             email: [
                 "tedapi",
                 "tedapi_v1r",
-                "tedapi_bearer",
                 "local",
                 "basic_lan",
                 "hybrid_tedapi",
                 "cloud",
                 "fleetapi",
                 "hybrid",
+                "hybrid_fleetapi",
             ],
             authpath: [
                 "tedapi",
                 "tedapi_v1r",
-                "tedapi_bearer",
                 "local",
                 "basic_lan",
                 "hybrid_tedapi",
                 "cloud",
                 "fleetapi",
                 "hybrid",
+                "hybrid_fleetapi",
             ],
-            tedapi_auth_mode: ["tedapi_bearer"],
-            tedapi_api_version: ["tedapi_bearer"],
         };
         card.querySelectorAll("[data-mode-field]").forEach((field) => {
             const key = field.dataset.modeField;
@@ -830,25 +817,26 @@
         const cloudOnly = mode === "cloud" || mode === "fleetapi";
         host.closest(".field").hidden = cloudOnly;
         port.closest(".field").hidden = cloudOnly;
-        if (mode === "tedapi_bearer") {
-            card.querySelector('[data-field="type"]').value = "inverter";
-        }
+        const v1rModes = ["tedapi_v1r", "hybrid", "hybrid_fleetapi"];
+        const cloudControlModes = ["cloud", "hybrid"];
+        const fleetControlModes = ["fleetapi", "hybrid_fleetapi"];
+        const authModes = ["cloud", "fleetapi", "hybrid", "hybrid_fleetapi"];
         const keyButton = card.querySelector(".generate-key");
-        keyButton.hidden = mode !== "tedapi_v1r";
+        keyButton.hidden = !v1rModes.includes(mode);
         const authButton = card.querySelector(".check-auth");
-        authButton.hidden = !(mode === "cloud" || mode === "fleetapi");
+        authButton.hidden = !authModes.includes(mode);
         const cloudAuth = card.querySelector("[data-cloud-auth]");
-        cloudAuth.hidden = mode !== "cloud";
+        cloudAuth.hidden = !cloudControlModes.includes(mode);
         const v1rRegistration = card.querySelector("[data-v1r-registration]");
-        if (v1rRegistration) v1rRegistration.hidden = mode !== "tedapi_v1r";
+        if (v1rRegistration) v1rRegistration.hidden = !v1rModes.includes(mode);
         const fleetRegistration = card.querySelector("[data-fleet-registration]");
-        if (fleetRegistration) fleetRegistration.hidden = mode !== "fleetapi";
+        if (fleetRegistration) fleetRegistration.hidden = !fleetControlModes.includes(mode);
         const help = card.querySelector("[data-mode-help]");
-        if (mode === "cloud") {
+        if (cloudControlModes.includes(mode)) {
             help.hidden = false;
             help.textContent =
                 "Use Start Tesla login in the panel below to create the auth files, then test the connection.";
-        } else if (mode === "fleetapi") {
+        } else if (fleetControlModes.includes(mode)) {
             help.hidden = false;
             help.textContent =
                 "Use the Fleet API setup panel below; it verifies the app/public key and creates .pypowerwall.fleetapi.";
@@ -917,6 +905,9 @@
             if (result.siteid) {
                 card.querySelector('[data-field="siteid"]').value = result.siteid;
             }
+            if (result.email) {
+                card.querySelector('[data-field="email"]').value = result.email;
+            }
             const sites = (result.sites || [])
                 .map((site) => {
                     const selected = String(result.siteid) === String(site.siteid);
@@ -962,6 +953,9 @@
             card.querySelector(".cloud-callback").value = "";
             if (result.siteid) {
                 card.querySelector('[data-field="siteid"]').value = result.siteid;
+            }
+            if (result.email) {
+                card.querySelector('[data-field="email"]').value = result.email;
             }
             const sites = (result.sites || [])
                 .map((site) => {
@@ -1405,6 +1399,9 @@
             if (result.siteid) {
                 card.querySelector('[data-field="siteid"]').value = result.siteid;
             }
+            if (result.email) {
+                card.querySelector(".v1r-email").value = result.email;
+            }
             renderV1rSites(card, result.sites || []);
             setV1rAuthStatus(
                 card,
@@ -1579,19 +1576,23 @@
         const container = card.querySelector(".diagnostics");
         container.innerHTML = '<div class="notice">Checking auth files&hellip;</div>';
         try {
+            const gatewayMode = card.querySelector('[data-field="mode"]').value;
+            const authMode =
+                gatewayMode === "fleetapi" || gatewayMode === "hybrid_fleetapi"
+                    ? "fleetapi"
+                    : "cloud";
             const result = await api("/auth/status", {
                 method: "POST",
                 body: JSON.stringify({
-                    mode: card.querySelector('[data-field="mode"]').value,
+                    mode: authMode,
                     authpath: card.querySelector('[data-field="authpath"]').value.trim() || null,
                 }),
             });
-            const mode = card.querySelector('[data-field="mode"]').value;
             const files = Object.keys(result.files || {})
                 .map((key) => key + ": " + (result.files[key] ? "present" : "missing"))
                 .join("<br>");
             let nextStep = "All required auth files are present. Test the connection.";
-            if (!result.ready && mode === "fleetapi") {
+            if (!result.ready && authMode === "fleetapi") {
                 nextStep = "Use the Fleet API setup panel below, then test the connection.";
             } else if (!result.ready) {
                 nextStep = "Use Start Tesla login in the panel below, then test the connection.";
@@ -1650,9 +1651,17 @@
             name: value("name") || undefined,
             mode: mode,
             type: value("type") || "powerwall",
-            timezone: value("timezone") || "America/Los_Angeles",
+            timezone:
+                value("timezone") ||
+                (state.schema &&
+                    state.schema.gateway_defaults &&
+                    state.schema.gateway_defaults.timezone) ||
+                "America/Los_Angeles",
         };
-        const hostModes = ["tedapi", "tedapi_v1r", "tedapi_bearer", "local", "basic_lan", "hybrid_tedapi", "hybrid"];
+        if (card.dataset.originalId) {
+            data.original_id = card.dataset.originalId;
+        }
+        const hostModes = ["tedapi", "tedapi_v1r", "local", "basic_lan", "hybrid_tedapi", "hybrid", "hybrid_fleetapi"];
         if (hostModes.includes(mode)) {
             data.host = value("host");
         }
@@ -1660,47 +1669,48 @@
         if (port) {
             data.port = Number(port);
         }
-        const siteid = value("siteid");
-        if (siteid) {
-            data.siteid = siteid;
-        }
         const secretModes = {
-            gw_pwd: ["tedapi", "tedapi_v1r", "tedapi_bearer", "hybrid_tedapi"],
-            password: ["tedapi_v1r", "local", "basic_lan", "hybrid_tedapi", "hybrid"],
+            gw_pwd: ["tedapi", "tedapi_v1r", "hybrid_tedapi", "hybrid", "hybrid_fleetapi"],
+            password: ["tedapi_v1r", "local", "basic_lan", "hybrid_tedapi", "hybrid", "hybrid_fleetapi"],
             email: [
                 "tedapi",
                 "tedapi_v1r",
-                "tedapi_bearer",
                 "local",
                 "basic_lan",
                 "hybrid_tedapi",
                 "cloud",
                 "fleetapi",
                 "hybrid",
+                "hybrid_fleetapi",
             ],
             authpath: [
                 "tedapi",
                 "tedapi_v1r",
-                "tedapi_bearer",
                 "local",
                 "basic_lan",
                 "hybrid_tedapi",
                 "cloud",
                 "fleetapi",
                 "hybrid",
+                "hybrid_fleetapi",
             ],
-            rsa_key_path: ["tedapi_v1r"],
-            wifi_host: ["tedapi_v1r"],
-            tedapi_auth_mode: ["tedapi_bearer"],
-            tedapi_api_version: ["tedapi_bearer"],
+            rsa_key_path: ["tedapi_v1r", "hybrid", "hybrid_fleetapi"],
+            wifi_host: ["tedapi_v1r", "hybrid", "hybrid_fleetapi"],
         };
         Object.keys(secretModes).forEach((field) => {
             if (!secretModes[field].includes(mode)) {
                 return;
             }
+            const input = card.querySelector('[data-field="' + field + '"]');
+            if (input && input.dataset.secretCleared === "true") {
+                data[field] = null;
+                return;
+            }
             const current = value(field);
             if (current) {
                 data[field] = current;
+            } else if (input && input.dataset.initial) {
+                data[field] = null;
             }
         });
         return data;
@@ -1756,8 +1766,7 @@
         ) return "Server, HTTPS and UI";
         if (name.startsWith("rate_limit_")) return "Rate limiting";
         if (
-            ["siteid", "failover", "fleetapi_http", "cloud_hybrid", "cloud_read_fallback", "cloud_energy"].includes(name) ||
-            name.startsWith("cloud_energy")
+            ["siteid", "failover", "fleetapi_http", "cloud_hybrid", "cloud_read_fallback"].includes(name)
         ) return "Cloud and failover";
         if (["local_first", "wifi_v1r_fallback"].includes(name)) return "Local and WiFi fallback";
         if (["control_secret", "islanding_cooldown", "battery_dispatch"].includes(name)) {
@@ -2005,7 +2014,9 @@
         return {
             gateways: collectGateways(),
             options: collectOptions(),
-            expected_revision: state.status ? state.status.config_revision : null,
+            expected_revision: state.status
+            ? state.status.config_file_revision || state.status.config_revision
+            : null,
         };
     }
 
@@ -2070,6 +2081,25 @@
 
     async function saveConfig() {
         if (!state.validated) return;
+        if (
+            state.status &&
+            state.status.restart_required &&
+            !window.confirm(
+                "The configuration file changed since the server started. Overwrite it with this form?"
+            )
+        ) {
+            return;
+        }
+        if (
+            state.status &&
+            state.status.config_error &&
+            !window.confirm(
+                "The existing configuration file could not be parsed at startup. " +
+                "Saving will replace it and write a backup. Continue?"
+            )
+        ) {
+            return;
+        }
         const resultBox = $("save-result");
         resultBox.className = "notice";
         resultBox.textContent = "Saving...";
@@ -2078,14 +2108,22 @@
                 method: "POST",
                 body: JSON.stringify(buildRequest()),
             });
+            if (state.status) {
+                state.status.config_path = result.config_path;
+                state.status.config_revision = result.revision;
+                state.status.config_file_revision = result.revision;
+                state.status.restart_required = true;
+            }
             $("save-status").textContent = result.saved ? "Saved" : "Not saved";
             $("save-status").className = "status-pill ok";
-            resultBox.className = "notice success";
+            const warnings = (result.warnings || []).join(" ");
+            resultBox.className = warnings ? "notice warning" : "notice success";
             resultBox.textContent =
                 "Configuration saved to " +
                 result.config_path +
                 (result.backup_path ? " (backup: " + result.backup_path + ")" : "") +
-                ". Restart the container/process to activate it.";
+                ". Restart the container/process to activate it." +
+                (warnings ? " " + warnings : "");
             setStep(5);
         } catch (err) {
             resultBox.className = "notice error";
@@ -2138,7 +2176,7 @@
                 `environment configuration to ${result.target_path}. ` +
                 `The server must be restarted afterwards.` +
                 (result.requires_removal
-                    ? " PW_GATEWAYS or legacy PW_* variables still take precedence until you remove them."
+                    ? " Environment or CLI values still take precedence until you remove them."
                     : " A backup is created when the file already exists.");
             status.textContent = "";
             status.className = "hint";
@@ -2159,7 +2197,7 @@
         const confirmed = window.confirm(
             `Write the current environment configuration to ${state.envTarget}?\n\n` +
             "This writes gateway passwords and control secrets to the YAML file. " +
-            "Remove PW_GATEWAYS or legacy PW_* variables and restart the server afterward."
+            "Remove environment variables that should come from the file and restart the server afterward."
         );
         if (!confirmed) {
             status.textContent = "Migration cancelled.";
@@ -2181,6 +2219,36 @@
         } catch (err) {
             status.textContent = err.message;
             status.className = "hint error";
+        }
+    }
+
+    async function deleteConfig() {
+        if (!state.status || !state.status.config_path) return;
+        const target = state.status.config_path;
+        const confirmed = window.confirm(
+            `Delete ${target}? A backup will be written to ${target}.bak. ` +
+            "Restart the server/container afterward."
+        );
+        if (!confirmed) return;
+        try {
+            const result = await api("/delete-config", {
+                method: "POST",
+                body: JSON.stringify({
+                    expected_revision: state.status.config_file_revision || null,
+                }),
+            });
+            state.status.restart_required = true;
+            state.status.state = "restart_required";
+            state.status.config_file_revision = null;
+            state.status.config_error = null;
+            renderStatus();
+            message(
+                result.message +
+                    (result.backup_path ? " Backup: " + result.backup_path : ""),
+                "success"
+            );
+        } catch (err) {
+            message(err.message, "error");
         }
     }
 
@@ -2272,9 +2340,10 @@
 
     function bind() {
         $("token-form").addEventListener("submit", connectWithToken);
-        $("refresh-status").addEventListener("click", refreshStatus);
         $("preview-env").addEventListener("click", previewEnv);
         $("activate-env").addEventListener("click", activateEnv);
+        $("refresh-status").addEventListener("click", refreshStatus);
+        $("delete-config").addEventListener("click", deleteConfig);
         $("add-gateway").addEventListener("click", () => addGateway({}));
         $("scan-output-toggle").addEventListener("click", () => {
             const section = $("scan-output");
@@ -2364,6 +2433,9 @@
             if (result.siteid) {
                 card.querySelector('[data-field="siteid"]').value = result.siteid;
             }
+            if (result.email) {
+                card.querySelector('[data-field="email"]').value = result.email;
+            }
             showStatus(result.message, "success");
         } catch (err) {
             showStatus(err.message, "error");
@@ -2416,6 +2488,9 @@
             );
             if (result.siteid) {
                 card.querySelector('[data-field="siteid"]').value = result.siteid;
+            }
+            if (result.email) {
+                card.querySelector('[data-field="email"]').value = result.email;
             }
             showStatus(result.message, "success");
             if (isFleet) {

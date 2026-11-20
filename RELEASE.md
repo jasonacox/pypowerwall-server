@@ -10,8 +10,17 @@
   gateway connection modes.
 - Optional `settings` block in `PW_CONFIG` for persistent MQTT/Home Assistant,
   time-series, cloud/fallback, HTTPS, rate-limit, control and expert settings.
-- Per-gateway `siteid`, TEDAPI bearer fields, and a lowest-priority
-  `/data/gateways.yaml` default configuration path.
+- A lowest-priority `/data/gateways.yaml` default configuration path for
+  wizard-managed installations.
+- Environment configuration migration in the setup wizard: masked preview and
+  an explicit, backed-up write of an existing `PW_GATEWAYS`/legacy `PW_*`
+  configuration to the managed YAML file, with a revision check and a reminder
+  to remove the environment values before restarting.
+- Hybrid FleetAPI gateways in the setup wizard: local reads with FleetAPI
+  control, plus Cloud/FleetAPI/v1r auth panels on hybrid gateway cards.
+- Decommissioning from the setup wizard: save an empty gateway list (status
+  `unconfigured` after restart) or delete the default configuration file with
+  a `.bak` backup. Gateway renames keep the stored secrets.
 - `pyyaml` is included in the runtime requirements so `PW_CONFIG` works in the
   Docker image.
 

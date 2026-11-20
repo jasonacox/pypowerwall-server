@@ -103,8 +103,8 @@ def test_v1r_sites_no_sites_response(v1r_env, monkeypatch):
         setup_core._v1r_sites("token")
 
 
-def test_v1r_path_rejects_unlisted_path(v1r_env):
-    with pytest.raises(ValueError, match="must be under"):
+def test_v1r_path_rejects_file_path(v1r_env):
+    with pytest.raises(ValueError, match="not a directory"):
         setup_core._v1r_path(str(Path.cwd() / "README.md"))
 
 

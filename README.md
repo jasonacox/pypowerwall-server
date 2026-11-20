@@ -61,6 +61,7 @@ Not sure which mode to run? Pick the row that matches your setup — then follow
 | **Basic LAN** *(Powerwall 3)* | PW3 reachable on its wired vendor subnet — no gateway password or RSA key needed | `PW_HOST` + `PW_PASSWORD` (customer password = last 5 chars of the gateway password) | Core metrics only — power flows, battery SoC, grid status | Add `PW_EMAIL` + `PW_AUTH_PATH` + `PW_CONTROL_SECRET` for hybrid cloud control (local reads + cloud writes) |
 | **Cloud** | No local network access to the system | `PW_EMAIL` + `PW_AUTH_PATH` (one-time `python -m pypowerwall setup`) | Standard cloud metrics | Yes |
 | **FleetAPI** | Remote access via Tesla's official Fleet API | `PW_AUTH_PATH` holding `.pypowerwall.fleetapi` (one-time `python -m pypowerwall setup -fleetapi`) with no `PW_HOST`, or a `PW_GATEWAYS` (or `gateways.yaml`) entry with `email` + `authpath` + `fleetapi: true` | Standard cloud metrics | Yes |
+| **Hybrid FleetAPI** | Local reads with Tesla Fleet API control | Any local mode plus `PW_EMAIL` + `PW_AUTH_PATH` holding `.pypowerwall.fleetapi`, or a gateway entry with `host`, local credentials, `email`, `authpath` and `fleetapi: true` | Full local metrics | Yes, through FleetAPI |
 
 Local v1r and Basic LAN modes can perform supported control operations when `PW_CONTROL_SECRET` is set. Without cloud credentials, `/control/reserve`, `/control/mode`, and `/control/grid_charging` use the gateway's local connection. With `PW_EMAIL` and `PW_AUTH_PATH` configured (hybrid mode), those operations use the cloud connection while monitoring remains local. Set `PW_LOCAL_FIRST=yes` to try a confirmed local v1r transport first while the LAN is up and a local connection exists; when nothing local can be attempted, the write runs through the normal dispatch as before (covers the LAN-up / internet-down case). `PW_WIFI_V1R_FALLBACK=yes` (needs `PW_WIFI_HOST` and an RSA key) makes signed WiFi-v1r the only leader route after the library's LAN failover trips: reads and reserve/mode/grid, max backup and islanding writes all use it, with no fallback to legacy WiFi TEDAPI. Each write first runs a read-only probe; if it fails, value controls use the historical path (cloud, which during a LAN outage may accept a write without applying it, #149) and max backup/islanding return `503`. On some older Powerwall 3 firmware (26.10.4), the gateway stored local config writes without acting on them right away (jasonacox/pypowerwall#321); on 26.18.1 it acted within about 30–45 s. `POST /control/islanding` is different: it is available only in TEDAPI v1r mode, requires a registered RSA key, always uses the local gateway connection, and does not fall back to cloud control.
 
@@ -203,13 +204,13 @@ pypowerwall-server --email "your@email.com"
 
 New installations can be configured from the browser at `/setup` without editing
 YAML or environment variables. The wizard supports TEDAPI, TEDAPI v1r, Local,
-Basic LAN, TEDAPI bearer for solar-only gateways, Hybrid TEDAPI, Cloud, FleetAPI
-and server hybrid setups, multiple gateways, and a persistent settings block.
+Basic LAN, Hybrid TEDAPI, Cloud, FleetAPI, Hybrid and Hybrid FleetAPI setups,
+multiple gateways, and a persistent settings block.
 
-> **Docker Compose users:** the bundled `docker-compose.yml` still contains
-> example `PW_HOST` and `PW_GW_PWD` values. Remove or comment them out before
-> opening `/setup`; while they are set, the server treats the configuration as
-> environment-managed and the wizard cannot save.
+> **Docker Compose users:** the bundled `docker-compose.yml` leaves the example
+> `PW_HOST` and `PW_GW_PWD` values commented out, so `/setup` can save on first
+> run. Uncomment both only if you intentionally want environment-managed
+> configuration; while they are set, the wizard is read-only.
 
 The setup API is protected by `PW_CONTROL_SECRET`, or by a bootstrap token printed
 once in the server log when no control secret is set:
@@ -225,7 +226,9 @@ Open `http://<server>:8675/setup`, enter the token, test the gateway and save.
 The token stays in the tab by default; **Remember my token on this device**
 stores it in this browser's `localStorage`, like the Console control token. The
 configuration is written atomically to `/data/gateways.yaml` (or the path in
-`PW_CONFIG`) with a backup. Restart the container/process to activate it. The
+`PW_CONFIG`) with a backup. If the existing file cannot be parsed at startup,
+the wizard asks for confirmation before replacing it and keeps the previous file
+as `.bak`. Restart the container/process to activate it. The
 wizard never executes Powerwall control commands. Cloud/FleetAPI OAuth and v1r
 RSA key registration are guided in the wizard; the physical Powerwall proof,
 Tesla developer app approval, public-key hosting and host network changes remain
@@ -239,6 +242,18 @@ a Refresh Token and optional Access Token from a headless
 public-key URL, registers the partner account, completes the Tesla login and
 selects the energy site, writing `.pypowerwall.fleetapi`. A private-network scan
 can fill the gateway host from a `/24` (or smaller) CIDR.
+
+Existing environment-managed installations can use **Environment configuration
+migration** on the Access step: the page previews the effective configuration
+with secrets masked, then writes it to `/data/gateways.yaml` (or `PW_CONFIG`)
+with a backup and a revision check. Matching environment/CLI values still take
+precedence and must be removed before the restart that activates the file.
+
+To decommission, either save an empty gateway list (reported as `unconfigured`
+after restart) or use **Delete configuration file** for the default
+`/data/gateways.yaml`; the delete action keeps a `.bak` and still requires a
+restart. Explicit `PW_CONFIG` files are left alone; remove them manually after
+clearing `PW_CONFIG`.
 
 The existing manual YAML and environment-variable configuration is unchanged.
 
@@ -455,7 +470,7 @@ shared by both pages in `app/static/js/page.js` and `app/static/css/page.css`.
 Pass a YAML (or JSON) config file with `--config gateways.yaml` or
 `PW_CONFIG=/path/to/gateways.yaml`. A template ships as
 `gateways.yaml.example` — copy it to `gateways.yaml` (which is gitignored,
-since it holds gateway passwords) and edit it. When neither `PW_CONFIG` nor `PW_GATEWAYS` nor legacy `PW_*` gateway variables are set, the server also checks `/data/gateways.yaml` (or `data/gateways.yaml` outside Docker) as the lowest-priority source. The optional `settings` block accepts writable `Settings` field names, such as `failover`, `mqtt_host` or `timeseries_retention`.
+since it holds gateway passwords) and edit it. When neither `PW_CONFIG` nor `PW_GATEWAYS` nor legacy `PW_*` gateway variables are set, the server also checks `/data/gateways.yaml` (or `data/gateways.yaml` outside Docker) as the lowest-priority source. The optional `settings` block accepts writable `Settings` field names, such as `failover`, `mqtt_host` or `timeseries_retention`; a matching environment or CLI value still takes precedence.
 
 ```yaml
 server:

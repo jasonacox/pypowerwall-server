@@ -286,6 +286,8 @@ def test_stats_uses_the_configuration_before_the_first_poll(
 
 def test_auth_path_with_tilde_is_expanded_like_pypowerwall(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    # Windows expanduser() reads USERPROFILE, not HOME.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     (tmp_path / ".auth").mkdir()
     (tmp_path / ".auth" / ".pypowerwall.fleetapi").write_text("{}")
     for name in ("PW_HOST", "PW_EMAIL", "PW_GATEWAYS", "PW_CONFIG"):

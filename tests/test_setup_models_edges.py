@@ -16,14 +16,15 @@ def _gateway(**overrides):
     return SetupGatewayInput(**values)
 
 
-def test_gateway_id_is_trimmed_and_validated():
+def test_gateway_id_is_trimmed_and_required():
     assert _gateway(id="  home-1_2  ").id == "home-1_2"
+    assert _gateway(id="Existing Gateway").id == "Existing Gateway"
     with pytest.raises(ValueError, match="required"):
         _gateway(id="   ")
-    with pytest.raises(ValueError, match="64"):
-        _gateway(id="x" * 65)
-    with pytest.raises(ValueError, match="only letters"):
-        _gateway(id="bad id")
+
+
+def test_hybrid_fleetapi_mode_is_accepted():
+    assert _gateway(mode="hybrid_fleetapi").mode == "hybrid_fleetapi"
 
 
 def test_gateway_type_is_normalized_and_validated():
@@ -43,10 +44,3 @@ def test_gateway_email_normalization_and_validation():
         _gateway(email="owner@example.com with-space")
     with pytest.raises(ValueError, match="valid Tesla email"):
         _gateway(email="owner@example")
-
-
-def test_gateway_siteid_normalization():
-    assert _gateway(siteid=None).siteid is None
-    assert _gateway(siteid=12345).siteid == "12345"
-    assert _gateway(siteid=" 12345 ").siteid == "12345"
-    assert _gateway(siteid="   ").siteid is None

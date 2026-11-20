@@ -13,6 +13,8 @@ from app.config import GatewayConfig, settings
 from app.core import setup as setup_core
 from app.models.setup import (
     SetupConfigureRequest,
+    SetupDeleteConfigRequest,
+    SetupEnvImportRequest,
     SetupGatewayInput,
     SetupScanRequest,
     SetupV1rAuthFileRequest,
@@ -69,6 +71,176 @@ def _request(gateways=None, options=None, expected_revision=None):
         ],
         options=options or {},
         expected_revision=expected_revision,
+    )
+
+
+def test_env_import_preview_without_target_file(core_env):
+    preview = setup_core.env_import_preview()
+    assert preview["target_path"] == str(core_env.config_path)
+    assert preview["revision"] is None
+
+
+def test_env_import_preview_reads_existing_revision(core_env):
+    core_env.config_path.write_text("gateways: []\n", encoding="utf-8")
+    preview = setup_core.env_import_preview()
+    assert preview["revision"] == setup_core._revision(
+        core_env.config_path.read_bytes()
+    )
+
+
+def test_env_import_activate_rejects_unmergeable_file(core_env):
+    core_env.config_path.write_text("gateways: [", encoding="utf-8")
+    settings._config_error = None
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    with pytest.raises(ValueError, match="cannot be merged"):
+        setup_core.env_import_activate(
+            SetupEnvImportRequest(expected_revision=revision)
+        )
+
+
+def test_delete_setup_config_creates_backup(core_env):
+    core_env.config_path.write_text("gateways: []\n", encoding="utf-8")
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.delete_setup_config(
+        SetupDeleteConfigRequest(expected_revision=revision)
+    )
+    assert result.deleted is True
+    assert not core_env.config_path.exists()
+    assert Path(result.backup_path).read_text(encoding="utf-8") == "gateways: []\n"
+    with pytest.raises(ValueError, match="no configuration file"):
+        setup_core.delete_setup_config(SetupDeleteConfigRequest())
+
+
+def test_delete_setup_config_guards_managed_and_changed_files(core_env):
+    core_env.config_path.write_text("gateways: []\n", encoding="utf-8")
+    settings._config_source = "pw_config"
+    settings._config_path = str(core_env.config_path)
+    with pytest.raises(ValueError, match="PW_CONFIG"):
+        setup_core.delete_setup_config(SetupDeleteConfigRequest())
+
+    settings._config_source = "default_file"
+    with pytest.raises(ValueError, match="changed"):
+        setup_core.delete_setup_config(
+            SetupDeleteConfigRequest(expected_revision="wrong")
+        )
+
+    settings._config_source = "legacy_env"
+    settings._config_path = None
+    with pytest.raises(ValueError, match="environment variables"):
+        setup_core.delete_setup_config(SetupDeleteConfigRequest())
+
+
+def test_env_import_activate_requires_current_revision(core_env):
+    with pytest.raises(ValueError, match="changed"):
+        setup_core.env_import_activate(SetupEnvImportRequest(expected_revision="stale"))
+
+
+def test_env_import_activate_repairs_malformed_file(core_env):
+    core_env.config_path.write_text("gateways: [", encoding="utf-8")
+    settings._config_error = "invalid"
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.env_import_activate(
+        SetupEnvImportRequest(expected_revision=revision)
+    )
+    assert result.saved is True
+    assert yaml.safe_load(core_env.config_path.read_text())["gateways"] == []
+    assert any("could not be parsed" in note for note in result.notes)
+
+
+def test_configure_reports_malformed_config_repair(core_env):
+    core_env.config_path.write_text("gateways: [", encoding="utf-8")
+    settings._config_error = "invalid"
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.apply_setup_request(_request(expected_revision=revision))
+    assert result.saved is True
+    assert result.backup_path is not None
+    assert any("could not be parsed" in warning for warning in result.warnings)
+
+
+def test_env_import_activate_merges_mapping_blocks(core_env, monkeypatch):
+    core_env.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "server": {"host": "old"},
+                "settings": {"failover": True},
+                "gateways": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        setup_core,
+        "_env_import_document",
+        lambda: {
+            "server": {"host": "new"},
+            "gateways": [],
+            "settings": {"failover": False},
+        },
+    )
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.env_import_activate(
+        SetupEnvImportRequest(expected_revision=revision)
+    )
+    assert result.saved is True
+    doc = yaml.safe_load(core_env.config_path.read_text(encoding="utf-8"))
+    assert doc["server"]["host"] == "new"
+    assert doc["settings"]["failover"] is False
+
+
+def test_env_import_activate_replaces_non_mapping_blocks(core_env, monkeypatch):
+    core_env.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "server": "invalid",
+                "settings": "invalid",
+                "gateways": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        setup_core,
+        "_env_import_document",
+        lambda: {
+            "server": {"host": "127.0.0.1"},
+            "gateways": [],
+            "settings": {"failover": False},
+        },
+    )
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.env_import_activate(
+        SetupEnvImportRequest(expected_revision=revision)
+    )
+    assert result.saved is True
+    doc = yaml.safe_load(core_env.config_path.read_text())
+    assert doc["server"]["host"] == "127.0.0.1"
+    assert doc["settings"]["failover"] is False
+
+
+def test_env_import_flags_environment_settings(core_env, monkeypatch):
+    monkeypatch.setenv("PW_TIMEOUT", "7")
+    preview = setup_core.env_import_preview()
+    assert preview["requires_removal"] is True
+    assert any("PW_TIMEOUT" in note for note in preview["notes"])
+
+
+def test_env_import_ignores_server_block_overrides(core_env, monkeypatch):
+    monkeypatch.setenv("CORS_ORIGINS", '["http://example.com"]')
+    monkeypatch.setattr(setup_core, "_WRITABLE_OPTION_FIELDS", {"cors_origins"})
+    preview = setup_core.env_import_preview()
+    assert preview["requires_removal"] is False
+
+
+def test_env_import_without_writable_options(core_env, monkeypatch):
+    monkeypatch.setattr(setup_core, "_WRITABLE_OPTION_FIELDS", set())
+    preview = setup_core.env_import_preview()
+    assert "settings" not in preview["yaml"]
+    result = setup_core.env_import_activate(SetupEnvImportRequest())
+    assert result.saved is True
+    assert "settings" not in yaml.safe_load(
+        core_env.config_path.read_text(encoding="utf-8")
     )
 
 
@@ -149,16 +321,17 @@ def test_auth_error_detection(message, expected):
 @pytest.mark.parametrize(
     "config,expected",
     [
-        (_gateway(fleetapi=True), "FleetAPI"),
+        (_gateway(fleetapi=True), "Hybrid FleetAPI"),
+        (GatewayConfig(id="fleet", fleetapi=True), "FleetAPI"),
         (_gateway(cloud_mode=True), "Cloud"),
         (_gateway(rsa_key_path="/data/key.pem"), "TEDAPI v1r"),
-        (_gateway(tedapi_auth_mode="bearer"), "TEDAPI bearer"),
         (_gateway(password="customer"), "Hybrid TEDAPI"),
         (_gateway(), "TEDAPI"),
         (
             GatewayConfig(id="local", host="192.168.91.1", password="customer"),
             "Local/Basic LAN",
         ),
+        (GatewayConfig(id="email", email="owner@example.com"), "Hybrid"),
         (GatewayConfig(id="blank"), "Unknown"),
     ],
 )
@@ -170,10 +343,10 @@ def test_derive_mode(config, expected):
 @pytest.mark.parametrize(
     "config,expected",
     [
-        (_gateway(fleetapi=True), "fleetapi"),
+        (_gateway(fleetapi=True), "hybrid_fleetapi"),
+        (GatewayConfig(id="fleet", fleetapi=True), "fleetapi"),
         (_gateway(cloud_mode=True), "cloud"),
         (_gateway(rsa_key_path="/data/key.pem"), "tedapi_v1r"),
-        (_gateway(tedapi_auth_mode="bearer"), "tedapi_bearer"),
         (_gateway(password="customer"), "hybrid_tedapi"),
         (_gateway(), "tedapi"),
         (GatewayConfig(id="local", host="192.168.91.1", password="customer"), "local"),
@@ -196,6 +369,59 @@ def test_derive_mode(config, expected):
 )
 def test_setup_mode(config, expected):
     assert setup_core._setup_mode(config) == expected
+
+
+def test_hybrid_fleetapi_roundtrip_preserves_local_fields(core_env):
+    item = SetupGatewayInput(
+        id="home",
+        mode="hybrid_fleetapi",
+        host="192.168.91.1",
+        gw_pwd="secret",
+        email="owner@example.com",
+        authpath=str(core_env.authpath),
+    )
+    issues = []
+    config = setup_core._validate_gateway(item, {}, issues)
+    assert config is not None
+    assert not [issue for issue in issues if issue.severity == "error"]
+    assert config.host == "192.168.91.1"
+    assert config.gw_pwd == "secret"
+    assert config.fleetapi is True
+    assert config.cloud_mode is False
+    editable = setup_core._editable_gateway(config)
+    assert editable["mode"] == "hybrid_fleetapi"
+    assert editable["host"] == "192.168.91.1"
+    assert setup_core._setup_mode(config) == "hybrid_fleetapi"
+
+
+def test_hybrid_fleetapi_requires_email_and_local_credential(core_env):
+    item = SetupGatewayInput(
+        id="home",
+        mode="hybrid_fleetapi",
+        host="192.168.91.1",
+        authpath=str(core_env.authpath),
+    )
+    issues = []
+    assert setup_core._validate_gateway(item, {}, issues) is None
+    fields = {issue.field for issue in issues if issue.severity == "error"}
+    assert "password" in fields
+    assert "email" in fields
+
+
+def test_hybrid_fleetapi_mode_is_preserved_in_setup_status(core_env):
+    config = GatewayConfig(
+        id="hybrid",
+        host="192.168.91.1",
+        gw_pwd="secret",
+        email="owner@example.com",
+        authpath=str(core_env.authpath),
+        fleetapi=True,
+    )
+    settings.gateways = [config]
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+    status = setup_core.get_setup_status()
+    assert status.gateway_configs[0]["mode"] == "hybrid_fleetapi"
 
 
 def test_hybrid_mode_is_preserved_in_setup_status(core_env):
@@ -311,6 +537,7 @@ def test_status_masks_secrets_and_reads_settings_keys(core_env, monkeypatch):
 def test_status_survives_malformed_settings_block(core_env):
     settings._config_source = "default_file"
     settings._config_path = str(core_env.config_path)
+    settings._config_error = "invalid"
     core_env.config_path.write_text("settings: [broken", encoding="utf-8")
     status = setup_core.get_setup_status()
     assert status.settings_keys == []
@@ -359,6 +586,18 @@ def test_status_restart_flag_clears_after_reload_and_detects_changes(core_env):
     assert status.state == "restart_required"
 
 
+def test_empty_gateway_file_is_unconfigured(core_env):
+    core_env.config_path.write_text("gateways: []\n", encoding="utf-8")
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+    settings._config_error = None
+    status = setup_core.get_setup_status()
+    assert status.state == "unconfigured"
+    assert status.can_write is True
+    assert status.config_file_revision
+    assert status.setup_recommended is True
+
+
 def test_status_restart_flag_ignores_env_managed_config(core_env):
     core_env.config_path.write_text("gateways: []\n", encoding="utf-8")
     settings._config_source = "pw_gateways"
@@ -381,7 +620,7 @@ def test_validate_host_branches():
 
     issues = []
     setup_core._validate_host("8.8.8.8", issues)
-    assert any("private" in issue.message for issue in issues)
+    assert issues == []
     issues = []
     setup_core._validate_host("192.168.91.1", issues)
     assert issues == []
@@ -390,13 +629,16 @@ def test_validate_host_branches():
     assert issues == []
 
 
-def test_path_allowed_and_validate_path(core_env):
-    assert setup_core._path_allowed(str(core_env.authpath / "file.json")) is True
-    assert setup_core._path_allowed(str(Path.cwd() / "README.md")) is False
-
+def test_validate_path_accepts_existing_paths(core_env):
     issues = []
     setup_core._validate_path("authpath", str(Path.cwd() / "README.md"), issues)
-    assert "must be under" in issues[0].message
+    assert issues == []
+
+    issues = []
+    setup_core._validate_path(
+        "authpath", str(Path.cwd() / "README.md"), issues, directory=True
+    )
+    assert "not a directory" in issues[0].message
 
     issues = []
     setup_core._validate_path(
@@ -423,7 +665,6 @@ def test_path_allowed_and_validate_path(core_env):
     "gateway,expected_field",
     [
         ({"timezone": "Mars/Olympus"}, "timezone"),
-        ({"siteid": "not-numeric"}, "siteid"),
         ({"gw_pwd": None}, "gw_pwd"),
     ],
 )
@@ -443,8 +684,8 @@ def test_validate_gateway_local_errors(core_env, gateway, expected_field):
         ("basic_lan", "password"),
         ("hybrid_tedapi", "password"),
         ("hybrid", "email"),
+        ("hybrid_fleetapi", "password"),
         ("cloud", "email"),
-        ("fleetapi", "email"),
         ("tedapi_v1r", "rsa_key_path"),
     ],
 )
@@ -460,7 +701,8 @@ def test_validate_gateway_required_credentials(core_env, mode, expected_field):
     assert any(issue.field == expected_field for issue in issues)
 
 
-def test_validate_gateway_email_and_authpath_requirements(core_env):
+def test_validate_gateway_email_and_authpath_requirements(core_env, monkeypatch):
+    monkeypatch.setattr(settings, "pw_authpath", None)
     item = SetupGatewayInput(
         id="home",
         mode="local",
@@ -469,8 +711,10 @@ def test_validate_gateway_email_and_authpath_requirements(core_env):
         email="owner@example.com",
     )
     issues = []
-    assert setup_core._validate_gateway(item, {}, issues) is None
-    assert any(issue.field == "authpath" for issue in issues)
+    config = setup_core._validate_gateway(item, {}, issues)
+    assert config is not None
+    assert config.authpath is None
+    assert not [issue for issue in issues if issue.severity == "error"]
 
     item = SetupGatewayInput(
         id="cloud",
@@ -491,18 +735,70 @@ def test_validate_gateway_email_and_authpath_requirements(core_env):
     assert setup_core._validate_gateway(item, {}, issues) is None
     assert any(issue.field == "email" for issue in issues)
 
-
-def test_validate_gateway_bearer_powerwall_rejected(core_env):
+    monkeypatch.setattr(settings, "pw_authpath", None)
     item = SetupGatewayInput(
-        id="inverter",
-        mode="tedapi_bearer",
-        host="192.168.91.1",
-        gw_pwd="secret",
-        type="powerwall",
+        id="cloud-no-auth",
+        mode="cloud",
+        email="owner@example.com",
     )
     issues = []
     assert setup_core._validate_gateway(item, {}, issues) is None
-    assert any(issue.field == "type" for issue in issues)
+    assert any(issue.field == "authpath" for issue in issues)
+
+
+def test_validate_gateway_explicit_clear_drops_existing_auth(core_env):
+    item = SetupGatewayInput(
+        id="home",
+        mode="local",
+        host="192.168.91.1",
+        password="customer",
+        email=None,
+        authpath=None,
+    )
+    issues = []
+    config = setup_core._validate_gateway(
+        item,
+        {"email": "owner@example.com", "authpath": str(core_env.authpath)},
+        issues,
+    )
+    assert config is not None
+    assert config.email is None
+    assert config.authpath is None
+
+
+def test_validate_local_email_without_authpath_is_allowed(core_env, monkeypatch):
+    monkeypatch.setattr(settings, "pw_authpath", None, raising=False)
+    item = SetupGatewayInput(
+        id="local",
+        mode="local",
+        host="192.168.91.1",
+        password="customer",
+        email="owner@example.com",
+    )
+    issues = []
+    config = setup_core._validate_gateway(item, {}, issues)
+    assert config is not None
+    assert config.authpath is None
+    assert not [issue for issue in issues if issue.severity == "error"]
+    assert not [issue for issue in issues if issue.field == "authpath"]
+
+    monkeypatch.setattr(settings, "control_secret", "token")
+    issues = []
+    config = setup_core._validate_gateway(item, {}, issues)
+    assert config is not None
+    assert any(
+        issue.field == "authpath" and issue.severity == "warning" for issue in issues
+    )
+
+
+def test_validate_cloud_email_still_requires_authpath(core_env, monkeypatch):
+    monkeypatch.setattr(settings, "pw_authpath", None, raising=False)
+    item = SetupGatewayInput(id="cloud", mode="cloud", email="owner@example.com")
+    issues = []
+    assert setup_core._validate_gateway(item, {}, issues) is None
+    assert any(
+        issue.field == "authpath" and issue.severity == "error" for issue in issues
+    )
 
 
 def test_validate_gateway_path_errors(core_env):
@@ -550,17 +846,23 @@ def test_validate_gateway_path_errors(core_env):
             "Hybrid TEDAPI",
         ),
         (
-            "tedapi_bearer",
-            {"host": "192.168.91.1", "gw_pwd": "secret", "type": "inverter"},
-            "TEDAPI bearer",
-        ),
-        (
             "tedapi_v1r",
             {
                 "host": "192.168.91.1",
                 "password": "customer",
                 "rsa_key_path": "KEY",
                 "wifi_host": "192.168.91.2",
+            },
+            "TEDAPI v1r",
+        ),
+        (
+            "hybrid",
+            {
+                "host": "192.168.91.1",
+                "rsa_key_path": "KEY",
+                "wifi_host": "192.168.91.2",
+                "email": "owner@example.com",
+                "authpath": "AUTHPATH",
             },
             "TEDAPI v1r",
         ),
@@ -588,7 +890,17 @@ def test_validate_gateway_path_errors(core_env):
                 "email": "owner@example.com",
                 "authpath": "AUTHPATH",
             },
-            "Local/Basic LAN",
+            "Hybrid",
+        ),
+        (
+            "hybrid",
+            {
+                "host": "192.168.91.1",
+                "gw_pwd": "secret",
+                "email": "owner@example.com",
+                "authpath": "AUTHPATH",
+            },
+            "Hybrid",
         ),
     ],
 )
@@ -611,6 +923,35 @@ def test_validate_gateway_constructs_each_mode(core_env, mode, gateway, expected
         assert config.wifi_host == "192.168.91.2"
 
 
+def test_setup_rejects_out_of_range_numeric_options(core_env):
+    for name, value in (
+        ("server_port", 0),
+        ("server_port", 70000),
+        ("https_port", 0),
+        ("cache_expire", -1),
+        ("timeout", 0),
+        ("mqtt_qos", 3),
+        ("tedapi_probe_interval", 4),
+    ):
+        result, _, options = setup_core.validate_setup_request(
+            _request(options={name: value}), {}
+        )
+        assert result.valid is False, name
+        assert any(issue.field == f"options.{name}" for issue in result.errors)
+        assert name not in options
+
+
+def test_validate_warns_when_environment_wins(core_env, monkeypatch):
+    monkeypatch.setenv("PW_TIMEOUT", "7")
+    result, _, _ = setup_core.validate_setup_request(
+        _request(options={"timeout": 9}), {}
+    )
+    assert any(
+        issue.field == "options.timeout" and issue.severity == "warning"
+        for issue in result.warnings
+    )
+
+
 def test_validate_gateway_construction_failure_is_reported(core_env, monkeypatch):
     def broken(**kwargs):
         raise RuntimeError("bad config")
@@ -624,11 +965,44 @@ def test_validate_gateway_construction_failure_is_reported(core_env, monkeypatch
     assert any(issue.field == "gateway" for issue in issues)
 
 
+def test_validate_setup_request_preserves_secret_on_rename(core_env):
+    existing_doc = {
+        "gateways": [
+            {
+                "id": "old",
+                "host": "192.168.91.1",
+                "gw_pwd": "stored",
+                "timezone": "America/Los_Angeles",
+            }
+        ]
+    }
+    result, configs, _ = setup_core.validate_setup_request(
+        SetupConfigureRequest(
+            gateways=[
+                {
+                    "id": "new",
+                    "original_id": "old",
+                    "mode": "tedapi",
+                    "host": "192.168.91.1",
+                }
+            ]
+        ),
+        existing_doc,
+    )
+    assert result.valid is True
+    assert configs[0].id == "new"
+    assert configs[0].gw_pwd == "stored"
+
+
 def test_validate_setup_request_errors_and_warnings(core_env):
     result, configs, options = setup_core.validate_setup_request(
         SetupConfigureRequest(gateways=[]), {}
     )
-    assert result.valid is False
+    assert result.valid is True
+    assert any(
+        issue.field == "gateways" and issue.severity == "warning"
+        for issue in result.warnings
+    )
     assert configs == [] and options == {}
 
     result, _, _ = setup_core.validate_setup_request(
@@ -647,10 +1021,11 @@ def test_validate_setup_request_errors_and_warnings(core_env):
     )
     assert any(issue.field == "options.server_port" for issue in result.errors)
 
-    result, _, _ = setup_core.validate_setup_request(
+    result, _, options = setup_core.validate_setup_request(
         _request(options={"cache_file": str(Path.cwd() / "outside.cache")}), {}
     )
-    assert any(issue.field == "options.cache_file" for issue in result.errors)
+    assert not any(issue.field == "options.cache_file" for issue in result.errors)
+    assert options["cache_file"] == str(Path.cwd() / "outside.cache")
 
     result, _, _ = setup_core.validate_setup_request(
         _request(options={"https_mode": True, "https_cert": "/data/cert.pem"}), {}
@@ -793,31 +1168,10 @@ def test_apply_setup_returns_warnings(core_env):
     assert any("control token" in warning for warning in result.warnings)
 
 
-def test_docker_preflight_reports_paths_and_warnings(core_env, monkeypatch):
-    monkeypatch.setattr(
-        setup_core.Path, "is_dir", lambda self: self.as_posix() == "/data"
-    )
-    original_access = setup_core.os.access
-
-    def access(path, mode):
-        if str(path).startswith("/data"):
-            return False
-        return original_access(path, mode)
-
-    monkeypatch.setattr(setup_core.os, "access", access)
-    result = setup_core.docker_preflight()
-    assert result["ok"] is True
-    assert result["checks"][0]["status"] == "success"
-    assert any("not writable" in warning for warning in result["warnings"])
-    assert result["checks"][-1]["status"] in {"skipped", "success"}
-
-
 def test_auth_status_paths_and_readiness(core_env):
-    outside = str(Path.cwd() / "README.md")
-    blocked = setup_core.auth_status("cloud", outside)
-    assert blocked["ready"] is False
-    assert blocked["authpath"] is None
-    assert "must be under" in blocked["notes"][0]
+    outside = setup_core.auth_status("cloud", str(Path.cwd() / "README.md"))
+    assert outside["ready"] is False
+    assert outside["authpath"] is not None
 
     missing = setup_core.auth_status("cloud", str(core_env.authpath))
     assert missing["ready"] is False
@@ -833,6 +1187,13 @@ def test_auth_status_paths_and_readiness(core_env):
     fleet = setup_core.auth_status("fleetapi", str(core_env.authpath))
     assert fleet["ready"] is True
     assert fleet["command"] == "python -m pypowerwall setup -fleetapi"
+
+
+def test_auth_status_accepts_global_siteid(core_env, monkeypatch):
+    (core_env.authpath / ".pypowerwall.auth").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(settings, "siteid", "123")
+    ready = setup_core.auth_status("cloud", str(core_env.authpath))
+    assert ready["ready"] is True
 
 
 def test_v1r_result_state_messages(core_env):

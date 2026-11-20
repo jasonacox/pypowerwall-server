@@ -113,6 +113,61 @@ def test_configure_writes_yaml_and_status_hides_secret(setup_env, client):
     settings.gateways = []
 
 
+def test_configure_rename_preserves_stored_secret(setup_env):
+    apply_setup_request(_request())
+    revision = hashlib.sha256(setup_env.read_bytes()).hexdigest()
+    result = apply_setup_request(
+        SetupConfigureRequest(
+            gateways=[
+                {
+                    "id": "renamed",
+                    "original_id": "home",
+                    "mode": "tedapi",
+                    "host": "192.168.91.1",
+                }
+            ],
+            expected_revision=revision,
+        )
+    )
+    assert result.saved is True
+    doc = yaml.safe_load(setup_env.read_text(encoding="utf-8"))
+    assert doc["gateways"][0]["id"] == "renamed"
+    assert doc["gateways"][0]["gw_pwd"] == "secret-password"
+
+
+def test_configure_hybrid_fleetapi_preserves_local_fields(setup_env):
+    authpath = setup_env.parent / "auth"
+    authpath.mkdir(exist_ok=True)
+    result = apply_setup_request(
+        SetupConfigureRequest(
+            gateways=[
+                {
+                    "id": "hybrid",
+                    "mode": "hybrid_fleetapi",
+                    "host": "192.168.91.1",
+                    "gw_pwd": "secret",
+                    "email": "owner@example.com",
+                    "authpath": str(authpath),
+                }
+            ]
+        )
+    )
+    assert result.saved is True
+    doc = yaml.safe_load(setup_env.read_text(encoding="utf-8"))
+    gateway = doc["gateways"][0]
+    assert gateway["host"] == "192.168.91.1"
+    assert gateway["gw_pwd"] == "secret"
+    assert gateway["fleetapi"] is True
+    assert gateway["cloud_mode"] is False
+
+
+def test_configure_allows_empty_gateway_list(setup_env):
+    result = apply_setup_request(SetupConfigureRequest(gateways=[]))
+    assert result.saved is True
+    doc = yaml.safe_load(setup_env.read_text(encoding="utf-8"))
+    assert doc["gateways"] == []
+
+
 def test_configure_merges_existing_secret_and_server_options(setup_env):
     first = _request()
     apply_setup_request(first)
@@ -303,7 +358,6 @@ def test_invalid_existing_file_can_be_repaired_with_backup(setup_env):
 def test_cloud_auth_flow_uses_existing_helpers(setup_env, monkeypatch, tmp_path):
     from pypowerwall import tesla_auth
 
-    monkeypatch.setattr(setup_core, "_path_allowed", lambda path: True)
     monkeypatch.setattr(
         tesla_auth,
         "_build_auth_url",
@@ -397,7 +451,6 @@ def test_v1r_diagnostic_is_mocked_without_real_credentials(
 ):
     key = tmp_path / "tedapi_rsa_private.pem"
     key.write_text("not-a-real-key", encoding="utf-8")
-    monkeypatch.setattr(setup_core, "_path_allowed", lambda path: True)
 
     class FakeSocket:
         def __enter__(self):
@@ -868,6 +921,43 @@ def test_fleetapi_setup_start_and_complete(setup_env, monkeypatch):
             shutil.rmtree(root)
 
 
+def test_fleetapi_start_keeps_existing_tokens_for_same_app(setup_env, monkeypatch):
+    root = Path.cwd() / "data" / "test-fleet-preserve"
+    root.mkdir(parents=True, exist_ok=True)
+    existing = {
+        "CLIENT_ID": "client-id",
+        "CLIENT_SECRET": "client-secret",
+        "DOMAIN": "example.com",
+        "REDIRECT_URI": "https://example.com/access",
+        "AUDIENCE": "https://fleet-api.example.com",
+        "partner_account": {"domain": "example.com"},
+        "access_token": "old-access",
+        "refresh_token": "old-refresh",
+        "site_id": 123,
+    }
+    (root / ".pypowerwall.fleetapi").write_text(json.dumps(existing), encoding="utf-8")
+    try:
+        _fake_fleet_http(monkeypatch)
+        setup_core.fleet_setup_start(
+            SetupFleetStartRequest(
+                authpath=str(root),
+                client_id="client-id",
+                client_secret="client-secret",
+                domain="example.com",
+                redirect_uri="https://example.com/access",
+            )
+        )
+        saved = json.loads((root / ".pypowerwall.fleetapi").read_text(encoding="utf-8"))
+        assert saved["access_token"] == "old-access"
+        assert saved["refresh_token"] == "old-refresh"
+        assert saved["site_id"] == 123
+    finally:
+        if root.exists():
+            import shutil
+
+            shutil.rmtree(root)
+
+
 def test_fleetapi_setup_requires_published_public_key(setup_env, monkeypatch):
     root = Path.cwd() / "data" / "test-fleet-no-pem"
     try:
@@ -1102,35 +1192,6 @@ def test_fleetapi_v1r_registration_uses_saved_config(setup_env, monkeypatch):
             shutil.rmtree(root)
 
 
-def test_env_import_activate_writes_effective_config(setup_env):
-    from app.config import GatewayConfig
-
-    settings.gateways = [
-        GatewayConfig(
-            id="home",
-            name="Home",
-            mode="tedapi",
-            host="192.168.91.1",
-            gw_pwd="env-secret",
-        )
-    ]
-    settings.control_secret = "control-secret"
-    settings._config_source = "legacy_env"
-    preview = setup_core.env_import_preview()
-    assert preview["requires_removal"] is True
-    result = setup_core.env_import_activate(
-        SetupEnvImportRequest(expected_revision=preview["revision"])
-    )
-    assert result.saved is True
-    assert result.config_path == str(setup_env)
-    assert result.requires_removal is True
-    doc = yaml.safe_load(setup_env.read_text(encoding="utf-8"))
-    assert doc["gateways"][0]["gw_pwd"] == "env-secret"
-    assert doc["settings"]["control_secret"] == "control-secret"
-    with pytest.raises(ValueError, match="changed"):
-        setup_core.env_import_activate(SetupEnvImportRequest(expected_revision="wrong"))
-
-
 def test_headless_cloud_tokens_write_auth_file(setup_env):
     root = Path.cwd() / "data" / "test-headless-auth"
     try:
@@ -1150,6 +1211,75 @@ def test_headless_cloud_tokens_write_auth_file(setup_env):
         assert sso["refresh_token"] == "refresh-token"
         assert sso["access_token"] == "access-token"
         assert (root / ".pypowerwall.site").read_text(encoding="utf-8") == "123"
+    finally:
+        if root.exists():
+            import shutil
+
+            shutil.rmtree(root)
+
+
+def test_env_import_activate_writes_effective_config(setup_env):
+    from app.config import GatewayConfig
+
+    settings.gateways = [
+        GatewayConfig(
+            id="home",
+            name="Home",
+            host="192.168.91.1",
+            gw_pwd="env-secret",
+        )
+    ]
+    settings.control_secret = "control-secret"
+    settings._config_source = "legacy_env"
+    preview = setup_core.env_import_preview()
+    assert preview["requires_removal"] is True
+    assert "***" in preview["yaml"]
+    assert "env-secret" not in preview["yaml"]
+    assert "control-secret" not in preview["yaml"]
+    result = setup_core.env_import_activate(
+        SetupEnvImportRequest(expected_revision=preview["revision"])
+    )
+    assert result.saved is True
+    assert result.config_path == str(setup_env)
+    assert result.requires_removal is True
+    doc = yaml.safe_load(setup_env.read_text(encoding="utf-8"))
+    assert doc["gateways"][0]["gw_pwd"] == "env-secret"
+    assert doc["settings"]["control_secret"] == "control-secret"
+    with pytest.raises(ValueError, match="changed"):
+        setup_core.env_import_activate(SetupEnvImportRequest(expected_revision="wrong"))
+
+
+def test_imported_auth_siteid_must_be_numeric(setup_env):
+    root = Path.cwd() / "data" / "test-import-siteid"
+    try:
+        with pytest.raises(ValueError, match="numeric"):
+            setup_core.import_auth_tokens(
+                SetupAuthTokensRequest(
+                    email="owner@example.com",
+                    authpath=str(root),
+                    refresh_token="refresh-token",
+                    siteid="not-numeric",
+                )
+            )
+        content = json.dumps(
+            {
+                "owner@example.com": {
+                    "sso": {
+                        "access_token": "at",
+                        "refresh_token": "rt",
+                    }
+                }
+            }
+        )
+        with pytest.raises(ValueError, match="numeric"):
+            setup_core.import_auth_file(
+                SetupAuthFileRequest(
+                    mode="cloud",
+                    authpath=str(root),
+                    siteid="not-numeric",
+                    content=content,
+                )
+            )
     finally:
         if root.exists():
             import shutil
@@ -1198,7 +1328,7 @@ def test_hybrid_email_requires_an_auth_path(setup_env):
             gateways=[
                 {
                     "id": "hybrid",
-                    "mode": "tedapi",
+                    "mode": "hybrid",
                     "host": "192.168.91.1",
                     "gw_pwd": "gateway-secret",
                     "email": "owner@example.com",
@@ -1224,10 +1354,6 @@ def test_status_survives_malformed_yaml(setup_env, client):
     )
     assert response.status_code == 200, response.text
     assert response.json()["state"] == "invalid"
-
-
-def test_cwd_is_not_an_allowed_setup_path():
-    assert setup_core._path_allowed(str(Path.cwd() / "app" / "main.py")) is False
 
 
 def test_fleet_v1r_rejects_non_numeric_siteid():

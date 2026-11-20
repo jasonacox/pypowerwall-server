@@ -17,9 +17,7 @@ from cryptography.x509.oid import NameOID
 from app.core import tls
 from app.core.https_listener import start_https_listener, stop_https_listener
 
-posix_only = pytest.mark.skipif(
-    sys.platform == "win32", reason="POSIX permission bits"
-)
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
 
 
 def _free_port():
@@ -31,8 +29,13 @@ def _free_port():
 def _settings(tmp_path, **overrides):
     cert, key = tls.certificate_files(directory=str(tmp_path / "tls"))
     values = dict(
-        https_mode=True, https_port=_free_port(), server_port=8675,
-        server_host="127.0.0.1", https_cert=cert, https_key=key, debug=False,
+        https_mode=True,
+        https_port=_free_port(),
+        server_port=8675,
+        server_host="127.0.0.1",
+        https_cert=cert,
+        https_key=key,
+        debug=False,
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -49,7 +52,9 @@ def test_generates_a_private_certificate_once_and_reuses_it(tmp_path):
     with open(cert, "rb") as f:
         first = f.read()
     certificate = x509.load_pem_x509_certificate(first)
-    sans = certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    sans = certificate.extensions.get_extension_for_class(
+        x509.SubjectAlternativeName
+    ).value
     assert "localhost" in sans.get_values_for_type(x509.DNSName)
     assert "127.0.0.1" in {str(ip) for ip in sans.get_values_for_type(x509.IPAddress)}
     assert tls.certificate_files(directory=directory) == (cert, key)
@@ -82,9 +87,13 @@ def test_an_expired_generated_certificate_is_replaced(tmp_path):
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "old")])
     past = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
     expired = (
-        x509.CertificateBuilder().subject_name(name).issuer_name(name)
-        .public_key(private.public_key()).serial_number(1)
-        .not_valid_before(past).not_valid_after(past + datetime.timedelta(days=1))
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(private.public_key())
+        .serial_number(1)
+        .not_valid_before(past)
+        .not_valid_after(past + datetime.timedelta(days=1))
         .sign(private, hashes.SHA256())
     )
     with open(cert, "wb") as f:
@@ -109,17 +118,20 @@ def test_an_encrypted_user_key_is_rejected_without_prompting(tmp_path):
     private = serialization.load_pem_private_key(open(key, "rb").read(), None)
     encrypted = str(tmp_path / "encrypted.key")
     with open(encrypted, "wb") as f:
-        f.write(private.private_bytes(
-            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-            serialization.BestAvailableEncryption(b"secret"),
-        ))
+        f.write(
+            private.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.BestAvailableEncryption(b"secret"),
+            )
+        )
     with pytest.raises(ValueError, match="encrypted"):
         tls.certificate_files(cert, encrypted)
 
 
 def test_default_directory_is_the_data_volume(monkeypatch):
     monkeypatch.setattr(tls.os.path, "isdir", lambda path: path == "/data")
-    assert tls.default_tls_dir() == "/data/tls"
+    assert tls.default_tls_dir() == os.path.join("/data", "tls")
     monkeypatch.setattr(tls.os.path, "isdir", lambda path: False)
     assert tls.default_tls_dir() == os.path.join("data", "tls")
 
@@ -146,7 +158,9 @@ async def test_serves_the_app_over_https_with_secure_cookies(tmp_path):
             r = await client.get(f"https://127.0.0.1:{settings.https_port}/health")
         assert r.status_code == 200
         cookies = [v for k, v in r.headers.multi_items() if k == "set-cookie"]
-        assert cookies and all("Secure" in c and "samesite=none" in c.lower() for c in cookies)
+        assert cookies and all(
+            "Secure" in c and "samesite=none" in c.lower() for c in cookies
+        )
     finally:
         await stop_https_listener(listener)
     assert listener[1].done()

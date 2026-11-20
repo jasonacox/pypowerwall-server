@@ -41,13 +41,13 @@ The mode is chosen per gateway from the settings it has:
 |------|----------|-------|
 | TEDAPI | `PW_HOST` + `PW_GW_PWD` | Local data over the gateway WiFi (normally `192.168.91.1`). Read-only unless hybrid. |
 | TEDAPI v1r | `PW_HOST` + `PW_GW_PWD` + `PW_RSA_KEY_PATH` | Local data over the wired LAN with a registered RSA key. Can write settings and island locally. |
-| TEDAPI Bearer | `PW_HOST` + `PW_GW_PWD` + `tedapi_auth_mode: bearer` | Solar-only/inverter gateway login over the wired LAN; not supported by Powerwall 2/3. |
 | Local | `PW_HOST` + `PW_PASSWORD`, no gateway password or RSA key | Powerwall 2 local API, like the proxy's local mode. Detected on connect: the gateway answers `/api/status`. |
 | Hybrid TEDAPI | `PW_HOST` + `PW_PASSWORD` + `PW_GW_PWD` | Local customer login plus embedded TEDAPI; normally at the gateway WiFi address. |
 | Basic LAN | `PW_HOST` + `PW_PASSWORD`, no gateway password or RSA key | Powerwall 3 wired LAN, detected on connect when `/api/status` isn't served (re-checked after 5 minutes, then doubling up to 6 hours). Core metrics only: aggregates, battery level, grid status. |
 | Cloud | `PW_EMAIL` without `PW_HOST`, or `.pypowerwall.auth` in `PW_AUTH_PATH` (its account fills a missing `PW_EMAIL`) | Tesla cloud. Run `pypowerwall-server --setup` once to create the auth files. |
 | FleetAPI | `.pypowerwall.fleetapi` in `PW_AUTH_PATH` without `PW_HOST` (picked before Cloud, as the proxy does), or `fleetapi: true` on a gateway in `PW_GATEWAYS` or the config file | Tesla Fleet API. |
 | Hybrid | Any local mode plus `PW_EMAIL`, and `PW_CONTROL_SECRET` or `PW_CLOUD_HYBRID=yes` | Reads stay local; control writes use a Tesla cloud connection, which also fills values the local API lacks (Basic LAN mode and reserve, grid charging/export settings). |
+| Hybrid FleetAPI | Any local mode plus `PW_EMAIL` + `PW_AUTH_PATH` holding `.pypowerwall.fleetapi`, or `fleetapi: true` with a local `host` in `PW_GATEWAYS`/the config file | Reads stay local; control writes use Tesla Fleet API. |
 
 In the tables, **Local** means TEDAPI, TEDAPI v1r, the Powerwall 2 local API and Basic LAN.
 
@@ -59,7 +59,9 @@ The server uses the first of these that is set:
    JSON with an optional `server` block (`host`, `port`, `cors_origins`), a
    `gateways` list, and an optional `settings` block containing writable
    `Settings` field names (for example `failover`, `mqtt_host`,
-   `timeseries_retention`). The setup wizard writes this format. If the file is
+   `timeseries_retention`). Values in this block apply only when the matching
+   environment/CLI value is not set, so the documented CLI > ENV > file
+   precedence is preserved. The setup wizard writes this format. If the file is
    set but unreadable, no gateways are configured (the server never falls back
    to another source). See [gateways.yaml.example](gateways.yaml.example).
 2. **`PW_GATEWAYS`:** a JSON array of gateway objects. Invalid entries are
@@ -68,6 +70,10 @@ The server uses the first of these that is set:
    `PW_RSA_KEY_PATH`, `PW_WIFI_HOST`, `PW_EMAIL`, `PW_AUTH_PATH` and
    `PW_TIMEZONE` build one gateway with id `default`. Cloud mode is selected
    when `PW_EMAIL` is set without `PW_HOST`.
+4. **Default wizard file:** `/data/gateways.yaml` (or
+   `data/gateways.yaml` outside Docker) when no explicit source is set. It is
+   checked before the implicit `.pypowerwall.fleetapi`/`.pypowerwall.auth`
+   auto-detection in `PW_AUTH_PATH`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -87,15 +93,12 @@ file:
 | `password` | str | none | Customer password for Basic LAN or PW2 local mode. Falls back to `PW_PASSWORD`. |
 | `rsa_key_path` | str | none | RSA-4096 private key PEM for TEDAPI v1r. |
 | `wifi_host` | str | none | Gateway WiFi address for v1r follower Powerwalls and LAN fallback. |
-| `email` | str | none | Tesla account email (Cloud, FleetAPI, Hybrid). |
+| `email` | str | none | Tesla account email (required for Cloud and Hybrid; optional for FleetAPI, whose auth file carries the account). |
 | `authpath` | str | none | Directory holding the `.pypowerwall.auth` and `.pypowerwall.site` files. |
 | `timezone` | str | `America/Los_Angeles` | Gateway time zone; daily energy totals reset at its midnight. |
 | `cloud_mode` | bool | `false` | Use the Tesla cloud. Set automatically when `email` is given without `host`. |
 | `fleetapi` | bool | `false` | Use the Tesla Fleet API. |
 | `type` | str | `powerwall` | `powerwall`, or `inverter` for a solar-only gateway (the Console hides battery panels). |
-| `siteid` | str | none | Per-gateway Tesla site id; overrides global `PW_SITEID` for Cloud/FleetAPI and hybrid control. |
-| `tedapi_auth_mode` | str | none | `basic` or `bearer`; bearer is only for solar-only/inverter gateways. |
-| `tedapi_api_version` | str | none | `V2024_06` or `V2026_06`; passed to pypowerwall. |
 
 ```bash
 PW_GATEWAYS='[
@@ -398,20 +401,19 @@ activate.
 | GET | `/api/setup/status` | setup | Masked setup state, config source, writable path, revision, gateway status and `setup_recommended`. |
 | GET | `/api/setup/schema` | setup | Supported connection modes, writable settings fields with defaults, and the server's sorted IANA time zones. |
 | POST | `/api/setup/validate` | setup | Validate a full gateway/options snapshot without writing. |
-| POST | `/api/setup/test-connection` | setup | Read-only DNS/TCP/auth/data check for one gateway; cloud modes verify auth files without refreshing tokens. |
+| POST | `/api/setup/test-connection` | setup | DNS/TCP/auth/data check for one gateway. It makes read-only gateway calls; Cloud/FleetAPI token refresh may update the auth cache. |
 | POST | `/api/setup/auth/status` | setup | Report Cloud/FleetAPI auth files and the existing CLI command. |
-| POST | `/api/setup/auth/file` | setup | Validate and import a browser-selected Cloud `.pypowerwall.auth` or FleetAPI `.pypowerwall.fleetapi` file into the allowed auth path. |
+| POST | `/api/setup/auth/file` | setup | Validate and import a browser-selected Cloud `.pypowerwall.auth` or FleetAPI `.pypowerwall.fleetapi` file into the selected auth path. |
 | POST | `/api/setup/auth/tokens` | setup | Save a Refresh Token and optional Access Token from a headless Tesla login as `.pypowerwall.auth`. |
 | POST | `/api/setup/scan` | setup | Scan a private IPv4 network (`/24` or smaller) for Tesla gateways. |
+| GET | `/api/setup/import-env` | setup | Masked YAML preview of the effective environment/`PW_GATEWAYS` configuration, target path and file revision. |
+| POST | `/api/setup/import-env` | setup | Write the effective configuration to the managed YAML file with a backup and revision check; environment values still take precedence until removed. |
 | POST | `/api/setup/auth/cloud/start` | setup | Build a Tesla PKCE login URL using pypowerwall's existing auth helper; `region` is `us` or `cn`. |
 | POST | `/api/setup/auth/cloud/use` | setup | Reuse an existing Cloud auth file, connect to Tesla Cloud and select its site. |
 | POST | `/api/setup/auth/cloud/complete` | setup | Exchange the pasted callback URL, save auth files and select a site if unambiguous. |
 | POST | `/api/setup/auth/cloud/site` | setup | Persist a site selection after a multi-site login. |
-| GET | `/api/setup/docker/preflight` | setup | Check `/data`, writability, container detection and network namespace hints. |
-| GET | `/api/setup/import-env` | setup | Masked YAML preview for migrating env/`PW_GATEWAYS` configuration. |
-| POST | `/api/setup/import-env` | setup | Write the effective environment configuration to the setup YAML file (with backup); legacy env still takes precedence until removed. |
 | POST | `/api/setup/v1r/key` | setup | Explicitly generate or inspect the canonical v1r RSA key. |
-| POST | `/api/setup/v1r/auth-file` | setup | Validate and import a browser-selected `.pypowerwall.auth` file into the allowed auth path with owner-only permissions. |
+| POST | `/api/setup/v1r/auth-file` | setup | Validate and import a browser-selected `.pypowerwall.auth` file into the selected auth path with owner-only permissions. |
 | POST | `/api/setup/v1r/register` | setup | Register the canonical public key using the Owner API login or the saved FleetAPI config; returns the site list if a site must be selected, otherwise the key state and physical-proof guidance. |
 | POST | `/api/setup/v1r/register/status` | setup | Check the gateway's verification state for the canonical v1r key and return the physical-proof guidance while it is pending. |
 | POST | `/api/setup/fleetapi/key` | setup | Generate or reuse the EC key pair for FleetAPI app public-key hosting; the private key is written with owner-only permissions and never returned. |
@@ -419,7 +421,7 @@ activate.
 | POST | `/api/setup/fleetapi/complete` | setup | Exchange the FleetAPI callback code, save `.pypowerwall.fleetapi`, list the account's energy sites and select the only site when unambiguous. |
 | POST | `/api/setup/fleetapi/site` | setup | Verify and persist the selected FleetAPI energy site. |
 | POST | `/api/setup/configure` | setup | Validate and atomically save the snapshot; returns `restart_required`. |
-| POST | `/api/setup/reload` | setup | Report that a server restart is required; it never hot-reloads. |
+| POST | `/api/setup/delete-config` | setup | Delete the default wizard config file with a `.bak` backup; refuses `PW_CONFIG` and environment-managed configurations. |
 
 ### Aggregates (all gateways)
 

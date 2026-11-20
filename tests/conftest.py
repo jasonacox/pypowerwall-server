@@ -1,15 +1,37 @@
 """Pytest configuration and fixtures."""
 import asyncio
+import atexit
+import os
+import shutil
+import tempfile
 from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
-from app.main import app
-from app import main as main_module
+
+import app.config as config_module
 from app.config import settings
-from app.core.gateway_manager import gateway_manager
-from app.core.scaling import raw_to_tesla_battery_percent
-from app.core.timeseries import reset_timeseries_store
+
+# A developer checkout may contain a wizard-managed data/gateways.yaml with
+# gateways and a settings block (including a control secret). Tests must not
+# inherit that local runtime state; point the default config path at a
+# non-existent file and rebuild the global settings from environment defaults.
+_TEST_CONFIG_DIR = tempfile.mkdtemp(prefix="pws-test-config-")
+_TEST_DEFAULT_CONFIG = os.path.join(_TEST_CONFIG_DIR, "gateways.yaml")
+atexit.register(shutil.rmtree, _TEST_CONFIG_DIR, ignore_errors=True)
+config_module.default_config_path = lambda: _TEST_DEFAULT_CONFIG
+settings.__init__()
+
+from app.main import app  # noqa: E402
+from app import main as main_module  # noqa: E402
+from app.core import setup as setup_module  # noqa: E402
+from app.core.gateway_manager import gateway_manager  # noqa: E402
+from app.core.scaling import raw_to_tesla_battery_percent  # noqa: E402
+from app.core.timeseries import reset_timeseries_store  # noqa: E402
+
+# app.core.setup imports default_config_path by value; keep it aligned with
+# the same test-isolation path.
+setup_module.default_config_path = lambda: _TEST_DEFAULT_CONFIG
 
 
 def _reset_singleton_state():

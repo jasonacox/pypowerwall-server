@@ -8,8 +8,10 @@ services:
       - "8675:8675"
     environment:
       # Single gateway mode - TEDAPI only (read-only)
-      - PW_HOST=192.168.91.1
-      - PW_GW_PWD=your-gateway-password
+      # Leave these commented out for the /setup wizard. Uncomment both only
+      # if you intentionally want environment-managed configuration.
+      # - PW_HOST=192.168.91.1
+      # - PW_GW_PWD=your-gateway-password
       
       # Optional: Add cloud auth for control operations
       # First run: python3 -m pypowerwall setup (generates auth files)

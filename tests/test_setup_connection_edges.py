@@ -226,13 +226,13 @@ def test_cloud_test_connection_no_sites(conn_env, monkeypatch):
 
 def test_cloud_test_connection_site_not_available(conn_env, monkeypatch):
     _cloud_fake(monkeypatch, sites=[{"energy_site_id": 123}])
+    (conn_env / ".pypowerwall.site").write_text("999", encoding="utf-8")
     result = setup_core.test_gateway_connection(
         SetupGatewayInput(
             id="cloud",
             mode="cloud",
             email="owner@example.com",
             authpath=str(conn_env),
-            siteid="999",
         )
     )
     assert result.ok is False
@@ -455,17 +455,48 @@ def test_test_connection_local_with_all_optional_fields(conn_env, monkeypatch):
             email="owner@example.com",
             authpath=str(conn_env),
             siteid="123",
-            tedapi_auth_mode="basic",
-            tedapi_api_version="V2024_06",
         )
     )
     assert result.ok is True
     assert result.detected_mode == "TEDAPI"
 
 
-def test_test_connection_bearer_mode(conn_env, monkeypatch):
+def test_test_connection_uses_existing_credentials(conn_env, monkeypatch):
     _fake_powerwall(monkeypatch)
     result = setup_core.test_gateway_connection(
+        SetupGatewayInput(
+            id="home",
+            mode="local",
+            host="192.168.91.1",
+        ),
+        {"password": "customer"},
+    )
+    assert result.ok is True
+
+
+def test_test_connection_uses_runtime_gateway_secrets(conn_env, monkeypatch):
+    _fake_powerwall(monkeypatch)
+    from app.config import GatewayConfig
+
+    monkeypatch.setattr(
+        settings,
+        "gateways",
+        [
+            GatewayConfig(
+                id="home",
+                host="192.168.91.1",
+                password="customer",
+            )
+        ],
+    )
+    result = setup_core.test_gateway_connection(
+        SetupGatewayInput(id="home", mode="local", host="192.168.91.1")
+    )
+    assert result.ok is True
+
+
+def test_test_connection_rejects_removed_bearer_mode():
+    with pytest.raises(ValueError):
         SetupGatewayInput(
             id="inverter",
             mode="tedapi_bearer",
@@ -473,9 +504,6 @@ def test_test_connection_bearer_mode(conn_env, monkeypatch):
             gw_pwd="secret",
             type="inverter",
         )
-    )
-    assert result.ok is True
-    assert result.detected_mode == "TEDAPI"
 
 
 def test_test_connection_falls_back_to_derived_mode(conn_env, monkeypatch):

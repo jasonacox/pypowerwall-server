@@ -42,6 +42,8 @@ from app.models.setup import (
     SetupAuthFileResult,
     SetupAuthTokensRequest,
     SetupAuthTokensResult,
+    SetupDeleteConfigRequest,
+    SetupDeleteConfigResult,
     SetupDiagnosticResult,
     SetupDiagnosticStep,
     SetupEnvImportRequest,
@@ -212,39 +214,37 @@ def _derive_mode(config: GatewayConfig, data_mode: Optional[str] = None) -> str:
     if data_mode:
         return data_mode
     if config.fleetapi:
-        return "FleetAPI"
+        return "Hybrid FleetAPI" if config.host else "FleetAPI"
     if config.cloud_mode:
         return "Cloud"
     if config.rsa_key_path:
         return "TEDAPI v1r"
-    if config.tedapi_auth_mode == "bearer":
-        return "TEDAPI bearer"
     if config.gw_pwd and config.password:
         return "Hybrid TEDAPI"
     if config.gw_pwd:
-        return "TEDAPI"
+        return "Hybrid" if config.email and config.authpath else "TEDAPI"
     if config.password:
-        return "Local/Basic LAN"
+        return "Hybrid" if config.email and config.authpath else "Local/Basic LAN"
+    if config.email:
+        return "Hybrid"
     return "Unknown"
 
 
 def _setup_mode(config: GatewayConfig) -> str:
+    if config.fleetapi and config.host and not config.cloud_mode:
+        return "hybrid_fleetapi"
     if config.fleetapi:
         return "fleetapi"
     if config.cloud_mode:
         return "cloud"
     if config.rsa_key_path:
         return "tedapi_v1r"
-    if config.tedapi_auth_mode == "bearer":
-        return "tedapi_bearer"
     if config.gw_pwd and config.password:
         return "hybrid_tedapi"
     if config.gw_pwd:
-        return "tedapi"
-    if config.password and config.email and config.authpath:
-        return "hybrid"
+        return "hybrid" if config.email and config.authpath else "tedapi"
     if config.password:
-        return "local"
+        return "hybrid" if config.email and config.authpath else "local"
     if config.email:
         return "hybrid"
     return "tedapi"
@@ -285,13 +285,14 @@ def get_setup_status() -> SetupStatus:
                 mode=_derive_mode(config, data_mode),
                 online=online_here,
                 last_error=error,
-                siteid_configured=bool(config.siteid or settings.siteid),
+                siteid_configured=bool(settings.siteid),
                 rsa_key_configured=bool(config.rsa_key_path),
                 authpath_configured=bool(config.authpath),
             )
         )
 
     path = _effective_path()
+    current_revision = None
     config_changed = False
     if path and source in {"none", "default_file", "pw_config"}:
         try:
@@ -314,7 +315,7 @@ def get_setup_status() -> SetupStatus:
     elif settings.config_partial:
         state = "partial"
     elif not settings.gateways:
-        state = "invalid"
+        state = "unconfigured" if source in {"default_file", "pw_config"} else "invalid"
     elif settings.gateways and len(gateway_summaries) == online:
         state = "configured"
     elif auth_failed:
@@ -381,6 +382,7 @@ def get_setup_status() -> SetupStatus:
         config_path=path,
         config_writable=writable,
         config_revision=settings.config_revision,
+        config_file_revision=current_revision,
         config_error=settings.config_error,
         config_partial=settings.config_partial,
         warnings=warnings,
@@ -413,32 +415,6 @@ def _validate_host(host: Optional[str], issues: List[SetupValidationIssue]) -> N
             )
         )
         return
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        return
-    if not (address.is_private or address.is_loopback or address.is_link_local):
-        issues.append(
-            SetupValidationIssue(
-                field="host",
-                message="Gateway host must be a private, loopback, or link-local address.",
-            )
-        )
-
-
-def _path_allowed(path: str) -> bool:
-    allowed = [Path("/data"), Path("/auth"), Path("/keys"), Path("data")]
-    if settings.pw_authpath:
-        allowed.append(Path(os.path.expanduser(settings.pw_authpath)))
-    resolved = Path(os.path.expanduser(path)).resolve()
-    for root in allowed:
-        try:
-            root_resolved = root.resolve()
-        except OSError:
-            continue
-        if resolved == root_resolved or root_resolved in resolved.parents:
-            return True
-    return False
 
 
 def _validate_path(
@@ -449,14 +425,6 @@ def _validate_path(
     directory: bool = False,
 ) -> None:
     if not path:
-        return
-    if not _path_allowed(path):
-        issues.append(
-            SetupValidationIssue(
-                field=field,
-                message=f"{field} must be under /data, /auth, /keys or PW_AUTH_PATH",
-            )
-        )
         return
     candidate = Path(os.path.expanduser(path))
     if must_exist and not candidate.exists():
@@ -487,27 +455,69 @@ def _validate_gateway(
         issues.append(
             SetupValidationIssue(field="timezone", message="unknown timezone")
         )
-    if item.siteid and not str(item.siteid).isdigit():
-        issues.append(
-            SetupValidationIssue(field="siteid", message="siteid must be numeric")
+    provided = item.model_fields_set
+    gw_pwd = (
+        None
+        if "gw_pwd" in provided and item.gw_pwd is None
+        else (_secret(item.gw_pwd) or existing.get("gw_pwd") or settings.pw_gw_pwd)
+    )
+    password = (
+        None
+        if "password" in provided and item.password is None
+        else (
+            _secret(item.password) or existing.get("password") or settings.pw_password
         )
+    )
+    rsa_key = (
+        None
+        if "rsa_key_path" in provided and item.rsa_key_path is None
+        else (
+            item.rsa_key_path
+            or existing.get("rsa_key_path")
+            or settings.pw_rsa_key_path
+        )
+    )
+    authpath = (
+        None
+        if "authpath" in provided and item.authpath is None
+        else (item.authpath or existing.get("authpath") or settings.pw_authpath)
+    )
+    wifi_host = (
+        None
+        if "wifi_host" in provided and item.wifi_host is None
+        else (item.wifi_host or existing.get("wifi_host") or settings.pw_wifi_host)
+    )
+    email = (
+        None
+        if "email" in provided and item.email is None
+        else (
+            (item.email or existing.get("email") or settings.pw_email or "").strip()
+            or None
+        )
+    )
 
-    gw_pwd = _secret(item.gw_pwd) or existing.get("gw_pwd")
-    password = _secret(item.password) or existing.get("password")
-    rsa_key = item.rsa_key_path or existing.get("rsa_key_path")
-    authpath = item.authpath or existing.get("authpath")
-    email = (item.email or existing.get("email") or "").strip() or None
-
-    if item.mode in {"tedapi", "tedapi_bearer", "hybrid_tedapi"} and not gw_pwd:
+    if item.mode in {"tedapi", "hybrid_tedapi"} and not gw_pwd:
         issues.append(
             SetupValidationIssue(
                 field="gw_pwd", message="Gateway password is required."
             )
         )
-    if item.mode in {"local", "basic_lan", "hybrid_tedapi", "hybrid"} and not password:
+    if item.mode in {"local", "basic_lan", "hybrid_tedapi"} and not password:
         issues.append(
             SetupValidationIssue(
                 field="password", message="Customer password is required."
+            )
+        )
+    if item.mode in {"hybrid", "hybrid_fleetapi"} and not (
+        password or gw_pwd or rsa_key
+    ):
+        issues.append(
+            SetupValidationIssue(
+                field="password",
+                message=(
+                    "A local password, gateway password or RSA key is required "
+                    "for hybrid mode."
+                ),
             )
         )
     if item.mode == "tedapi_v1r" and not rsa_key:
@@ -523,14 +533,44 @@ def _validate_gateway(
                 message="Gateway or customer password is required for TEDAPI v1r.",
             )
         )
-    if email and not authpath:
+    if (
+        email
+        and not authpath
+        and item.mode
+        in {
+            "cloud",
+            "fleetapi",
+            "hybrid",
+            "hybrid_fleetapi",
+        }
+    ):
         issues.append(
             SetupValidationIssue(
                 field="authpath",
                 message="Auth path is required for Cloud, FleetAPI, and hybrid control.",
             )
         )
-    if item.mode in {"cloud", "fleetapi", "hybrid"} and not email:
+    elif (
+        email
+        and not authpath
+        and (
+            settings.control_enabled
+            or settings.cloud_hybrid
+            or settings.cloud_read_fallback
+        )
+    ):
+        issues.append(
+            SetupValidationIssue(
+                field="authpath",
+                message=(
+                    "Hybrid control is enabled, but no auth path is configured. "
+                    "Set Auth path or PW_AUTH_PATH so the cloud connection can "
+                    "find the auth files."
+                ),
+                severity="warning",
+            )
+        )
+    if item.mode in {"cloud", "hybrid", "hybrid_fleetapi"} and not email:
         issues.append(
             SetupValidationIssue(
                 field="email", message="Tesla account email is required."
@@ -543,15 +583,6 @@ def _validate_gateway(
                 message="Auth path is required for Cloud and FleetAPI modes.",
             )
         )
-    if item.mode == "tedapi_bearer" and item.type == "powerwall":
-        issues.append(
-            SetupValidationIssue(
-                field="type",
-                message="TEDAPI bearer is for solar-only/inverter gateways, "
-                "not Powerwall 2/3",
-            )
-        )
-
     _validate_path("rsa_key_path", rsa_key, issues, must_exist=True)
     _validate_path(
         "authpath",
@@ -561,7 +592,7 @@ def _validate_gateway(
         directory=True,
     )
 
-    if len(issues) != before:
+    if any(issue.severity == "error" for issue in issues[before:]):
         return None
 
     kwargs = {
@@ -571,9 +602,6 @@ def _validate_gateway(
         "port": item.port,
         "timezone": item.timezone,
         "type": item.type,
-        "siteid": item.siteid,
-        "tedapi_auth_mode": item.tedapi_auth_mode,
-        "tedapi_api_version": item.tedapi_api_version,
     }
     if email:
         kwargs["email"] = email
@@ -596,26 +624,31 @@ def _validate_gateway(
             cloud_mode=True,
             fleetapi=True,
         )
-    elif item.mode == "hybrid":
+    elif item.mode in {"hybrid", "hybrid_fleetapi"}:
         kwargs.update(
-            password=password,
             email=email,
             authpath=authpath,
             cloud_mode=False,
+            fleetapi=item.mode == "hybrid_fleetapi",
         )
+        if password:
+            kwargs["password"] = password
+        if gw_pwd:
+            kwargs["gw_pwd"] = gw_pwd
+        if rsa_key:
+            kwargs["rsa_key_path"] = rsa_key
+        if wifi_host:
+            kwargs["wifi_host"] = wifi_host
     elif item.mode in {"local", "basic_lan"}:
         kwargs.update(password=password)
     elif item.mode == "hybrid_tedapi":
         kwargs.update(gw_pwd=gw_pwd, password=password)
-    elif item.mode in {"tedapi", "tedapi_bearer"}:
+    elif item.mode == "tedapi":
         kwargs.update(gw_pwd=gw_pwd)
-        if item.mode == "tedapi_bearer":
-            kwargs["tedapi_auth_mode"] = item.tedapi_auth_mode or "bearer"
-            kwargs["tedapi_api_version"] = item.tedapi_api_version or "V2026_06"
     else:
         kwargs.update(gw_pwd=gw_pwd, password=password, rsa_key_path=rsa_key)
-        if item.wifi_host:
-            kwargs["wifi_host"] = item.wifi_host
+        if wifi_host:
+            kwargs["wifi_host"] = wifi_host
 
     try:
         return GatewayConfig(**kwargs)
@@ -658,15 +691,21 @@ def get_setup_schema() -> Dict[str, Any]:
         "modes": [
             "tedapi",
             "tedapi_v1r",
-            "tedapi_bearer",
             "local",
             "basic_lan",
             "hybrid_tedapi",
             "cloud",
             "fleetapi",
             "hybrid",
+            "hybrid_fleetapi",
         ],
         "timezones": sorted(available_timezones()),
+        "gateway_defaults": {
+            "mode": "tedapi",
+            "type": "powerwall",
+            "port": 443,
+            "timezone": settings.pw_timezone,
+        },
         "settings": fields,
     }
 
@@ -686,7 +725,12 @@ def validate_setup_request(
     if not request.gateways:
         issues.append(
             SetupValidationIssue(
-                field="gateways", message="At least one gateway is required."
+                field="gateways",
+                message=(
+                    "No gateways configured; monitoring will be off until one "
+                    "is added."
+                ),
+                severity="warning",
             )
         )
     seen = set()
@@ -700,7 +744,12 @@ def validate_setup_request(
             )
             continue
         seen.add(item.id)
-        config = _validate_gateway(item, existing_by_id.get(item.id, {}), issues)
+        existing = {}
+        if item.original_id:
+            existing = existing_by_id.get(item.original_id, {})
+        if not existing:
+            existing = existing_by_id.get(item.id, {})
+        config = _validate_gateway(item, existing, issues)
         if config is not None:
             configs.append(config)
 
@@ -724,31 +773,68 @@ def validate_setup_request(
                 )
             )
             continue
-        if (
-            name
-            in {
-                "pw_authpath",
-                "cache_file",
-                "timeseries_path",
-                "https_cert",
-                "https_key",
-                "mqtt_tls_ca_cert",
-            }
-            and validated
-        ):
-            if not _path_allowed(str(validated)):
-                issues.append(
-                    SetupValidationIssue(
-                        field=f"options.{name}",
-                        message="path must be under /data, /auth, /keys or PW_AUTH_PATH",
-                    )
+        alias = Settings.model_fields[name].alias or name
+        if os.getenv(alias) is not None:
+            issues.append(
+                SetupValidationIssue(
+                    field=f"options.{name}",
+                    message=(
+                        "The environment or command line sets this value and "
+                        "takes precedence over the config file."
+                    ),
+                    severity="warning",
                 )
-                continue
+            )
         validated_options[name] = validated
 
-    if validated_options.get("https_mode"):
-        cert = validated_options.get("https_cert")
-        key = validated_options.get("https_key")
+    numeric_bounds = {
+        "server_port": (1, 65535),
+        "https_port": (1, 65535),
+        "mqtt_port": (1, 65535),
+        "cache_expire": (1, None),
+        "timeout": (1, None),
+        "pool_maxsize": (0, None),
+        "browser_cache": (0, None),
+        "cache_ttl": (0, None),
+        "rate_limit_max_requests": (1, None),
+        "rate_limit_window_seconds": (1, None),
+        "rate_limit_max_buckets": (1, None),
+        "mqtt_qos": (0, 2),
+        "mqtt_controls": (0, 63),
+        "islanding_cooldown": (0, None),
+        "tedapi_probe_interval": (5, None),
+    }
+    for name, (minimum, maximum) in numeric_bounds.items():
+        if name not in validated_options:
+            continue
+        value = validated_options[name]
+        if (
+            not isinstance(value, int)
+            or value < minimum
+            or (maximum is not None and value > maximum)
+        ):
+            issues.append(
+                SetupValidationIssue(
+                    field=f"options.{name}",
+                    message=(
+                        f"must be between {minimum} and {maximum}"
+                        if maximum is not None
+                        else f"must be at least {minimum}"
+                    ),
+                )
+            )
+            validated_options.pop(name, None)
+
+    # Cross-field checks must see the complete effective snapshot, not only
+    # the fields changed in this browser session.
+    effective_options = {
+        name: getattr(settings, name, None) for name in _WRITABLE_OPTION_FIELDS
+    }
+    effective_options.update(validated_options)
+
+    if effective_options.get("https_mode"):
+        cert = effective_options.get("https_cert")
+        key = effective_options.get("https_key")
         if bool(cert) != bool(key):
             issues.append(
                 SetupValidationIssue(
@@ -756,8 +842,8 @@ def validate_setup_request(
                     message="https_cert and https_key must both be set or both be empty",
                 )
             )
-    if validated_options.get("mqtt_controls"):
-        if not (validated_options.get("control_secret") or settings.control_secret):
+    if effective_options.get("mqtt_controls"):
+        if not effective_options.get("control_secret"):
             issues.append(
                 SetupValidationIssue(
                     field="options.mqtt_controls",
@@ -765,8 +851,8 @@ def validate_setup_request(
                     severity="warning",
                 )
             )
-    if validated_options.get("battery_dispatch") and not (
-        validated_options.get("control_secret") or settings.control_secret
+    if effective_options.get("battery_dispatch") and not effective_options.get(
+        "control_secret"
     ):
         issues.append(
             SetupValidationIssue(
@@ -776,10 +862,9 @@ def validate_setup_request(
             )
         )
     modes = {_setup_mode(config) for config in configs}
-    if (
-        validated_options.get("cloud_read_fallback")
-        or validated_options.get("cloud_energy")
-    ) and not (modes & {"cloud", "fleetapi", "hybrid"}):
+    if effective_options.get("cloud_read_fallback") and not (
+        modes & {"cloud", "fleetapi", "hybrid"}
+    ):
         issues.append(
             SetupValidationIssue(
                 field="options.cloud",
@@ -787,7 +872,7 @@ def validate_setup_request(
                 severity="warning",
             )
         )
-    if validated_options.get("wifi_v1r_fallback") and not any(
+    if effective_options.get("wifi_v1r_fallback") and not any(
         config.rsa_key_path and config.wifi_host for config in configs
     ):
         issues.append(
@@ -797,7 +882,7 @@ def validate_setup_request(
                 severity="warning",
             )
         )
-    if validated_options.get("local_first") and not (
+    if effective_options.get("local_first") and not (
         modes & {"tedapi_v1r", "hybrid", "hybrid_tedapi"}
     ):
         issues.append(
@@ -808,7 +893,7 @@ def validate_setup_request(
             )
         )
     for path_field in ("https_cert", "https_key", "mqtt_tls_ca_cert"):
-        path_value = validated_options.get(path_field)
+        path_value = effective_options.get(path_field)
         if path_value and not Path(os.path.expanduser(str(path_value))).exists():
             issues.append(
                 SetupValidationIssue(
@@ -869,6 +954,7 @@ def apply_setup_request(
     if not path:
         raise ValueError("no writable configuration path is available")
 
+    malformed_existing = False
     with _CONFIG_LOCK:
         existing_doc: Dict[str, Any] = {}
         raw = None
@@ -882,6 +968,7 @@ def apply_setup_request(
                         "existing configuration cannot be merged; repair the file "
                         "manually or reload after fixing it"
                     )
+                malformed_existing = True
                 existing_doc = {}
             actual_revision = _revision(raw)
             if request.expected_revision != actual_revision:
@@ -922,14 +1009,53 @@ def apply_setup_request(
             doc.pop("settings", None)
 
         revision, backup = _write_atomic(path, doc)
+        warnings = [issue.message for issue in result.warnings]
+        if malformed_existing:
+            warnings.append(
+                "The existing configuration file could not be parsed and was "
+                f"replaced; a backup was written to {backup}."
+            )
         return SetupConfigureResult(
             saved=True,
             restart_required=True,
             config_path=path,
             backup_path=backup,
             revision=revision,
-            warnings=[issue.message for issue in result.warnings],
+            warnings=warnings,
         )
+
+
+def delete_setup_config(
+    request: SetupDeleteConfigRequest,
+) -> SetupDeleteConfigResult:
+    """Delete the wizard-managed default config file, keeping a backup."""
+    if settings.config_source in {"pw_gateways", "legacy_env"}:
+        raise ValueError(
+            "Configuration is managed by environment variables; remove that "
+            "source instead of deleting the file."
+        )
+    if settings.config_source == "pw_config":
+        raise ValueError(
+            "PW_CONFIG selects an explicit file; remove PW_CONFIG or edit the "
+            "file manually instead."
+        )
+    path = _effective_path()
+    if not path or not Path(path).exists():
+        raise ValueError("no configuration file to delete")
+    with _CONFIG_LOCK:
+        raw = Path(path).read_bytes()
+        if request.expected_revision != _revision(raw):
+            raise ValueError("configuration changed; reload the setup page")
+        backup = f"{path}.bak"
+        shutil.copy2(path, backup)
+        os.chmod(backup, 0o600)
+        os.remove(path)
+    return SetupDeleteConfigResult(
+        deleted=True,
+        config_path=path,
+        backup_path=backup,
+        message=("Configuration file deleted; restart the server/container to apply."),
+    )
 
 
 def test_gateway_connection(
@@ -938,10 +1064,37 @@ def test_gateway_connection(
 ) -> SetupDiagnosticResult:
     """Run bounded read-only checks for one wizard gateway entry."""
     issues: List[SetupValidationIssue] = []
-    config = _validate_gateway(item, existing or {}, issues)
+    existing = existing or {}
+    if not existing:
+        # Environment/PW_GATEWAYS configurations have no YAML document. Use
+        # the matching runtime gateway so masked secrets can still be tested.
+        for runtime_config in settings.gateways:
+            if runtime_config.id == item.id:
+                existing = runtime_config.model_dump(exclude_none=True)
+                break
+    config = _validate_gateway(item, existing, issues)
     if config is None or any(issue.severity == "error" for issue in issues):
         message = "; ".join(issue.message for issue in issues)
         raise ValueError(message or "invalid gateway configuration")
+
+    # Use the merged configuration for the live check. The browser omits
+    # unchanged secrets and paths, and _validate_gateway resolves them from
+    # the existing YAML or the global Settings fallbacks.
+    item = SetupGatewayInput(
+        id=config.id,
+        name=config.name,
+        mode=item.mode,
+        host=config.host,
+        port=config.port,
+        gw_pwd=config.gw_pwd,
+        password=config.password,
+        rsa_key_path=config.rsa_key_path,
+        wifi_host=config.wifi_host,
+        email=config.email,
+        authpath=config.authpath,
+        timezone=config.timezone,
+        type=config.type,
+    )
 
     steps: List[SetupDiagnosticStep] = []
     warnings: List[str] = []
@@ -975,7 +1128,9 @@ def test_gateway_connection(
         if fleet:
             try:
                 fleet_config = _fleet_read_config(authpath)
-                siteid = (item.siteid or str(fleet_config.get("site_id") or "")).strip()
+                siteid = (
+                    settings.siteid or str(fleet_config.get("site_id") or "")
+                ).strip()
                 if not siteid:
                     sites = _fleet_sites_with_refresh(authpath, fleet_config)
                     if len(sites) != 1:
@@ -1042,7 +1197,7 @@ def test_gateway_connection(
             if cloud_email not in accounts:
                 raise ValueError("the requested account is not in the auth file")
             site_file = authpath / ".pypowerwall.site"
-            siteid = (item.siteid or "").strip()
+            siteid = (settings.siteid or "").strip()
             if not siteid and site_file.is_file():
                 siteid = site_file.read_text(encoding="utf-8").strip()
             cloud = PyPowerwallCloud(
@@ -1251,16 +1406,6 @@ def test_gateway_connection(
             kwargs["email"] = item.email
         if item.authpath:
             kwargs["authpath"] = item.authpath
-        if item.siteid:
-            kwargs["siteid"] = item.siteid
-        if item.mode == "tedapi_bearer":
-            kwargs["tedapi_auth_mode"] = item.tedapi_auth_mode or "bearer"
-            kwargs["tedapi_api_version"] = item.tedapi_api_version or "V2026_06"
-        else:
-            if item.tedapi_auth_mode:
-                kwargs["tedapi_auth_mode"] = item.tedapi_auth_mode
-            if item.tedapi_api_version:
-                kwargs["tedapi_api_version"] = item.tedapi_api_version
 
         pw = pypowerwall.Powerwall(**kwargs)
         connected = bool(pw.is_connected())
@@ -1332,15 +1477,6 @@ def test_gateway_connection(
 def auth_status(mode: str, authpath: Optional[str] = None) -> Dict[str, Any]:
     """Report external Tesla auth files without reading token contents."""
     fleet = mode == "fleetapi"
-    if authpath and not _path_allowed(authpath):
-        return {
-            "mode": "fleetapi" if fleet else "cloud",
-            "authpath": None,
-            "files": {"auth": False, "site": False, "fleetapi": False},
-            "ready": False,
-            "command": None,
-            "notes": ["Auth path must be under /data, /auth, /keys or PW_AUTH_PATH."],
-        }
     path = Path(os.path.expanduser(authpath or settings.pw_authpath or ""))
     names = {
         "auth": ".pypowerwall.auth",
@@ -1348,7 +1484,11 @@ def auth_status(mode: str, authpath: Optional[str] = None) -> Dict[str, Any]:
         "fleetapi": ".pypowerwall.fleetapi",
     }
     files = {key: (path / name).is_file() for key, name in names.items()}
-    ready = files["fleetapi"] if fleet else (files["auth"] and files["site"])
+    ready = (
+        files["fleetapi"]
+        if fleet
+        else bool(files["auth"] and (files["site"] or settings.siteid))
+    )
     command = (
         "python -m pypowerwall setup -fleetapi"
         if fleet
@@ -1368,83 +1508,6 @@ def auth_status(mode: str, authpath: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
-def docker_preflight() -> Dict[str, Any]:
-    """Check the persistent paths and container assumptions without changing them."""
-    checks: List[Dict[str, Any]] = []
-    warnings: List[str] = []
-    data_dir = Path("/data")
-    if data_dir.is_dir():
-        checks.append(
-            {
-                "key": "data",
-                "label": "Persistent /data volume",
-                "status": "success",
-                "detail": str(data_dir),
-            }
-        )
-        if not os.access(data_dir, os.W_OK):
-            warnings.append("/data is present but not writable by the server.")
-    else:
-        checks.append(
-            {
-                "key": "data",
-                "label": "Persistent /data volume",
-                "status": "warning",
-                "detail": "/data is not mounted; a source install uses data/ instead.",
-            }
-        )
-        warnings.append(
-            "No /data volume was detected. Configuration may be lost when the "
-            "container is replaced."
-        )
-    path = _effective_path()
-    if path:
-        checks.append(
-            {
-                "key": "config",
-                "label": "Configuration path",
-                "status": "success" if _is_writable(path) else "failed",
-                "detail": path,
-            }
-        )
-        if not _is_writable(path):
-            warnings.append("Configuration path is not writable.")
-    docker = Path("/.dockerenv").exists()
-    if docker:
-        warnings.append(
-            "TEDAPI mode requires host networking to access the gateway at "
-            "192.168.91.1. The wizard does not change Docker networking."
-        )
-    checks.append(
-        {
-            "key": "docker",
-            "label": "Container detection",
-            "status": "success",
-            "detail": "Docker container" if docker else "Host/source process",
-        }
-    )
-    network = None
-    try:
-        Path("/proc/net/route").read_text(encoding="utf-8")
-        network = "Linux route table available"
-    except OSError:
-        pass
-    checks.append(
-        {
-            "key": "network",
-            "label": "Network namespace",
-            "status": "success" if network else "skipped",
-            "detail": network
-            or "Use the connection test for the actual gateway route.",
-        }
-    )
-    return {
-        "ok": all(check["status"] != "failed" for check in checks),
-        "checks": checks,
-        "warnings": warnings,
-    }
-
-
 def _v1r_path(authpath: Optional[str] = None) -> Path:
     raw = authpath or settings.pw_authpath
     root = (
@@ -1452,15 +1515,8 @@ def _v1r_path(authpath: Optional[str] = None) -> Path:
         if raw
         else (Path("/data") if Path("/data").is_dir() else Path("data"))
     )
-    allowed = [Path("/data"), Path("/auth"), Path("/keys"), Path("data")]
-    if settings.pw_authpath:
-        allowed.append(Path(os.path.expanduser(settings.pw_authpath)))
-    resolved = root.resolve()
-    if not any(
-        resolved == candidate.resolve() or candidate.resolve() in resolved.parents
-        for candidate in allowed
-    ):
-        raise ValueError("authpath must be under /data, /auth or PW_AUTH_PATH")
+    if root.exists() and not root.is_dir():
+        raise ValueError("authpath is not a directory")
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -1565,7 +1621,7 @@ def _v1r_auth_token(root: Path, email: Optional[str] = None) -> Tuple[str, str]:
 
 
 def v1r_auth_file(request: SetupV1rAuthFileRequest) -> SetupV1rAuthFileResult:
-    """Import a user-selected .pypowerwall.auth file into the allowed auth path."""
+    """Import a user-selected .pypowerwall.auth file into the selected auth path."""
     root = _v1r_path(request.authpath)
     content = (request.content or "").lstrip("\ufeff").strip()
     if not content:
@@ -1882,9 +1938,9 @@ def v1r_registration_status(request: SetupV1rStatusRequest) -> SetupV1rResult:
 def _cloud_auth_path(authpath: str) -> Path:
     if not authpath:
         raise ValueError("authpath is required")
-    if not _path_allowed(authpath):
-        raise ValueError("authpath must be under /data, /auth, /keys or PW_AUTH_PATH")
     path = Path(os.path.expanduser(authpath))
+    if path.exists() and not path.is_dir():
+        raise ValueError("authpath is not a directory")
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -2072,50 +2128,43 @@ def cloud_auth_site(email: str, authpath: str, siteid: str) -> SetupCloudSiteRes
     return SetupCloudSiteResult(saved=True, siteid=str(siteid), sitefile=str(sitefile))
 
 
-def env_import_preview() -> Dict[str, Any]:
-    """Return a masked YAML preview for migrating env config to PW_CONFIG."""
-    gateways = []
-    for config in settings.gateways:
-        item = config.model_dump(exclude_none=True)
-        for key in ("gw_pwd", "password"):
-            if item.get(key):
-                item[key] = "***"
-        gateways.append(item)
-    options = {}
+def _environment_override_names() -> List[str]:
+    """Environment/CLI variables that still override the config file."""
+    env_names = {name.upper() for name in os.environ}
+    names: List[str] = []
     for name in _WRITABLE_OPTION_FIELDS:
+        # The server block is loaded after the environment (existing behavior),
+        # so PW_BIND_ADDRESS/PW_PORT/CORS_ORIGINS do not need removal.
         if name in _SERVER_OPTION_MAP:
             continue
-        value = getattr(settings, name, None)
-        if name in {"control_secret", "mqtt_password"} and value:
-            value = "***"
-        if value is not None:
-            options[name] = value
-    doc = {
-        "server": {
-            "host": settings.server_host,
-            "port": settings.server_port,
-            "cors_origins": settings.cors_origins,
-        },
-        "gateways": gateways,
-    }
-    if options:
-        doc["settings"] = options
-    target = _effective_path() or default_config_path()
-    revision = None
-    if Path(target).exists():
-        revision = _revision(Path(target).read_bytes())
-    requires_removal = settings.config_source in {"pw_gateways", "legacy_env"}
-    return {
-        "yaml": yaml.safe_dump(doc, sort_keys=False, default_flow_style=False),
-        "source": settings.config_source,
-        "target_path": target,
-        "revision": revision,
-        "requires_removal": requires_removal,
-        "notes": [
-            "Secrets are masked. Re-enter them in the wizard before saving.",
-            "Remove PW_GATEWAYS or legacy PW_* gateway variables before restarting.",
-        ],
-    }
+        field = Settings.model_fields.get(name)
+        alias = getattr(field, "alias", None) if field is not None else None
+        env_name = str(alias or name)
+        if env_name.upper() in env_names:
+            names.append(env_name)
+    return sorted(names)
+
+
+def _env_import_requires_removal() -> bool:
+    return settings.config_source in {"pw_gateways", "legacy_env"} or bool(
+        _environment_override_names()
+    )
+
+
+def _env_import_precedence_notes() -> List[str]:
+    notes: List[str] = []
+    overrides = _environment_override_names()
+    if overrides:
+        notes.append(
+            "These environment/CLI values still take precedence until they are "
+            "removed, then restart: " + ", ".join(overrides) + "."
+        )
+    if settings.config_source in {"pw_gateways", "legacy_env"}:
+        notes.append(
+            "PW_GATEWAYS or legacy PW_* gateway variables still take precedence "
+            "until they are removed, then restart."
+        )
+    return notes
 
 
 def _env_import_document() -> Dict[str, Any]:
@@ -2139,11 +2188,42 @@ def _env_import_document() -> Dict[str, Any]:
     return doc
 
 
+def env_import_preview() -> Dict[str, Any]:
+    """Return a masked YAML preview for migrating env config to PW_CONFIG."""
+    doc = _env_import_document()
+    for gateway in doc["gateways"]:
+        for key in ("gw_pwd", "password"):
+            if gateway.get(key):
+                gateway[key] = "***"
+    block = doc.get("settings")
+    if isinstance(block, dict):
+        for key in ("control_secret", "mqtt_password"):
+            if block.get(key):
+                block[key] = "***"
+    target = _effective_path() or default_config_path()
+    revision = None
+    if Path(target).exists():
+        revision = _revision(Path(target).read_bytes())
+    return {
+        "yaml": yaml.safe_dump(doc, sort_keys=False, default_flow_style=False),
+        "source": settings.config_source,
+        "target_path": target,
+        "revision": revision,
+        "requires_removal": _env_import_requires_removal(),
+        "notes": [
+            "Secrets are masked in this preview; the write action uses the "
+            "server's current values."
+        ]
+        + _env_import_precedence_notes(),
+    }
+
+
 def env_import_activate(request: SetupEnvImportRequest) -> SetupEnvImportResult:
     """Write the effective environment configuration to the setup YAML file."""
     source = settings.config_source
-    requires_removal = source in {"pw_gateways", "legacy_env"}
+    requires_removal = _env_import_requires_removal()
     path = _effective_path() or default_config_path()
+    malformed_existing = False
     with _CONFIG_LOCK:
         existing_doc: Dict[str, Any] = {}
         if Path(path).exists():
@@ -2157,6 +2237,7 @@ def env_import_activate(request: SetupEnvImportRequest) -> SetupEnvImportResult:
                     raise ValueError(
                         "existing configuration cannot be merged; repair the file manually"
                     )
+                malformed_existing = True
                 existing_doc = {}
         elif request.expected_revision:
             raise ValueError("configuration changed; preview again")
@@ -2179,11 +2260,11 @@ def env_import_activate(request: SetupEnvImportRequest) -> SetupEnvImportResult:
         else:
             doc.pop("settings", None)
         revision, backup = _write_atomic(path, doc)
-    notes = []
-    if requires_removal:
+    notes = _env_import_precedence_notes()
+    if malformed_existing:
         notes.append(
-            "PW_GATEWAYS or legacy PW_* gateway variables still take precedence. "
-            "Remove them from the container environment, then restart."
+            "The existing configuration file could not be parsed and was "
+            f"replaced; a backup was written to {backup}."
         )
     notes.append("Restart the server/container to activate the saved configuration.")
     return SetupEnvImportResult(
@@ -2451,6 +2532,9 @@ def fleet_setup_start(request: SetupFleetStartRequest) -> SetupFleetStartResult:
                 f"unable to register the FleetAPI partner account ({code})"
             )
         partner_account = _fleet_response_json(partner_response) or {}
+    same_app = (
+        existing.get("CLIENT_ID") == client_id and existing.get("DOMAIN") == domain
+    )
     config = {
         "CLIENT_ID": client_id,
         "CLIENT_SECRET": client_secret,
@@ -2459,9 +2543,9 @@ def fleet_setup_start(request: SetupFleetStartRequest) -> SetupFleetStartResult:
         "AUDIENCE": audience,
         "partner_token": partner_token,
         "partner_account": partner_account,
-        "access_token": "",
-        "refresh_token": "",
-        "site_id": None,
+        "access_token": (existing.get("access_token") or "") if same_app else "",
+        "refresh_token": ((existing.get("refresh_token") or "") if same_app else ""),
+        "site_id": existing.get("site_id") if same_app else None,
     }
     _backup_file(_fleet_config_file(path))
     config_file = _fleet_write_config(path, config)
@@ -2802,6 +2886,8 @@ def import_auth_tokens(request: SetupAuthTokensRequest) -> SetupAuthTokensResult
     )
     os.chmod(auth_file, 0o600)
     siteid = (request.siteid or "").strip() or None
+    if siteid and not siteid.isdigit():
+        raise ValueError("siteid must be numeric")
     site_file = None
     if siteid:
         site_file = str(path / ".pypowerwall.site")
@@ -2858,6 +2944,8 @@ def import_auth_file(request: SetupAuthFileRequest) -> SetupAuthFileResult:
         _merge_auth_file(auth_file, data)
         files = {"auth": str(auth_file)}
         siteid = (request.siteid or "").strip() or None
+        if siteid and not siteid.isdigit():
+            raise ValueError("siteid must be numeric")
         if siteid:
             site_file = root / ".pypowerwall.site"
             _write_private_text(site_file, siteid, newline=False)

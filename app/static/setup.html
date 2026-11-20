@@ -78,14 +78,14 @@
                         <div><dt>Write access</dt><dd id="status-writable">—</dd></div>
                     </dl>
                     <div class="notice warning" id="status-warnings" hidden></div>
-                    <div class="notice" id="docker-status" hidden></div>
-                    <div class="button-row">
+                        <div class="button-row">
                         <button type="button" class="btn btn-secondary" id="refresh-status">Refresh</button>
                         <button type="button" class="btn btn-primary" id="continue-to-gateways">Continue</button>
+                        <button type="button" class="btn btn-danger" id="delete-config" hidden>Delete configuration file</button>
                     </div>
                     <section class="migration-section" aria-labelledby="migration-title">
                         <h3 id="migration-title">Environment configuration migration</h3>
-                        <p class="hint">For installations currently configured through <code>PW_GATEWAYS</code> or legacy <code>PW_*</code> variables. Preview the environment configuration, then write it to the managed YAML file.</p>
+                        <p class="hint">For installations currently configured through <code>PW_GATEWAYS</code>, legacy <code>PW_*</code> gateway variables, or other environment settings. Preview the effective configuration, then write it to the managed YAML file. Environment values still take precedence until they are removed.</p>
                         <div class="button-row migration-actions">
                             <button type="button" class="btn btn-secondary" id="preview-env">Preview environment configuration</button>
                             <button type="button" class="btn btn-secondary" id="activate-env" hidden>Write environment configuration to YAML</button>
@@ -149,13 +149,13 @@
                             <select data-field="mode">
                                 <option value="tedapi">TEDAPI</option>
                                 <option value="tedapi_v1r">TEDAPI v1r</option>
-                                <option value="tedapi_bearer">TEDAPI Bearer</option>
                                 <option value="local">Local</option>
                                 <option value="basic_lan">Basic LAN</option>
                                 <option value="hybrid_tedapi">Hybrid TEDAPI</option>
                                 <option value="cloud">Cloud</option>
                                 <option value="fleetapi">FleetAPI</option>
                                 <option value="hybrid">Hybrid</option>
+                                <option value="hybrid_fleetapi">Hybrid FleetAPI</option>
                             </select>
                             <span class="hint" data-mode-description></span>
                         </div>
@@ -185,7 +185,7 @@
                         <div class="field">
                             <label>Site ID <span class="optional">(optional)</span></label>
                             <input data-field="siteid" type="text" inputmode="numeric" placeholder="123456789">
-                            <span class="hint">Per-gateway Tesla site ID; overrides global <code>PW_SITEID</code> for Cloud/FleetAPI and hybrid control.</span>
+                            <span class="hint">Tesla site ID for the Cloud/FleetAPI/v1r sign-in panels; the selected site is saved to <code>.pypowerwall.site</code>.</span>
                         </div>
                         <div class="field" data-mode-field="gw_pwd">
                             <label>Gateway WiFi password</label>
@@ -210,29 +210,12 @@
                         <div class="field" data-mode-field="email">
                             <label>Tesla account email</label>
                             <input data-field="email" type="email" placeholder="user@example.com">
-                            <span class="hint">Tesla account email. Required for Cloud and FleetAPI; optional for hybrid cloud control with a local mode.</span>
+                            <span class="hint">Tesla account email. Required for Cloud, Hybrid and Hybrid FleetAPI; optional for FleetAPI (its auth file).</span>
                         </div>
                         <div class="field" data-mode-field="authpath">
                             <label>Auth path</label>
                             <input data-field="authpath" type="text" placeholder="/auth">
                             <span class="hint">Directory holding the <code>.pypowerwall.auth</code> and <code>.pypowerwall.site</code> files. FleetAPI uses <code>.pypowerwall.fleetapi</code>. Required for Cloud/FleetAPI and hybrid cloud control.</span>
-                        </div>
-                        <div class="field" data-mode-field="tedapi_auth_mode">
-                            <label>TEDAPI auth mode <span class="optional">(optional)</span></label>
-                            <select data-field="tedapi_auth_mode">
-                                <option value="basic">basic</option>
-                                <option value="bearer">bearer</option>
-                            </select>
-                            <span class="hint"><code>basic</code> or <code>bearer</code>; bearer is only for solar-only/inverter gateways.</span>
-                        </div>
-                        <div class="field" data-mode-field="tedapi_api_version">
-                            <label>TEDAPI API version <span class="optional">(optional)</span></label>
-                            <select data-field="tedapi_api_version">
-                                <option value="">Default</option>
-                                <option value="V2024_06">V2024_06</option>
-                                <option value="V2026_06">V2026_06</option>
-                            </select>
-                            <span class="hint"><code>V2024_06</code> or <code>V2026_06</code>; passed to pypowerwall.</span>
                         </div>
                     </div>
                     <div class="button-row">

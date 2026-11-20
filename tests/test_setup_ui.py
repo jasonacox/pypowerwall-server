@@ -253,6 +253,40 @@ def test_setup_v1r_fleetapi_registration_button_exists():
     assert "method," in js
 
 
+def test_setup_hybrid_fleetapi_mode_and_auth_panels_exist():
+    root = Path(__file__).resolve().parent.parent
+    html = (root / "app" / "static" / "setup.html").read_text(encoding="utf-8")
+    js = (root / "app" / "static" / "js" / "setup.js").read_text(encoding="utf-8")
+    assert '<option value="hybrid_fleetapi">Hybrid FleetAPI</option>' in html
+    assert "hybrid_fleetapi:" in js
+    assert 'const v1rModes = ["tedapi_v1r", "hybrid", "hybrid_fleetapi"]' in js
+    assert 'const cloudControlModes = ["cloud", "hybrid"]' in js
+    assert 'const fleetControlModes = ["fleetapi", "hybrid_fleetapi"]' in js
+    assert 'const authModes = ["cloud", "fleetapi", "hybrid", "hybrid_fleetapi"]' in js
+    assert 'gatewayMode === "hybrid_fleetapi"' in js
+
+
+def test_setup_delete_config_and_rename_controls_exist():
+    root = Path(__file__).resolve().parent.parent
+    html = (root / "app" / "static" / "setup.html").read_text(encoding="utf-8")
+    js = (root / "app" / "static" / "js" / "setup.js").read_text(encoding="utf-8")
+    assert 'id="delete-config"' in html
+    assert "Delete configuration file" in html
+    assert 'api("/delete-config"' in js
+    assert "async function deleteConfig" in js
+    assert "expected_revision: state.status.config_file_revision" in js
+    assert "card.dataset.originalId = config.id" in js
+    assert "data.original_id = card.dataset.originalId" in js
+
+
+def test_setup_malformed_config_confirmation_and_warnings_exist():
+    root = Path(__file__).resolve().parent.parent
+    js = (root / "app" / "static" / "js" / "setup.js").read_text(encoding="utf-8")
+    assert "could not be parsed at startup" in js
+    assert "Saving will replace it and write a backup" in js
+    assert "result.warnings" in js
+
+
 def test_setup_env_import_activation_controls_exist():
     root = Path(__file__).resolve().parent.parent
     html = (root / "app" / "static" / "setup.html").read_text(encoding="utf-8")

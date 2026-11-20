@@ -11,13 +11,13 @@ from app.models.setup import (
     SetupCloudAuthStartResult,
     SetupCloudSiteResult,
     SetupConfigureResult,
+    SetupDeleteConfigResult,
     SetupDiagnosticResult,
     SetupEnvImportResult,
     SetupFleetCompleteResult,
     SetupFleetKeyResult,
     SetupFleetSiteResult,
     SetupFleetStartResult,
-    SetupReloadResult,
     SetupScanResult,
     SetupStatus,
     SetupV1rAuthFileResult,
@@ -145,13 +145,6 @@ _SUCCESS_CASES = [
     ),
     (
         "get",
-        "/api/setup/docker/preflight",
-        "docker_preflight",
-        None,
-        {"ok": True, "checks": [], "warnings": []},
-    ),
-    (
-        "get",
         "/api/setup/import-env",
         "env_import_preview",
         None,
@@ -166,6 +159,17 @@ _SUCCESS_CASES = [
             saved=True,
             config_path="/data/gateways.yaml",
             revision="rev",
+        ),
+    ),
+    (
+        "post",
+        "/api/setup/delete-config",
+        "delete_setup_config",
+        {},
+        SetupDeleteConfigResult(
+            deleted=True,
+            config_path="/data/gateways.yaml",
+            message="deleted",
         ),
     ),
     (
@@ -306,18 +310,6 @@ def test_setup_api_success_contracts(
     assert response.status_code == 200, response.text
 
 
-def test_setup_api_reload_contract(client, setup_api_headers):
-    response = client.post("/api/setup/reload", headers=setup_api_headers)
-    assert response.status_code == 200, response.text
-    assert (
-        response.json()
-        == SetupReloadResult(
-            restart_required=True,
-            message="Restart the server/container to activate the saved configuration.",
-        ).model_dump()
-    )
-
-
 def test_setup_api_validate_route(client, setup_api_headers):
     response = client.post(
         "/api/setup/validate",
@@ -441,6 +433,14 @@ _ERROR_CASES = [
         "post",
         "/api/setup/import-env",
         "env_import_activate",
+        {},
+        400,
+        None,
+    ),
+    (
+        "post",
+        "/api/setup/delete-config",
+        "delete_setup_config",
         {},
         400,
         None,
@@ -605,7 +605,6 @@ def test_setup_api_status_schema_are_local_and_side_effect_free(
 ):
     status = client.get("/api/setup/status", headers=setup_api_headers)
     schema = client.get("/api/setup/schema", headers=setup_api_headers)
-    preflight = client.get("/api/setup/docker/preflight", headers=setup_api_headers)
     assert status.status_code == 200
     assert status.json()["state"] in {
         "unconfigured",
@@ -618,8 +617,54 @@ def test_setup_api_status_schema_are_local_and_side_effect_free(
     }
     assert schema.status_code == 200
     assert "tedapi" in schema.json()["modes"]
-    assert preflight.status_code == 200
-    assert "checks" in preflight.json()
+    assert "hybrid_fleetapi" in schema.json()["modes"]
+
+
+def test_setup_api_test_connection_uses_original_id(
+    client, setup_api_headers, monkeypatch
+):
+    monkeypatch.setattr(
+        setup_api,
+        "load_existing_config",
+        lambda: {
+            "gateways": [
+                {"id": "old", "gw_pwd": "stored"},
+                {"id": "new", "gw_pwd": "fallback"},
+            ]
+        },
+    )
+    seen = []
+    monkeypatch.setattr(
+        setup_api,
+        "test_gateway_connection",
+        lambda gateway, existing: seen.append(existing)
+        or SetupDiagnosticResult(ok=True),
+    )
+    response = client.post(
+        "/api/setup/test-connection",
+        json={
+            "id": "new",
+            "original_id": "old",
+            "mode": "tedapi",
+            "host": "192.168.91.1",
+        },
+        headers=setup_api_headers,
+    )
+    assert response.status_code == 200, response.text
+    assert seen[0]["gw_pwd"] == "stored"
+
+    response = client.post(
+        "/api/setup/test-connection",
+        json={
+            "id": "new",
+            "original_id": "missing",
+            "mode": "tedapi",
+            "host": "192.168.91.1",
+        },
+        headers=setup_api_headers,
+    )
+    assert response.status_code == 200, response.text
+    assert seen[1]["gw_pwd"] == "fallback"
 
 
 def test_setup_api_paths_do_not_accept_credentials_in_query(client, setup_api_headers):

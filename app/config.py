@@ -372,41 +372,6 @@ class GatewayConfig(BaseModel):
     cloud_mode: bool = False
     fleetapi: bool = False
     type: str = "powerwall"  # "powerwall" | "inverter" (solar-only, no batteries)
-    siteid: Optional[str] = None  # Per-gateway Tesla site ID (optional)
-    tedapi_auth_mode: Optional[str] = None  # "basic" or "bearer"
-    tedapi_api_version: Optional[str] = None  # e.g. "V2024_06"
-
-    @field_validator("siteid", mode="before")
-    @classmethod
-    def _normalize_siteid(cls, v):
-        if v is None:
-            return None
-        text = str(v).strip()
-        return text or None
-
-    @field_validator("tedapi_auth_mode")
-    @classmethod
-    def _normalize_tedapi_auth_mode(cls, v):
-        if v is None:
-            return None
-        text = str(v).strip().lower()
-        if not text:
-            return None
-        if text not in {"basic", "bearer"}:
-            raise ValueError("tedapi_auth_mode must be 'basic' or 'bearer'")
-        return text
-
-    @field_validator("tedapi_api_version")
-    @classmethod
-    def _normalize_tedapi_api_version(cls, v):
-        if v is None:
-            return None
-        text = str(v).strip().upper()
-        if not text:
-            return None
-        if not re.fullmatch(r"V\d{4}_\d{2}", text):
-            raise ValueError("tedapi_api_version must look like V2024_06")
-        return text
 
     @model_validator(mode="after")
     def _default_name_to_id(self):
@@ -570,6 +535,14 @@ class Settings(BaseSettings):
     # 2 mode, 4 grid_charging, 8 grid_export, 16 islanding, 32 dispatch;
     # 15 = value controls, 31 = value controls + islanding, 63 = all).
     # Islanding and battery dispatch each need their own explicit bit.
+
+    @field_validator("siteid", mode="before")
+    @classmethod
+    def _normalize_siteid(cls, v):
+        if v is None:
+            return None
+        text = str(v).strip()
+        return text or None
 
     @field_validator("*", mode="before")
     @classmethod
@@ -745,6 +718,8 @@ class Settings(BaseSettings):
         # resolved value on, so /stats reports what the library uses.
         if self.fleetapi_http:
             os.environ["PW_FLEETAPI_HTTP"] = self.fleetapi_http
+        else:
+            os.environ.pop("PW_FLEETAPI_HTTP", None)
 
     def _reset_config_metadata(self) -> None:
         self.gateways = []
@@ -760,6 +735,11 @@ class Settings(BaseSettings):
         field = type(self).model_fields[name]
         if name == "mqtt_controls":
             return self._parse_control_bits(value)
+        if name == "siteid":
+            if value is None:
+                return None
+            text = str(value).strip()
+            return text or None
         if (
             name == "https_mode"
             and isinstance(value, str)
@@ -815,6 +795,12 @@ class Settings(BaseSettings):
                 self._config_warnings.append(
                     f"{config_path}: settings.{name} is controlled by gateways "
                     "or the server block; ignored"
+                )
+                continue
+            if name in self.model_fields_set:
+                self._config_warnings.append(
+                    f"{config_path}: settings.{name} is set by the environment "
+                    "or command line; ignored"
                 )
                 continue
             try:
@@ -907,6 +893,14 @@ class Settings(BaseSettings):
             )
             return True
 
+        if not entries:
+            # An explicitly empty list is the wizard's decommissioned state.
+            logger.info(
+                f"Config file {config_path} has no gateway entries - "
+                "monitoring is disabled"
+            )
+            return True
+
         for idx, gw in enumerate(entries):
             try:
                 self.gateways.append(GatewayConfig(**gw))
@@ -986,6 +980,14 @@ class Settings(BaseSettings):
                 )
             return
 
+        # A wizard-managed default file outranks the implicit auth-file
+        # auto-detection below. Explicit PW_HOST/PW_EMAIL still win.
+        if not (self.pw_host or self.pw_email):
+            default_path = default_config_path()
+            if os.path.exists(default_path):
+                self._load_config_file(default_path, "default_file")
+                return
+
         # Fall back to single gateway mode (legacy compatibility). With no
         # PW_HOST, pick FleetAPI or Cloud from the auth files the way the
         # proxy's pypowerwall auto_select does: .pypowerwall.fleetapi first,
@@ -1022,13 +1024,6 @@ class Settings(BaseSettings):
                     fleetapi=fleetapi,
                 )
             ]
-            return
-
-        # Lowest priority: a wizard-managed default file. Only load it when
-        # no explicit source exists, so env/PW_GATEWAYS keep precedence.
-        default_path = default_config_path()
-        if os.path.exists(default_path):
-            self._load_config_file(default_path, "default_file")
             return
 
         self._config_source = "none"

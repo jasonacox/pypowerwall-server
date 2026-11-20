@@ -638,23 +638,6 @@ async def console():
             )
         content = content.replace("{PROXY_BASE_SCRIPT}", proxy_base_script)
         content = content.replace("{PROXY_BASE}", _proxy_base)
-        setup_banner = ""
-        cached = [
-            gateway_manager.cache.get(gateway.id) for gateway in settings.gateways
-        ]
-        all_offline = bool(cached) and all(
-            status is not None and not status.online for status in cached
-        )
-        if not settings.gateways or settings.config_error or all_offline:
-            setup_banner = (
-                '<div class="setup-banner" role="status">'
-                "<div><strong>Setup required.</strong> "
-                "New installations can be configured from the browser at "
-                "/setup without editing YAML or environment variables.</div>"
-                f'<a href="{_proxy_base}/setup">Open setup</a>'
-                "</div>"
-            )
-        content = content.replace("{SETUP_BANNER}", setup_banner)
         # Shared static assets carry ?v=<version> so an upgrade isn't served
         # a stale cached charts.js / charts.css
         content = content.replace("{SERVER_VERSION}", SERVER_VERSION)

@@ -17,7 +17,6 @@ from app.models.setup import (
     SetupAuthTokensRequest,
     SetupCloudAuthCompleteRequest,
     SetupCloudAuthUseRequest,
-    SetupEnvImportRequest,
     SetupFleetCompleteRequest,
     SetupFleetKeyRequest,
     SetupFleetSiteRequest,
@@ -647,7 +646,7 @@ def test_fleet_v1r_command_rejects_double_401(edge_env, monkeypatch):
 def test_cloud_auth_path_validation(edge_env):
     with pytest.raises(ValueError, match="required"):
         setup_core._cloud_auth_path("")
-    with pytest.raises(ValueError, match="must be under"):
+    with pytest.raises(ValueError, match="not a directory"):
         setup_core._cloud_auth_path(str(Path.cwd() / "README.md"))
 
 
@@ -852,7 +851,7 @@ def test_cloud_auth_use_ignores_unreadable_site_file(edge_env, monkeypatch):
 
 
 def test_cloud_auth_site_validation(edge_env, monkeypatch):
-    with pytest.raises(ValueError, match="must be under"):
+    with pytest.raises(ValueError, match="not a directory"):
         setup_core.cloud_auth_site(
             "owner@example.com", str(Path.cwd() / "README.md"), "1"
         )
@@ -870,63 +869,6 @@ def test_cloud_auth_site_validation(edge_env, monkeypatch):
     result = setup_core.cloud_auth_site("owner@example.com", str(edge_env), "123")
     assert result.saved is True
     assert (edge_env / ".pypowerwall.site").read_text(encoding="utf-8") == "123"
-
-
-def test_env_preview_revision_and_activate_removes_empty_settings(
-    edge_env, monkeypatch, tmp_path
-):
-    from app.config import GatewayConfig
-
-    target = tmp_path / "preview.yaml"
-    target.write_text("gateways: []\n", encoding="utf-8")
-    monkeypatch.setattr(setup_core, "default_config_path", lambda: str(target))
-    settings._config_source = "legacy_env"
-    settings.gateways = [
-        GatewayConfig(
-            id="home",
-            host="192.168.91.1",
-            gw_pwd="secret",
-        )
-    ]
-    preview = setup_core.env_import_preview()
-    assert preview["revision"]
-    assert preview["requires_removal"] is True
-    assert "***" in preview["yaml"]
-
-    settings._config_source = "none"
-    result = setup_core.env_import_activate(
-        SetupEnvImportRequest(expected_revision=preview["revision"])
-    )
-    assert result.saved is True
-    assert (
-        yaml.safe_load(target.read_text(encoding="utf-8"))["gateways"][0]["id"]
-        == "home"
-    )
-
-    target.write_text("gateways: []\n", encoding="utf-8")
-    monkeypatch.setattr(
-        setup_core,
-        "_env_import_document",
-        lambda: {"server": {}, "gateways": []},
-    )
-    revision = setup_core._revision(target.read_bytes())
-    setup_core.env_import_activate(SetupEnvImportRequest(expected_revision=revision))
-    assert "settings" not in yaml.safe_load(target.read_text(encoding="utf-8"))
-
-
-def test_env_activate_rejects_malformed_file_without_config_error(
-    edge_env, monkeypatch, tmp_path
-):
-    target = tmp_path / "bad.yaml"
-    target.write_text("gateways: [", encoding="utf-8")
-    monkeypatch.setattr(setup_core, "default_config_path", lambda: str(target))
-    settings._config_source = "none"
-    settings._config_error = None
-    revision = setup_core._revision(target.read_bytes())
-    with pytest.raises(ValueError, match="cannot be merged"):
-        setup_core.env_import_activate(
-            SetupEnvImportRequest(expected_revision=revision)
-        )
 
 
 def test_import_auth_tokens_validation(edge_env, monkeypatch):

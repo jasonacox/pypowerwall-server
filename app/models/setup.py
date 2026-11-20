@@ -8,13 +8,13 @@ from pydantic import BaseModel, Field, SecretStr, field_validator
 SetupGatewayMode = Literal[
     "tedapi",
     "tedapi_v1r",
-    "tedapi_bearer",
     "local",
     "basic_lan",
     "hybrid_tedapi",
     "cloud",
     "fleetapi",
     "hybrid",
+    "hybrid_fleetapi",
 ]
 
 
@@ -22,6 +22,7 @@ class SetupGatewayInput(BaseModel):
     """One gateway as entered in the setup wizard."""
 
     id: str
+    original_id: Optional[str] = None  # previous ID for secret-preserving rename
     name: Optional[str] = None
     mode: SetupGatewayMode
     host: Optional[str] = None
@@ -34,9 +35,6 @@ class SetupGatewayInput(BaseModel):
     authpath: Optional[str] = None
     timezone: str = "America/Los_Angeles"
     type: str = "powerwall"
-    siteid: Optional[str] = None
-    tedapi_auth_mode: Optional[str] = None
-    tedapi_api_version: Optional[str] = None
 
     @field_validator("id")
     @classmethod
@@ -44,10 +42,6 @@ class SetupGatewayInput(BaseModel):
         text = value.strip()
         if not text:
             raise ValueError("Gateway ID is required")
-        if len(text) > 64:
-            raise ValueError("Gateway ID must be at most 64 characters")
-        if not all(char.isalnum() or char in "-_" for char in text):
-            raise ValueError("Gateway ID may contain only letters, digits, '-' and '_'")
         return text
 
     @field_validator("type")
@@ -71,14 +65,6 @@ class SetupGatewayInput(BaseModel):
         if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", text):
             raise ValueError("a valid Tesla email is required")
         return text
-
-    @field_validator("siteid", mode="before")
-    @classmethod
-    def _normalize_siteid(cls, value):
-        if value is None:
-            return None
-        text = str(value).strip()
-        return text or None
 
 
 class SetupGatewaySummary(BaseModel):
@@ -105,6 +91,7 @@ class SetupStatus(BaseModel):
     config_path: Optional[str] = None
     config_writable: bool = False
     config_revision: Optional[str] = None
+    config_file_revision: Optional[str] = None
     config_error: Optional[str] = None
     config_partial: bool = False
     warnings: List[str] = Field(default_factory=list)
@@ -152,7 +139,29 @@ class SetupConfigureResult(BaseModel):
     warnings: List[str] = Field(default_factory=list)
 
 
-class SetupReloadResult(BaseModel):
+class SetupEnvImportRequest(BaseModel):
+    expected_revision: Optional[str] = None
+
+
+class SetupEnvImportResult(BaseModel):
+    saved: bool
+    config_path: str
+    backup_path: Optional[str] = None
+    revision: str
+    source: Optional[str] = None
+    requires_removal: bool = False
+    restart_required: bool = True
+    notes: List[str] = Field(default_factory=list)
+
+
+class SetupDeleteConfigRequest(BaseModel):
+    expected_revision: Optional[str] = None
+
+
+class SetupDeleteConfigResult(BaseModel):
+    deleted: bool
+    config_path: str
+    backup_path: Optional[str] = None
     restart_required: bool = True
     message: str
 
@@ -381,21 +390,6 @@ class SetupAuthFileResult(BaseModel):
     email: Optional[str] = None
     siteid: Optional[str] = None
     message: str
-
-
-class SetupEnvImportRequest(BaseModel):
-    expected_revision: Optional[str] = None
-
-
-class SetupEnvImportResult(BaseModel):
-    saved: bool
-    config_path: str
-    backup_path: Optional[str] = None
-    revision: str
-    source: Optional[str] = None
-    requires_removal: bool = False
-    restart_required: bool = True
-    notes: List[str] = Field(default_factory=list)
 
 
 class SetupAuthTokensRequest(BaseModel):
