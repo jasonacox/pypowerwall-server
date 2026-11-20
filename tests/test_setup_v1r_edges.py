@@ -354,7 +354,6 @@ def test_cloud_complete_uses_explicit_valid_site(v1r_env, monkeypatch):
         "_exchange_code",
         lambda *args, **kwargs: {"access_token": "at", "refresh_token": "rt"},
     )
-    monkeypatch.setattr(tesla_auth, "save_token", lambda *args, **kwargs: None)
     monkeypatch.setattr(PyPowerwallCloud, "connect", lambda self: True)
     monkeypatch.setattr(
         PyPowerwallCloud,

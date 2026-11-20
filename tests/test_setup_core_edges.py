@@ -539,6 +539,7 @@ def test_status_survives_malformed_settings_block(core_env):
     settings._config_path = str(core_env.config_path)
     settings._config_error = "invalid"
     core_env.config_path.write_text("settings: [broken", encoding="utf-8")
+    settings._config_revision = setup_core._revision(core_env.config_path.read_bytes())
     status = setup_core.get_setup_status()
     assert status.settings_keys == []
     assert status.state == "invalid"
@@ -591,6 +592,7 @@ def test_empty_gateway_file_is_unconfigured(core_env):
     settings._config_source = "default_file"
     settings._config_path = str(core_env.config_path)
     settings._config_error = None
+    settings._config_revision = setup_core._revision(core_env.config_path.read_bytes())
     status = setup_core.get_setup_status()
     assert status.state == "unconfigured"
     assert status.can_write is True
@@ -1384,3 +1386,281 @@ def test_scan_gateways_errors_and_empty_results(core_env, monkeypatch):
     monkeypatch.setattr(scan_module, "get_my_ip", fail_ip)
     with pytest.raises(ValueError, match="unable to determine"):
         setup_core.scan_gateways(SetupScanRequest())
+
+
+def test_status_reports_restart_after_first_gateway_from_empty(core_env, monkeypatch):
+    core_env.config_path.write_text("gateways: []\n", encoding="utf-8")
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+    settings._config_error = None
+    settings._config_warnings = []
+    settings._config_partial = False
+    settings._config_revision = setup_core._revision(core_env.config_path.read_bytes())
+    settings.gateways = []
+
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.apply_setup_request(_request(expected_revision=revision))
+    assert result.saved is True
+
+    status = setup_core.get_setup_status()
+    assert status.state == "restart_required"
+    assert status.restart_required is True
+    assert status.config_error is None
+    assert status.config_file_revision != status.config_revision
+
+    # Simulate the restart: the same file is now the loaded configuration.
+    settings.gateways = [_gateway()]
+    settings._config_revision = setup_core._revision(core_env.config_path.read_bytes())
+    settings._config_error = None
+    settings._config_partial = False
+    status = setup_core.get_setup_status()
+    assert status.restart_required is False
+    assert status.state != "restart_required"
+
+
+def test_status_reports_restart_after_malformed_repair(core_env, monkeypatch):
+    core_env.config_path.write_text("gateways: [\n", encoding="utf-8")
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+    settings._config_error = "Unable to read config file (ParserError)"
+    settings._config_warnings = ["stale warning"]
+    settings._config_partial = True
+    settings._config_revision = setup_core._revision(core_env.config_path.read_bytes())
+    settings.gateways = []
+
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.apply_setup_request(_request(expected_revision=revision))
+    assert result.saved is True
+
+    status = setup_core.get_setup_status()
+    assert status.state == "restart_required"
+    assert status.restart_required is True
+    assert status.config_error is None
+    assert status.config_partial is False
+    assert "stale warning" not in status.warnings
+
+    settings.gateways = [_gateway()]
+    settings._config_revision = setup_core._revision(core_env.config_path.read_bytes())
+    settings._config_error = None
+    settings._config_warnings = []
+    settings._config_partial = False
+    status = setup_core.get_setup_status()
+    assert status.restart_required is False
+    assert status.state != "restart_required"
+
+
+@pytest.mark.parametrize("value", [5, None, "invalid", {}])
+def test_non_list_gateways_are_repaired_with_warning(core_env, value):
+    core_env.config_path.write_text(
+        yaml.safe_dump({"gateways": value}), encoding="utf-8"
+    )
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+    settings._config_error = "Config file has no 'gateways' list"
+    settings._config_warnings = []
+    settings._config_partial = False
+    settings._config_revision = setup_core._revision(core_env.config_path.read_bytes())
+    settings.gateways = []
+
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.apply_setup_request(_request(expected_revision=revision))
+    assert result.saved is True
+    assert any("not a list" in warning for warning in result.warnings)
+    doc = yaml.safe_load(core_env.config_path.read_text(encoding="utf-8"))
+    assert isinstance(doc["gateways"], list)
+    assert doc["gateways"][0]["id"] == "home"
+
+
+def test_valid_gateway_list_is_accepted(core_env):
+    core_env.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "gateways": [
+                    {"id": "home", "host": "192.168.91.1", "gw_pwd": "a"},
+                    {"id": "cabin", "host": "192.168.91.2", "gw_pwd": "b"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+    settings._config_error = None
+    settings._config_warnings = []
+    settings._config_partial = False
+    settings._config_revision = setup_core._revision(core_env.config_path.read_bytes())
+    settings.gateways = []
+
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.apply_setup_request(_request(expected_revision=revision))
+    assert result.saved is True
+    assert not any("not a list" in warning for warning in result.warnings)
+
+
+def test_configure_preserves_unknown_gateway_fields(core_env):
+    core_env.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "custom_top": {"keep": True},
+                "settings": {"failover": False},
+                "gateways": [
+                    {
+                        "id": "home",
+                        "host": "192.168.91.1",
+                        "gw_pwd": "secret",
+                        "future_field": "keep-me",
+                        "custom_option": {"enabled": True},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+    settings._config_error = None
+    settings._config_warnings = []
+    settings._config_partial = False
+    settings._config_revision = setup_core._revision(core_env.config_path.read_bytes())
+    settings.gateways = []
+
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.apply_setup_request(
+        _request(
+            gateways=[
+                {
+                    "id": "home",
+                    "mode": "tedapi",
+                    "host": "192.168.91.1",
+                }
+            ],
+            expected_revision=revision,
+        )
+    )
+    assert result.saved is True
+    doc = yaml.safe_load(core_env.config_path.read_text(encoding="utf-8"))
+    gateway = doc["gateways"][0]
+    assert gateway["gw_pwd"] == "secret"
+    assert gateway["future_field"] == "keep-me"
+    assert gateway["custom_option"] == {"enabled": True}
+
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.apply_setup_request(
+        _request(
+            gateways=[
+                {
+                    "id": "home",
+                    "mode": "tedapi",
+                    "host": "192.168.91.2",
+                    "gw_pwd": "new-secret",
+                }
+            ],
+            expected_revision=revision,
+        )
+    )
+    assert result.saved is True
+    doc = yaml.safe_load(core_env.config_path.read_text(encoding="utf-8"))
+    gateway = doc["gateways"][0]
+    assert gateway["host"] == "192.168.91.2"
+    assert gateway["gw_pwd"] == "new-secret"
+    assert gateway["future_field"] == "keep-me"
+    assert gateway["custom_option"] == {"enabled": True}
+    assert doc["custom_top"] == {"keep": True}
+    assert doc["settings"]["failover"] is False
+
+
+def test_unknown_gateway_fields_follow_rename(core_env):
+    core_env.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "gateways": [
+                    {
+                        "id": "home",
+                        "host": "192.168.91.1",
+                        "gw_pwd": "secret",
+                        "future_field": "keep-me",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+    settings._config_error = None
+    settings._config_warnings = []
+    settings._config_partial = False
+    settings._config_revision = setup_core._revision(core_env.config_path.read_bytes())
+    settings.gateways = []
+
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.apply_setup_request(
+        _request(
+            gateways=[
+                {
+                    "id": "renamed",
+                    "original_id": "home",
+                    "mode": "tedapi",
+                    "host": "192.168.91.1",
+                }
+            ],
+            expected_revision=revision,
+        )
+    )
+    assert result.saved is True
+    gateway = yaml.safe_load(core_env.config_path.read_text(encoding="utf-8"))[
+        "gateways"
+    ][0]
+    assert gateway["id"] == "renamed"
+    assert gateway["gw_pwd"] == "secret"
+    assert gateway["future_field"] == "keep-me"
+
+
+def test_new_gateway_does_not_inherit_unknown_fields(core_env):
+    core_env.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "gateways": [
+                    {
+                        "id": "home",
+                        "host": "192.168.91.1",
+                        "gw_pwd": "secret",
+                        "future_field": "keep-me",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+    settings._config_error = None
+    settings._config_warnings = []
+    settings._config_partial = False
+    settings._config_revision = setup_core._revision(core_env.config_path.read_bytes())
+    settings.gateways = []
+
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.apply_setup_request(
+        _request(
+            gateways=[
+                {
+                    "id": "home",
+                    "mode": "tedapi",
+                    "host": "192.168.91.1",
+                },
+                {
+                    "id": "new",
+                    "mode": "tedapi",
+                    "host": "192.168.91.3",
+                    "gw_pwd": "new-secret",
+                },
+            ],
+            expected_revision=revision,
+        )
+    )
+    assert result.saved is True
+    doc = yaml.safe_load(core_env.config_path.read_text(encoding="utf-8"))
+    by_id = {gateway["id"]: gateway for gateway in doc["gateways"]}
+    assert by_id["home"]["future_field"] == "keep-me"
+    assert "future_field" not in by_id["new"]

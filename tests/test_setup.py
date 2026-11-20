@@ -355,6 +355,35 @@ def test_invalid_existing_file_can_be_repaired_with_backup(setup_env):
     assert doc["gateways"][0]["id"] == "home"
 
 
+def test_configure_repairs_non_list_gateways_via_api(setup_env, client):
+    setup_env.write_text("gateways: 5\n", encoding="utf-8")
+    digest = hashlib.sha256(setup_env.read_bytes()).hexdigest()
+    settings._config_source = "default_file"
+    settings._config_path = str(setup_env)
+    settings._config_error = "Config file has no 'gateways' list"
+    settings._config_revision = digest
+    settings._config_warnings = []
+    settings._config_partial = False
+    settings.gateways = []
+
+    headers = {"X-PW-Setup-Token": "test-setup-token"}
+    validation = client.post("/api/setup/validate", json=_payload(), headers=headers)
+    assert validation.status_code == 200, validation.text
+    assert any(
+        "not a list" in warning["message"] for warning in validation.json()["warnings"]
+    )
+
+    response = client.post(
+        "/api/setup/configure",
+        json=_payload(expected_revision=digest),
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    doc = yaml.safe_load(setup_env.read_text(encoding="utf-8"))
+    assert isinstance(doc["gateways"], list)
+    assert doc["gateways"][0]["id"] == "home"
+
+
 def test_cloud_auth_flow_uses_existing_helpers(setup_env, monkeypatch, tmp_path):
     from pypowerwall import tesla_auth
 
@@ -1280,6 +1309,8 @@ def test_imported_auth_siteid_must_be_numeric(setup_env):
                     content=content,
                 )
             )
+        assert not (root / ".pypowerwall.auth").exists()
+        assert not (root / ".pypowerwall.site").exists()
     finally:
         if root.exists():
             import shutil
@@ -1346,7 +1377,7 @@ def test_status_survives_malformed_yaml(setup_env, client):
     settings._config_source = "default_file"
     settings._config_path = str(setup_env)
     settings._config_error = "Unable to read config file (ScannerError)"
-    settings._config_revision = "bad"
+    settings._config_revision = hashlib.sha256(setup_env.read_bytes()).hexdigest()
     settings._config_warnings = []
     response = client.get(
         "/api/setup/status",

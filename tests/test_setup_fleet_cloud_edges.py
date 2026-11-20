@@ -704,7 +704,6 @@ def test_cloud_auth_complete_errors(edge_env, monkeypatch):
         "_exchange_code",
         lambda *args, **kwargs: {"access_token": "at", "refresh_token": "rt"},
     )
-    monkeypatch.setattr(tesla_auth, "save_token", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         PyPowerwallCloud,
         "connect",
@@ -734,7 +733,6 @@ def test_cloud_auth_complete_selected_site_validation(edge_env, monkeypatch):
         "_exchange_code",
         lambda *args, **kwargs: {"access_token": "at", "refresh_token": "rt"},
     )
-    monkeypatch.setattr(tesla_auth, "save_token", lambda *args, **kwargs: None)
     monkeypatch.setattr(PyPowerwallCloud, "connect", lambda self: True)
     monkeypatch.setattr(
         PyPowerwallCloud,
@@ -766,7 +764,6 @@ def test_cloud_auth_complete_multi_site_without_selection(edge_env, monkeypatch)
         "_exchange_code",
         lambda *args, **kwargs: {"access_token": "at", "refresh_token": "rt"},
     )
-    monkeypatch.setattr(tesla_auth, "save_token", lambda *args, **kwargs: None)
     monkeypatch.setattr(PyPowerwallCloud, "connect", lambda self: True)
     monkeypatch.setattr(
         PyPowerwallCloud,
@@ -964,3 +961,410 @@ def test_merge_auth_file_handles_malformed_existing(edge_env):
     merged = setup_core._merge_auth_file(path, {"owner@example.com": {"sso": {}}})
     assert "owner@example.com" in merged
     assert json.loads(path.read_text(encoding="utf-8"))["owner@example.com"]
+
+
+def _cloud_state(root, state, email="owner@example.com"):
+    setup_core._CLOUD_AUTH_STATES[state] = {
+        "verifier": "v",
+        "email": email,
+        "authpath": str(root),
+        "region": "us",
+        "expires": time.monotonic() + 600,
+    }
+
+
+def _cloud_token():
+    return {
+        "access_token": "new-at",
+        "refresh_token": "new-rt",
+        "expires_in": 28800,
+        "token_type": "Bearer",
+    }
+
+
+def _old_cloud_auth(root):
+    data = {
+        "owner@example.com": {
+            "sso": {
+                "access_token": "old-at",
+                "refresh_token": "old-rt",
+                "expires_at": int(time.time() + 3600),
+            }
+        },
+        "other@example.com": {
+            "sso": {
+                "access_token": "other-at",
+                "refresh_token": "other-rt",
+                "expires_at": int(time.time() + 3600),
+            }
+        },
+    }
+    (root / ".pypowerwall.auth").write_text(json.dumps(data), encoding="utf-8")
+    (root / ".pypowerwall.site").write_text("111", encoding="utf-8")
+    return data
+
+
+def test_cloud_auth_complete_preserves_auth_when_exchange_fails(edge_env, monkeypatch):
+    _old_cloud_auth(edge_env)
+    auth_file = edge_env / ".pypowerwall.auth"
+    site_file = edge_env / ".pypowerwall.site"
+    auth_before = auth_file.read_bytes()
+    site_before = site_file.read_bytes()
+    _cloud_state(edge_env, "cloud-exchange-fail")
+    from pypowerwall import tesla_auth
+
+    def fail_exchange(*args, **kwargs):
+        raise RuntimeError("invalid_grant")
+
+    monkeypatch.setattr(tesla_auth, "_exchange_code", fail_exchange)
+    with pytest.raises(RuntimeError, match="invalid_grant"):
+        setup_core.cloud_auth_complete(
+            SetupCloudAuthCompleteRequest(
+                callback_url="https://x/access?code=abc&state=cloud-exchange-fail"
+            )
+        )
+    assert auth_file.read_bytes() == auth_before
+    assert site_file.read_bytes() == site_before
+
+
+def test_cloud_auth_complete_preserves_auth_when_connect_fails(edge_env, monkeypatch):
+    _old_cloud_auth(edge_env)
+    auth_file = edge_env / ".pypowerwall.auth"
+    site_file = edge_env / ".pypowerwall.site"
+    auth_before = auth_file.read_bytes()
+    site_before = site_file.read_bytes()
+    _cloud_state(edge_env, "cloud-connect-fail")
+    from pypowerwall import tesla_auth
+    from pypowerwall.cloud.pypowerwall_cloud import PyPowerwallCloud
+
+    monkeypatch.setattr(
+        tesla_auth, "_exchange_code", lambda *args, **kwargs: _cloud_token()
+    )
+    monkeypatch.setattr(PyPowerwallCloud, "connect", lambda self: False)
+    with pytest.raises(ValueError, match="connection failed"):
+        setup_core.cloud_auth_complete(
+            SetupCloudAuthCompleteRequest(
+                callback_url="https://x/access?code=abc&state=cloud-connect-fail"
+            )
+        )
+    assert auth_file.read_bytes() == auth_before
+    assert site_file.read_bytes() == site_before
+
+
+def test_cloud_auth_complete_preserves_auth_when_sites_fail(edge_env, monkeypatch):
+    _old_cloud_auth(edge_env)
+    auth_file = edge_env / ".pypowerwall.auth"
+    site_file = edge_env / ".pypowerwall.site"
+    auth_before = auth_file.read_bytes()
+    site_before = site_file.read_bytes()
+    _cloud_state(edge_env, "cloud-sites-fail")
+    from pypowerwall import tesla_auth
+    from pypowerwall.cloud.pypowerwall_cloud import PyPowerwallCloud
+
+    monkeypatch.setattr(
+        tesla_auth, "_exchange_code", lambda *args, **kwargs: _cloud_token()
+    )
+    monkeypatch.setattr(PyPowerwallCloud, "connect", lambda self: True)
+    monkeypatch.setattr(PyPowerwallCloud, "getsites", lambda self: [])
+    with pytest.raises(ValueError, match="no sites"):
+        setup_core.cloud_auth_complete(
+            SetupCloudAuthCompleteRequest(
+                callback_url="https://x/access?code=abc&state=cloud-sites-fail"
+            )
+        )
+    assert auth_file.read_bytes() == auth_before
+    assert site_file.read_bytes() == site_before
+
+
+def test_cloud_auth_complete_preserves_auth_when_temp_save_fails(edge_env, monkeypatch):
+    _old_cloud_auth(edge_env)
+    auth_file = edge_env / ".pypowerwall.auth"
+    site_file = edge_env / ".pypowerwall.site"
+    auth_before = auth_file.read_bytes()
+    site_before = site_file.read_bytes()
+    _cloud_state(edge_env, "cloud-temp-fail")
+    from pypowerwall import tesla_auth
+
+    monkeypatch.setattr(
+        tesla_auth, "_exchange_code", lambda *args, **kwargs: _cloud_token()
+    )
+
+    def fail_save(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(tesla_auth, "save_token", fail_save)
+    with pytest.raises(OSError, match="disk full"):
+        setup_core.cloud_auth_complete(
+            SetupCloudAuthCompleteRequest(
+                callback_url="https://x/access?code=abc&state=cloud-temp-fail"
+            )
+        )
+    assert auth_file.read_bytes() == auth_before
+    assert site_file.read_bytes() == site_before
+
+
+def test_cloud_auth_complete_restores_auth_when_site_write_fails(edge_env, monkeypatch):
+    _old_cloud_auth(edge_env)
+    auth_file = edge_env / ".pypowerwall.auth"
+    site_file = edge_env / ".pypowerwall.site"
+    auth_before = auth_file.read_bytes()
+    site_before = site_file.read_bytes()
+    _cloud_state(edge_env, "cloud-site-write-fail")
+    from pypowerwall import tesla_auth
+    from pypowerwall.cloud.pypowerwall_cloud import PyPowerwallCloud
+
+    monkeypatch.setattr(
+        tesla_auth, "_exchange_code", lambda *args, **kwargs: _cloud_token()
+    )
+    monkeypatch.setattr(PyPowerwallCloud, "connect", lambda self: True)
+    monkeypatch.setattr(
+        PyPowerwallCloud,
+        "getsites",
+        lambda self: [{"energy_site_id": 222, "site_name": "Home"}],
+    )
+    original_write = setup_core._write_private_text
+
+    def flaky_write(path, content, newline=True):
+        if Path(path).name == ".pypowerwall.site":
+            raise OSError("disk full")
+        return original_write(path, content, newline)
+
+    monkeypatch.setattr(setup_core, "_write_private_text", flaky_write)
+    with pytest.raises(OSError, match="disk full"):
+        setup_core.cloud_auth_complete(
+            SetupCloudAuthCompleteRequest(
+                callback_url="https://x/access?code=abc&state=cloud-site-write-fail"
+            )
+        )
+    assert auth_file.read_bytes() == auth_before
+    assert site_file.read_bytes() == site_before
+
+
+def test_cloud_auth_complete_preserves_auth_when_auth_write_fails(
+    edge_env, monkeypatch
+):
+    _old_cloud_auth(edge_env)
+    auth_file = edge_env / ".pypowerwall.auth"
+    site_file = edge_env / ".pypowerwall.site"
+    auth_before = auth_file.read_bytes()
+    site_before = site_file.read_bytes()
+    _cloud_state(edge_env, "cloud-auth-write-fail")
+    from pypowerwall import tesla_auth
+    from pypowerwall.cloud.pypowerwall_cloud import PyPowerwallCloud
+
+    monkeypatch.setattr(
+        tesla_auth, "_exchange_code", lambda *args, **kwargs: _cloud_token()
+    )
+    monkeypatch.setattr(PyPowerwallCloud, "connect", lambda self: True)
+    monkeypatch.setattr(
+        PyPowerwallCloud,
+        "getsites",
+        lambda self: [{"energy_site_id": 222, "site_name": "Home"}],
+    )
+    original_write = setup_core._write_private_text
+
+    def flaky_write(path, content, newline=True):
+        if Path(path).name == ".pypowerwall.auth":
+            raise OSError("disk full")
+        return original_write(path, content, newline)
+
+    monkeypatch.setattr(setup_core, "_write_private_text", flaky_write)
+    with pytest.raises(OSError, match="disk full"):
+        setup_core.cloud_auth_complete(
+            SetupCloudAuthCompleteRequest(
+                callback_url="https://x/access?code=abc&state=cloud-auth-write-fail"
+            )
+        )
+    assert auth_file.read_bytes() == auth_before
+    assert site_file.read_bytes() == site_before
+
+
+def test_cloud_auth_complete_preserves_files_for_invalid_siteid(edge_env, monkeypatch):
+    _old_cloud_auth(edge_env)
+    auth_file = edge_env / ".pypowerwall.auth"
+    site_file = edge_env / ".pypowerwall.site"
+    auth_before = auth_file.read_bytes()
+    site_before = site_file.read_bytes()
+    _cloud_state(edge_env, "cloud-invalid-siteid")
+    from pypowerwall import tesla_auth
+
+    def should_not_exchange(*args, **kwargs):
+        raise AssertionError("token exchange must not run")
+
+    monkeypatch.setattr(tesla_auth, "_exchange_code", should_not_exchange)
+    with pytest.raises(ValueError, match="numeric"):
+        setup_core.cloud_auth_complete(
+            SetupCloudAuthCompleteRequest(
+                callback_url=("https://x/access?code=abc&state=cloud-invalid-siteid"),
+                siteid="not-a-site",
+            )
+        )
+    assert auth_file.read_bytes() == auth_before
+    assert site_file.read_bytes() == site_before
+
+
+def test_cloud_auth_complete_removes_stale_site_for_multiple_sites(
+    edge_env, monkeypatch
+):
+    _old_cloud_auth(edge_env)
+    _cloud_state(edge_env, "cloud-multi-site")
+    from pypowerwall import tesla_auth
+    from pypowerwall.cloud.pypowerwall_cloud import PyPowerwallCloud
+
+    monkeypatch.setattr(
+        tesla_auth, "_exchange_code", lambda *args, **kwargs: _cloud_token()
+    )
+    monkeypatch.setattr(PyPowerwallCloud, "connect", lambda self: True)
+    monkeypatch.setattr(
+        PyPowerwallCloud,
+        "getsites",
+        lambda self: [
+            {"energy_site_id": 222, "site_name": "Home"},
+            {"energy_site_id": 333, "site_name": "Cabin"},
+        ],
+    )
+    result = setup_core.cloud_auth_complete(
+        SetupCloudAuthCompleteRequest(
+            callback_url="https://x/access?code=abc&state=cloud-multi-site"
+        )
+    )
+    assert result.needs_site is True
+    assert result.siteid is None
+    assert not (edge_env / ".pypowerwall.site").exists()
+    accounts = json.loads((edge_env / ".pypowerwall.auth").read_text(encoding="utf-8"))
+    assert accounts["owner@example.com"]["sso"]["access_token"] == "new-at"
+    assert accounts["other@example.com"]["sso"]["access_token"] == "other-at"
+
+
+def test_fleet_complete_preserves_config_when_sites_fail(edge_env, monkeypatch):
+    _write_fleet(edge_env, access_token="old-at", refresh_token="old-rt")
+    config_file = edge_env / ".pypowerwall.fleetapi"
+    before = config_file.read_bytes()
+    setup_core._FLEET_AUTH_STATES["fleet-sites-fail"] = {
+        "authpath": str(edge_env),
+        "expires": time.monotonic() + 600,
+    }
+    import pypowerwall.fleetapi.fleetapi as fleet_module
+
+    monkeypatch.setattr(
+        fleet_module,
+        "_http2_request",
+        lambda *args, **kwargs: _Response(
+            200, {"access_token": "new-at", "refresh_token": "new-rt"}
+        ),
+    )
+    monkeypatch.setattr(
+        setup_core,
+        "_fleet_sites",
+        lambda config: (_ for _ in ()).throw(ValueError("no sites")),
+    )
+    with pytest.raises(ValueError, match="no sites"):
+        setup_core.fleet_setup_complete(
+            SetupFleetCompleteRequest(
+                authpath=str(edge_env),
+                callback_url=(
+                    "https://example.com/access?code=abc&state=fleet-sites-fail"
+                ),
+            )
+        )
+    assert config_file.read_bytes() == before
+
+
+def test_fleet_complete_preserves_config_for_invalid_refresh(edge_env, monkeypatch):
+    _write_fleet(edge_env, access_token="old-at", refresh_token="old-rt")
+    config_file = edge_env / ".pypowerwall.fleetapi"
+    before = config_file.read_bytes()
+    setup_core._FLEET_AUTH_STATES["fleet-invalid-refresh"] = {
+        "authpath": str(edge_env),
+        "expires": time.monotonic() + 600,
+    }
+    import pypowerwall.fleetapi.fleetapi as fleet_module
+
+    monkeypatch.setattr(
+        fleet_module,
+        "_http2_request",
+        lambda *args, **kwargs: _Response(400, {"error": "invalid_grant"}),
+    )
+    with pytest.raises(ValueError, match="authorization exchange failed"):
+        setup_core.fleet_setup_complete(
+            SetupFleetCompleteRequest(
+                authpath=str(edge_env),
+                callback_url=(
+                    "https://example.com/access?code=abc&state=fleet-invalid-refresh"
+                ),
+            )
+        )
+    assert config_file.read_bytes() == before
+
+
+def test_fleet_complete_clears_stale_site_for_multiple_sites(edge_env, monkeypatch):
+    _write_fleet(edge_env, access_token="old-at", refresh_token="old-rt", site_id=111)
+    setup_core._FLEET_AUTH_STATES["fleet-multi-site"] = {
+        "authpath": str(edge_env),
+        "expires": time.monotonic() + 600,
+    }
+    import pypowerwall.fleetapi.fleetapi as fleet_module
+
+    monkeypatch.setattr(
+        fleet_module,
+        "_http2_request",
+        lambda *args, **kwargs: _Response(
+            200, {"access_token": "new-at", "refresh_token": "new-rt"}
+        ),
+    )
+    monkeypatch.setattr(
+        setup_core,
+        "_fleet_sites",
+        lambda config: [
+            setup_core.SetupFleetSite(siteid="222"),
+            setup_core.SetupFleetSite(siteid="333"),
+        ],
+    )
+    result = setup_core.fleet_setup_complete(
+        SetupFleetCompleteRequest(
+            authpath=str(edge_env),
+            callback_url="https://example.com/access?code=abc&state=fleet-multi-site",
+        )
+    )
+    assert result.needs_site is True
+    saved = json.loads((edge_env / ".pypowerwall.fleetapi").read_text(encoding="utf-8"))
+    assert saved["site_id"] is None
+
+
+def test_fleet_complete_preserves_config_when_write_fails(edge_env, monkeypatch):
+    _write_fleet(edge_env, access_token="old-at", refresh_token="old-rt")
+    config_file = edge_env / ".pypowerwall.fleetapi"
+    before = config_file.read_bytes()
+    setup_core._FLEET_AUTH_STATES["fleet-write-fail"] = {
+        "authpath": str(edge_env),
+        "expires": time.monotonic() + 600,
+    }
+    import pypowerwall.fleetapi.fleetapi as fleet_module
+
+    monkeypatch.setattr(
+        fleet_module,
+        "_http2_request",
+        lambda *args, **kwargs: _Response(
+            200, {"access_token": "new-at", "refresh_token": "new-rt"}
+        ),
+    )
+    monkeypatch.setattr(
+        setup_core,
+        "_fleet_sites",
+        lambda config: [SimpleNamespace(siteid="222")],
+    )
+    monkeypatch.setattr(
+        setup_core,
+        "_fleet_write_config",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    with pytest.raises(OSError, match="disk full"):
+        setup_core.fleet_setup_complete(
+            SetupFleetCompleteRequest(
+                authpath=str(edge_env),
+                callback_url=(
+                    "https://example.com/access?code=abc&state=fleet-write-fail"
+                ),
+            )
+        )
+    assert config_file.read_bytes() == before

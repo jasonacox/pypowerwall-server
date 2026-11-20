@@ -293,26 +293,36 @@ def get_setup_status() -> SetupStatus:
 
     path = _effective_path()
     current_revision = None
+    current_config_error = settings.config_error
     config_changed = False
     if path and source in {"none", "default_file", "pw_config"}:
         try:
             current_revision = _revision(Path(path).read_bytes())
-            config_changed = (
-                current_revision != settings.config_revision
-                and not settings.config_error
-                and (source == "none" or bool(settings.gateways))
-            )
+            config_changed = current_revision != settings.config_revision
+            if config_changed:
+                # The startup error describes the old file. Parse the current
+                # file so a repaired configuration does not stay "invalid".
+                current_config_error = None
+                if Path(path).exists():
+                    try:
+                        _read_doc(path)
+                    except Exception as exc:
+                        current_config_error = (
+                            f"Unable to read config file ({type(exc).__name__})"
+                        )
         except OSError:
-            pass
+            if not Path(path).exists() and settings.config_revision is not None:
+                config_changed = True
+                current_config_error = None
 
     state = "unconfigured"
     if source == "none":
         state = "unconfigured"
-    elif settings.config_error and not settings.gateways:
+    elif current_config_error and not settings.gateways:
         state = "invalid"
     elif source in {"pw_gateways", "legacy_env"}:
         state = "env_managed"
-    elif settings.config_partial:
+    elif settings.config_partial and not config_changed:
         state = "partial"
     elif not settings.gateways:
         state = "unconfigured" if source in {"default_file", "pw_config"} else "invalid"
@@ -357,7 +367,7 @@ def get_setup_status() -> SetupStatus:
             # A malformed file must not make the repair page fail to load.
             pass
 
-    warnings = list(settings.config_warnings)
+    warnings = [] if config_changed else list(settings.config_warnings)
     if source == "none" and not os.path.isdir("/data"):
         warnings.append(
             "No persistent /data volume was detected. Mount /data to keep the "
@@ -383,8 +393,8 @@ def get_setup_status() -> SetupStatus:
         config_writable=writable,
         config_revision=settings.config_revision,
         config_file_revision=current_revision,
-        config_error=settings.config_error,
-        config_partial=settings.config_partial,
+        config_error=current_config_error,
+        config_partial=settings.config_partial and not config_changed,
         warnings=warnings,
         gateway_count=len(settings.gateways),
         gateways=gateway_summaries,
@@ -717,9 +727,22 @@ def validate_setup_request(
     """Validate gateways and options without writing anything."""
     issues: List[SetupValidationIssue] = []
     existing_doc = existing_doc or {}
+    existing_entries = existing_doc.get("gateways", [])
+    if not isinstance(existing_entries, list):
+        issues.append(
+            SetupValidationIssue(
+                field="gateways",
+                message=(
+                    "The existing 'gateways' value is not a list; it will be "
+                    "replaced when the configuration is saved."
+                ),
+                severity="warning",
+            )
+        )
+        existing_entries = []
     existing_by_id = {
         str(gw.get("id")): gw
-        for gw in existing_doc.get("gateways", [])
+        for gw in existing_entries
         if isinstance(gw, dict) and gw.get("id")
     }
     if not request.gateways:
@@ -916,6 +939,20 @@ def _gateway_dict(config: GatewayConfig) -> Dict[str, Any]:
     return config.model_dump(exclude_none=True)
 
 
+def _gateway_dict_with_unknown(
+    config: GatewayConfig, existing: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Serialize a gateway and keep fields this version does not understand."""
+    data = _gateway_dict(config)
+    if not isinstance(existing, dict):
+        return data
+    known = set(GatewayConfig.model_fields)
+    for key, value in existing.items():
+        if isinstance(key, str) and key not in known and key != "original_id":
+            data[key] = value
+    return data
+
+
 def _write_atomic(path: str, doc: Dict[str, Any]) -> Tuple[str, Optional[str]]:
     directory = Path(path).parent
     directory.mkdir(parents=True, exist_ok=True)
@@ -980,8 +1017,27 @@ def apply_setup_request(
         if not result.valid:
             raise ValueError("; ".join(issue.message for issue in result.errors))
 
+        existing_entries = existing_doc.get("gateways", [])
+        if not isinstance(existing_entries, list):
+            existing_entries = []
+        existing_by_id = {
+            str(gw.get("id")): gw
+            for gw in existing_entries
+            if isinstance(gw, dict) and gw.get("id")
+        }
+        existing_for_id: Dict[str, Dict[str, Any]] = {}
+        for item in request.gateways:
+            previous = existing_by_id.get(str(item.original_id or ""))
+            if not previous:
+                previous = existing_by_id.get(item.id)
+            if previous:
+                existing_for_id[item.id] = previous
+
         doc = dict(existing_doc)
-        doc["gateways"] = [_gateway_dict(config) for config in configs]
+        doc["gateways"] = [
+            _gateway_dict_with_unknown(config, existing_for_id.get(config.id))
+            for config in configs
+        ]
         server_options = {
             target: options[name]
             for name, target in _SERVER_OPTION_MAP.items()
@@ -1987,46 +2043,72 @@ def cloud_auth_complete(
         pending = _CLOUD_AUTH_STATES.pop(state, None)
     if not pending or pending["expires"] < time.monotonic():
         raise ValueError("login state expired; start the Tesla login again")
+    chosen = (request.siteid or "").strip() or None
+    if chosen and not chosen.isdigit():
+        raise ValueError("siteid must be numeric")
     from pypowerwall import tesla_auth
     from pypowerwall.cloud.pypowerwall_cloud import PyPowerwallCloud
 
     token_data = tesla_auth._exchange_code(code, pending["verifier"], pending["region"])
     path = Path(pending["authpath"])
-    _backup_file(path / ".pypowerwall.auth")
-    tesla_auth.save_token(
-        token_data,
-        str(path / ".pypowerwall.auth"),
-        pending["email"],
-        pending["region"],
+    path.mkdir(parents=True, exist_ok=True)
+    auth_file = path / ".pypowerwall.auth"
+    site_file = path / ".pypowerwall.site"
+    with tempfile.TemporaryDirectory(prefix="pws-cloud-auth-") as temp_dir:
+        temp_auth = Path(temp_dir) / ".pypowerwall.auth"
+        if auth_file.is_file():
+            shutil.copy2(auth_file, temp_auth)
+            os.chmod(temp_auth, 0o600)
+        tesla_auth.save_token(
+            token_data,
+            str(temp_auth),
+            pending["email"],
+            pending["region"],
+        )
+        cloud = PyPowerwallCloud(
+            pending["email"],
+            authpath=temp_dir,
+            siteid=int(chosen) if chosen else None,
+        )
+        if not cloud.connect():
+            raise ValueError("Tesla token is valid but the cloud connection failed")
+        sites = cloud.getsites() or []
+        if not sites:
+            raise ValueError("Tesla Cloud returned no sites")
+        safe_sites = [
+            {
+                "siteid": str(site.get("energy_site_id")),
+                "name": site.get("site_name"),
+                "resource_type": site.get("resource_type"),
+            }
+            for site in sites
+            if isinstance(site, dict) and site.get("energy_site_id") is not None
+        ]
+        if not safe_sites:
+            raise ValueError("Tesla Cloud returned no energy sites")
+        if chosen:
+            if not any(site["siteid"] == str(chosen) for site in safe_sites):
+                raise ValueError("selected siteid is not available on this account")
+            selected = str(chosen)
+        elif len(safe_sites) == 1:
+            selected = safe_sites[0]["siteid"]
+        else:
+            selected = None
+        validated_accounts = _read_auth_accounts(temp_auth)
+        if not validated_accounts:
+            raise ValueError("Tesla token could not be validated")
+        existing_accounts = _read_auth_accounts(auth_file)
+        merged_accounts = dict(existing_accounts)
+        merged_accounts.update(validated_accounts)
+        auth_text = json.dumps(merged_accounts, indent=2)
+
+    _commit_auth_and_site(
+        auth_file,
+        auth_text,
+        site_file,
+        selected,
+        update_site=True,
     )
-    chosen = request.siteid
-    cloud = PyPowerwallCloud(
-        pending["email"],
-        authpath=str(path),
-        siteid=int(chosen) if chosen else None,
-    )
-    if not cloud.connect():
-        raise ValueError("Tesla token was saved but the cloud connection failed")
-    sites = cloud.getsites() or []
-    safe_sites = [
-        {
-            "siteid": str(site.get("energy_site_id")),
-            "name": site.get("site_name"),
-            "resource_type": site.get("resource_type"),
-        }
-        for site in sites
-        if isinstance(site, dict) and site.get("energy_site_id") is not None
-    ]
-    if chosen:
-        if not any(site["siteid"] == str(chosen) for site in safe_sites):
-            raise ValueError("selected siteid is not available on this account")
-        selected = str(chosen)
-    elif len(safe_sites) == 1:
-        selected = safe_sites[0]["siteid"]
-    else:
-        selected = None
-    if selected:
-        _write_private_text(path / ".pypowerwall.site", selected, newline=False)
     return SetupCloudAuthCompleteResult(
         saved=True,
         email=pending["email"],
@@ -2095,6 +2177,9 @@ def cloud_auth_use(
     elif len(safe_sites) == 1:
         selected = safe_sites[0]["siteid"]
         _write_private_text(site_file, selected, newline=False)
+    if selected is None and site_file.is_file():
+        # A stale site does not belong to the selected account.
+        os.remove(site_file)
     return SetupCloudAuthCompleteResult(
         saved=True,
         email=email,
@@ -2632,17 +2717,24 @@ def fleet_setup_complete(
     refresh_token = token_data.get("refresh_token")
     if not access_token or not refresh_token:
         raise ValueError("Tesla did not return FleetAPI access and refresh tokens")
-    config["access_token"] = access_token
-    config["refresh_token"] = refresh_token
-    _fleet_write_config(path, config)
-    sites = _fleet_sites(config)
+    candidate = dict(config)
+    candidate["access_token"] = access_token
+    candidate["refresh_token"] = refresh_token
+    sites = _fleet_sites(candidate)
     siteid = None
     needs_site = len(sites) > 1
-    live_message = ""
     if not needs_site:
         siteid = sites[0].siteid
-        config["site_id"] = int(siteid) if siteid.isdigit() else siteid
-        _fleet_write_config(path, config)
+        candidate["site_id"] = int(siteid) if siteid.isdigit() else siteid
+    else:
+        # Do not keep a site from the previous login when the new account
+        # has several sites and the user has not selected one yet.
+        candidate["site_id"] = None
+    config_file = _fleet_config_file(path)
+    _backup_file(config_file)
+    _fleet_write_config(path, candidate)
+    live_message = ""
+    if not needs_site:
         try:
             _fleet_live_check(path, siteid)
             live_message = " Live site info and status verified."
@@ -2819,6 +2911,24 @@ def _write_private_text(path: Path, content: str, newline: bool = True) -> None:
         raise
 
 
+def _write_private_bytes(path: Path, content: bytes) -> None:
+    """Atomically restore private bytes without changing their line endings."""
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+        os.chmod(temp_name, 0o600)
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
+
+
 def _backup_file(path: Path) -> Optional[str]:
     """Keep a private .bak copy before replacing user-provided auth material."""
     if not path.is_file():
@@ -2830,6 +2940,52 @@ def _backup_file(path: Path) -> Optional[str]:
     except OSError:
         pass
     return str(backup)
+
+
+def _read_auth_accounts(path: Path) -> Dict[str, Any]:
+    """Read a Tesla auth cache, treating a missing or broken file as empty."""
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _commit_auth_and_site(
+    auth_path: Path,
+    auth_text: str,
+    site_path: Path,
+    site_text: Optional[str],
+    update_site: bool,
+) -> None:
+    """Replace auth and site files together, restoring the old state on error."""
+    old_auth = auth_path.read_bytes() if auth_path.is_file() else None
+    old_site = site_path.read_bytes() if update_site and site_path.is_file() else None
+    _backup_file(auth_path)
+    try:
+        _write_private_text(auth_path, auth_text)
+        if update_site:
+            if site_text is None:
+                if site_path.exists():
+                    os.remove(site_path)
+            else:
+                _write_private_text(site_path, site_text, newline=False)
+    except Exception:
+        try:
+            if old_auth is None:
+                auth_path.unlink(missing_ok=True)
+            else:
+                _write_private_bytes(auth_path, old_auth)
+            if update_site:
+                if old_site is None:
+                    site_path.unlink(missing_ok=True)
+                else:
+                    _write_private_bytes(site_path, old_site)
+        except Exception:
+            logger.exception("Failed to restore the previous Cloud auth state")
+        raise
 
 
 def _merge_auth_file(path: Path, incoming: Dict[str, Any]) -> Dict[str, Any]:
@@ -2871,34 +3027,48 @@ def import_auth_tokens(request: SetupAuthTokensRequest) -> SetupAuthTokensResult
         raise ValueError("tokens must not contain whitespace")
     if len(refresh_token) > 16384 or len(access_token) > 16384:
         raise ValueError("the pasted token is too large")
-    path = _cloud_auth_path(request.authpath)
-    auth_file = path / ".pypowerwall.auth"
-    _backup_file(auth_file)
-    save_token(
-        {
-            "refresh_token": refresh_token,
-            "access_token": access_token,
-            "expires_in": 28800,
-            "token_type": "Bearer",
-        },
-        path=str(auth_file),
-        email=email,
-    )
-    os.chmod(auth_file, 0o600)
     siteid = (request.siteid or "").strip() or None
     if siteid and not siteid.isdigit():
         raise ValueError("siteid must be numeric")
-    site_file = None
-    if siteid:
-        site_file = str(path / ".pypowerwall.site")
-        _write_private_text(Path(site_file), siteid, newline=False)
+    path = _cloud_auth_path(request.authpath)
+    auth_file = path / ".pypowerwall.auth"
+    site_file = path / ".pypowerwall.site"
+    with tempfile.TemporaryDirectory(prefix="pws-cloud-token-") as temp_dir:
+        temp_auth = Path(temp_dir) / ".pypowerwall.auth"
+        if auth_file.is_file():
+            shutil.copy2(auth_file, temp_auth)
+            os.chmod(temp_auth, 0o600)
+        save_token(
+            {
+                "refresh_token": refresh_token,
+                "access_token": access_token,
+                "expires_in": 28800,
+                "token_type": "Bearer",
+            },
+            path=str(temp_auth),
+            email=email,
+        )
+        validated_accounts = _read_auth_accounts(temp_auth)
+        if not validated_accounts:
+            raise ValueError("the Cloud tokens could not be saved")
+        existing_accounts = _read_auth_accounts(auth_file)
+        merged_accounts = dict(existing_accounts)
+        merged_accounts.update(validated_accounts)
+        auth_text = json.dumps(merged_accounts, indent=2)
+    _commit_auth_and_site(
+        auth_file,
+        auth_text,
+        site_file,
+        siteid,
+        update_site=bool(siteid),
+    )
     return SetupAuthTokensResult(
         saved=True,
         authpath=str(path),
         auth_file=str(auth_file),
         email=email,
         siteid=siteid,
-        site_file=site_file,
+        site_file=str(site_file) if siteid else None,
         message=(
             f"Cloud tokens saved for {email}."
             + (
@@ -2939,16 +3109,23 @@ def import_auth_file(request: SetupAuthFileRequest) -> SetupAuthFileResult:
             raise ValueError(
                 "the selected file has no usable Tesla access or refresh token"
             )
-        auth_file = root / ".pypowerwall.auth"
-        _backup_file(auth_file)
-        _merge_auth_file(auth_file, data)
-        files = {"auth": str(auth_file)}
         siteid = (request.siteid or "").strip() or None
         if siteid and not siteid.isdigit():
             raise ValueError("siteid must be numeric")
+        auth_file = root / ".pypowerwall.auth"
+        site_file = root / ".pypowerwall.site"
+        existing_accounts = _read_auth_accounts(auth_file)
+        merged_accounts = dict(existing_accounts)
+        merged_accounts.update(data)
+        _commit_auth_and_site(
+            auth_file,
+            json.dumps(merged_accounts, indent=2),
+            site_file,
+            siteid,
+            update_site=bool(siteid),
+        )
+        files = {"auth": str(auth_file)}
         if siteid:
-            site_file = root / ".pypowerwall.site"
-            _write_private_text(site_file, siteid, newline=False)
             files["site"] = str(site_file)
         return SetupAuthFileResult(
             saved=True,
