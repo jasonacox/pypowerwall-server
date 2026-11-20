@@ -1368,3 +1368,27 @@ def test_fleet_complete_preserves_config_when_write_fails(edge_env, monkeypatch)
             )
         )
     assert config_file.read_bytes() == before
+
+
+def test_cloud_auth_use_recovers_stale_site_after_interrupted_commit(
+    edge_env, monkeypatch
+):
+    _write_auth(edge_env)
+    site_file = edge_env / ".pypowerwall.site"
+    site_file.write_text("999", encoding="utf-8")
+    from pypowerwall.cloud.pypowerwall_cloud import PyPowerwallCloud
+
+    def connect_without_stale_site(self):
+        assert self.siteid is None
+        return True
+
+    monkeypatch.setattr(PyPowerwallCloud, "connect", connect_without_stale_site)
+    monkeypatch.setattr(
+        PyPowerwallCloud,
+        "getsites",
+        lambda self: [{"energy_site_id": 123}, {"energy_site_id": 456}],
+    )
+    result = setup_core.cloud_auth_use(SetupCloudAuthUseRequest(authpath=str(edge_env)))
+    assert result.needs_site is True
+    assert result.siteid is None
+    assert not site_file.exists()

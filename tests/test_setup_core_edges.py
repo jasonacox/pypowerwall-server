@@ -1664,3 +1664,20 @@ def test_new_gateway_does_not_inherit_unknown_fields(core_env):
     by_id = {gateway["id"]: gateway for gateway in doc["gateways"]}
     assert by_id["home"]["future_field"] == "keep-me"
     assert "future_field" not in by_id["new"]
+
+
+def test_status_never_returns_bootstrap_token(core_env, monkeypatch):
+    monkeypatch.setattr(setup_core, "_SETUP_TOKEN", "bootstrap-secret")
+    settings.control_secret = None
+    settings._config_source = "none"
+    settings._config_path = None
+    settings._config_error = None
+    settings._config_warnings = []
+    settings._config_revision = None
+    settings._config_partial = False
+    settings.gateways = []
+
+    status = setup_core.get_setup_status()
+    dumped = str(status.model_dump())
+    assert "bootstrap-secret" not in dumped
+    assert any("per process" in warning for warning in status.warnings)

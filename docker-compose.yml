@@ -17,6 +17,7 @@ services:
       # First run: python3 -m pypowerwall setup (generates auth files)
       # - PW_EMAIL=your-tesla-account@email.com
       # - PW_AUTH_PATH=/auth
+      # If you use /auth, mount it below so the files survive a new container.
       
       - PW_TIMEZONE=America/Los_Angeles
       
@@ -38,7 +39,10 @@ services:
       # - MQTT_TOPIC_PREFIX=pypowerwall
       # - MQTT_TLS=false
       
-      # Control features (optional) - Uncomment to enable:
+      # Control features (optional) - Uncomment to enable.
+      # Strongly recommended for any multi-worker/multi-instance deployment:
+      # a persistent control secret. Without it, each process gets its own
+      # temporary bootstrap token, so a token from one worker may fail on another.
       # - PW_CONTROL_SECRET=your-secure-random-token-here
       
       # Time-series daily energy stats (optional) - SQLite store lives at
@@ -50,6 +54,11 @@ services:
       # - PW_TIMESERIES_SIGNAL_INTERVAL=60s   # 30s minimum (~2x disk)
     volumes:
       - pws-data:/data
+      # Optional: only needed if the wizard uses /auth or /keys instead of
+      # /data. Mount the same paths that are configured in the wizard; keep
+      # the host directories private because they contain tokens/private keys.
+      # - ./auth:/auth
+      # - ./keys:/keys
     # Health check - verifies the server process is running and responding.
     # /health always returns HTTP 200 regardless of gateway connectivity,
     # making it safe for process-level liveness checking. wget is included

@@ -646,3 +646,274 @@ def test_diagnostic_detail_includes_safe_http_status():
         "UpstreamError (HTTP 401): connection test failed"
     )
     assert "secret" not in setup_core._diagnostic_detail(RuntimeError("short-secret"))
+
+
+def _record_connection(monkeypatch):
+    calls = []
+
+    def fake_connection(address, timeout=None):
+        calls.append((address, timeout))
+        return FakeSocket()
+
+    monkeypatch.setattr(setup_core.socket, "create_connection", fake_connection)
+    return calls
+
+
+def test_test_connection_uses_validated_ipv4_address(conn_env, monkeypatch):
+    monkeypatch.setattr(
+        setup_core.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("192.168.91.1", 443),
+            )
+        ],
+    )
+    calls = _record_connection(monkeypatch)
+    monkeypatch.setattr(
+        setup_core.pypowerwall,
+        "Powerwall",
+        lambda **kwargs: (_ for _ in ()).throw(OSError("stop after tcp")),
+    )
+    result = setup_core.test_gateway_connection(
+        SetupGatewayInput(
+            id="home",
+            mode="local",
+            host="gateway.example.com",
+            password="customer",
+        )
+    )
+    assert calls == [(("192.168.91.1", 443), 4.0)]
+    assert any(step.key == "tcp" and step.status == "success" for step in result.steps)
+
+
+def test_test_connection_uses_validated_ipv6_address(conn_env, monkeypatch):
+    monkeypatch.setattr(
+        setup_core.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (
+                socket.AF_INET6,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("::1", 443, 0, 0),
+            )
+        ],
+    )
+    calls = _record_connection(monkeypatch)
+    monkeypatch.setattr(
+        setup_core.pypowerwall,
+        "Powerwall",
+        lambda **kwargs: (_ for _ in ()).throw(OSError("stop after tcp")),
+    )
+    result = setup_core.test_gateway_connection(
+        SetupGatewayInput(
+            id="home",
+            mode="local",
+            host="::1",
+            password="customer",
+        )
+    )
+    assert calls == [(("::1", 443), 4.0)]
+    assert any(step.key == "tcp" and step.status == "success" for step in result.steps)
+
+
+def test_test_connection_rejects_one_public_dns_result(conn_env, monkeypatch):
+    monkeypatch.setattr(
+        setup_core.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("192.168.91.1", 443),
+            ),
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("93.184.216.34", 443),
+            ),
+        ],
+    )
+    calls = _record_connection(monkeypatch)
+    result = setup_core.test_gateway_connection(
+        SetupGatewayInput(
+            id="home",
+            mode="local",
+            host="gateway.example.com",
+            password="customer",
+        )
+    )
+    assert calls == []
+    assert result.ok is False
+    assert result.steps[-1].key == "dns"
+    assert "not private" in result.steps[-1].detail
+
+
+def test_test_connection_does_not_resolve_hostname_twice(conn_env, monkeypatch):
+    dns_calls = []
+
+    def fake_dns(host, port, *args, **kwargs):
+        dns_calls.append(host)
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("192.168.91.1", port),
+            )
+        ]
+
+    monkeypatch.setattr(setup_core.socket, "getaddrinfo", fake_dns)
+    calls = _record_connection(monkeypatch)
+    monkeypatch.setattr(
+        setup_core.pypowerwall,
+        "Powerwall",
+        lambda **kwargs: (_ for _ in ()).throw(OSError("stop after tcp")),
+    )
+    setup_core.test_gateway_connection(
+        SetupGatewayInput(
+            id="home",
+            mode="local",
+            host="gateway.example.com",
+            password="customer",
+        )
+    )
+    assert dns_calls == ["gateway.example.com"]
+    assert calls == [(("192.168.91.1", 443), 4.0)]
+
+
+def test_test_connection_pins_dns_answer_with_real_tcp_socket(conn_env, monkeypatch):
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+
+    dns_calls = []
+
+    def fake_dns(host, port_arg, *args, **kwargs):
+        dns_calls.append(host)
+        if host == "127.0.0.1":
+            target = "127.0.0.1"
+        elif host == "gateway.example.com" and dns_calls.count(host) == 1:
+            target = "127.0.0.1"
+        else:
+            target = "192.0.2.1"
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                (target, port_arg),
+            )
+        ]
+
+    monkeypatch.setattr(setup_core.socket, "getaddrinfo", fake_dns)
+    monkeypatch.setattr(
+        setup_core.pypowerwall,
+        "Powerwall",
+        lambda **kwargs: (_ for _ in ()).throw(OSError("stop after tcp")),
+    )
+    try:
+        result = setup_core.test_gateway_connection(
+            SetupGatewayInput(
+                id="home",
+                mode="local",
+                host="gateway.example.com",
+                port=port,
+                password="customer",
+            )
+        )
+    finally:
+        server.close()
+    assert any(step.key == "tcp" and step.status == "success" for step in result.steps)
+
+
+def test_test_connection_tries_each_validated_private_address(conn_env, monkeypatch):
+    monkeypatch.setattr(
+        setup_core.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("192.168.91.1", 443),
+            ),
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("192.168.91.2", 443),
+            ),
+        ],
+    )
+    calls = []
+
+    def fake_connection(address, timeout=None):
+        calls.append(address)
+        if address[0] == "192.168.91.1":
+            raise OSError("first address refused")
+        return FakeSocket()
+
+    monkeypatch.setattr(setup_core.socket, "create_connection", fake_connection)
+    monkeypatch.setattr(
+        setup_core.pypowerwall,
+        "Powerwall",
+        lambda **kwargs: (_ for _ in ()).throw(OSError("stop after tcp")),
+    )
+    result = setup_core.test_gateway_connection(
+        SetupGatewayInput(
+            id="home",
+            mode="local",
+            host="gateway.example.com",
+            password="customer",
+        )
+    )
+    assert calls == [("192.168.91.1", 443), ("192.168.91.2", 443)]
+    assert any(step.key == "tcp" and step.status == "success" for step in result.steps)
+
+
+def test_test_connection_preserves_ipv6_scope_id(conn_env, monkeypatch):
+    monkeypatch.setattr(
+        setup_core.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (
+                socket.AF_INET6,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("fe80::1", 443, 0, 3),
+            )
+        ],
+    )
+    calls = _record_connection(monkeypatch)
+    monkeypatch.setattr(
+        setup_core.pypowerwall,
+        "Powerwall",
+        lambda **kwargs: (_ for _ in ()).throw(OSError("stop after tcp")),
+    )
+    result = setup_core.test_gateway_connection(
+        SetupGatewayInput(
+            id="home",
+            mode="local",
+            host="fe80::1%3",
+            password="customer",
+        )
+    )
+    assert calls == [(("fe80::1%3", 443), 4.0)]
+    assert any(step.key == "tcp" and step.status == "success" for step in result.steps)

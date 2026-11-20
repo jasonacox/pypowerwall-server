@@ -392,9 +392,18 @@ An unknown `gateway_id` returns `404`.
 The setup API is authenticated with `PW_CONTROL_SECRET` or, when that is
 unset, with the process-local bootstrap token printed once in the server log.
 The bootstrap token is a 43-character URL-safe random string and changes when
-the process restarts. Send it as `Authorization: Bearer <token>` or
+the process restarts. It is **process-local**: multi-worker or multi-instance
+deployments must set `PW_CONTROL_SECRET`, otherwise each process has a different
+token. Send it as `Authorization: Bearer <token>` or
 `X-PW-Setup-Token: <token>`. Setup writes are atomic and require a restart to
 activate.
+
+Auth files and private keys live under `PW_AUTH_PATH` and the v1r/FleetAPI key
+paths. In Docker, mount those directories if they are outside `/data`; the
+wizard's `/auth` and `/keys` placeholders are examples. The server writes auth
+files and private keys with owner-only permissions (`0600`), so keep the mounted
+directories private and writable by the container user. The default `/data`
+mount is sufficient when those files are stored under `/data`.
 
 | Method | Path | Auth | Response |
 |--------|------|------|----------|

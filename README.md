@@ -220,7 +220,10 @@ docker logs pypowerwall-server | grep "Setup wizard access token"
 ```
 
 When `PW_CONTROL_SECRET` is unset, the bootstrap token is a fresh
-43-character URL-safe random string and changes when the server restarts.
+43-character URL-safe random string and changes when the server restarts. It is
+**process-local**: with multiple uvicorn/Gunicorn workers or several server
+instances, each process has its own token. Set `PW_CONTROL_SECRET` for those
+deployments so every worker accepts the same admin token.
 
 Open `http://<server>:8675/setup`, enter the token, test the gateway and save.
 The token stays in the tab by default; **Remember my token on this device**
@@ -242,6 +245,28 @@ a Refresh Token and optional Access Token from a headless
 public-key URL, registers the partner account, completes the Tesla login and
 selects the energy site, writing `.pypowerwall.fleetapi`. A private-network scan
 can fill the gateway host from a `/24` (or smaller) CIDR.
+
+### Docker volumes for auth files and keys
+
+The bundled `docker-compose.yml` persists `/data`, which is enough for the
+wizard-managed `gateways.yaml`, the generated v1r/FleetAPI keys and auth files
+created under `/data`. If you configure the example paths `/auth` or `/keys`,
+mount those paths as well:
+
+```yaml
+    volumes:
+      - pws-data:/data
+      - ./auth:/auth   # .pypowerwall.auth, .pypowerwall.site, .pypowerwall.fleetapi
+      - ./keys:/keys   # tedapi_rsa_private.pem, com.tesla.3p.private-key.pem
+```
+
+Use the same paths in the wizard and in the container. Without these mounts,
+`/auth` and `/keys` exist only inside the container and are lost when it is
+recreated. Keep the host directories private: auth files contain Tesla tokens,
+and the RSA/EC private keys are written with owner-only permissions (`0600`).
+The container writes them as its own user, so the mounted directories must be
+writable by that user. The single `/data` mount remains the simplest setup and
+does not require `/auth` or `/keys`.
 
 Existing environment-managed installations can use **Environment configuration
 migration** on the Access step: the page previews the effective configuration

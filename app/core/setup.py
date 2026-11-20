@@ -383,7 +383,8 @@ def get_setup_status() -> SetupStatus:
     else:
         warnings.append(
             "No PW_CONTROL_SECRET is set. Use the bootstrap token printed once "
-            "in the server log."
+            "in the server log. The bootstrap token is per process; set "
+            "PW_CONTROL_SECRET for multiple workers or server instances."
         )
 
     return SetupStatus(
@@ -1307,7 +1308,22 @@ def test_gateway_connection(
     address = f"{host}:{port}" if ":" in host and not host.startswith("[") else host
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-        addresses = {info[4][0] for info in infos}
+        resolved_addresses: List[str] = []
+        for info in infos:
+            resolved = info[4][0]
+            if (
+                info[0] == socket.AF_INET6
+                and len(info[4]) > 3
+                and info[4][3]
+                and "%" not in resolved
+            ):
+                # Keep the scope id for link-local IPv6 addresses.
+                resolved = f"{resolved}%{info[4][3]}"
+            if resolved not in resolved_addresses:
+                resolved_addresses.append(resolved)
+        if not resolved_addresses:
+            raise socket.gaierror("no addresses returned")
+        addresses = set(resolved_addresses)
         if any(
             not (
                 ipaddress.ip_address(address).is_private
@@ -1345,8 +1361,18 @@ def test_gateway_connection(
         return SetupDiagnosticResult(ok=False, steps=steps, warnings=warnings)
 
     try:
-        with socket.create_connection((host, port), timeout=4.0):
-            pass
+        last_error: Optional[OSError] = None
+        for resolved in resolved_addresses:
+            try:
+                # Use the validated IP, not the hostname, so a changed DNS
+                # answer cannot redirect this TCP check after validation.
+                with socket.create_connection((resolved, port), timeout=4.0):
+                    pass
+                break
+            except OSError as exc:
+                last_error = exc
+        else:
+            raise last_error or OSError("no resolved address")
         steps.append(
             SetupDiagnosticStep(
                 key="tcp",
@@ -2153,12 +2179,16 @@ def cloud_auth_use(
             existing_site = site_file.read_text(encoding="utf-8").strip()
         except OSError:
             existing_site = ""
-    siteid_arg = int(existing_site) if existing_site.isdigit() else None
+    # Connect without a site so a stale .pypowerwall.site left by an
+    # interrupted login cannot make the whole existing auth unusable.
     cloud = PyPowerwallCloud(
         email,
         authpath=str(path),
-        siteid=siteid_arg,
+        siteid=None,
     )
+    # PyPowerwallCloud reads .pypowerwall.site in __init__ even when siteid is
+    # None. Clear it again so connect() can list sites and recover the match.
+    cloud.siteid = None
     if not cloud.connect():
         raise ValueError("unable to connect to Tesla Cloud with the existing auth file")
     sites = cloud.getsites() or []
@@ -2965,13 +2995,16 @@ def _commit_auth_and_site(
     old_site = site_path.read_bytes() if update_site and site_path.is_file() else None
     _backup_file(auth_path)
     try:
-        _write_private_text(auth_path, auth_text)
+        # Write the site first. If the process stops before the auth replace,
+        # the old auth remains and a later cloud_auth_use() can validate or
+        # discard the site against that account.
         if update_site:
             if site_text is None:
                 if site_path.exists():
                     os.remove(site_path)
             else:
                 _write_private_text(site_path, site_text, newline=False)
+        _write_private_text(auth_path, auth_text)
     except Exception:
         try:
             if old_auth is None:
