@@ -1392,3 +1392,103 @@ def test_cloud_auth_use_recovers_stale_site_after_interrupted_commit(
     assert result.needs_site is True
     assert result.siteid is None
     assert not site_file.exists()
+
+
+def test_cloud_auth_complete_restores_site_when_auth_restore_fails(
+    edge_env, monkeypatch
+):
+    _old_cloud_auth(edge_env)
+    auth_file = edge_env / ".pypowerwall.auth"
+    site_file = edge_env / ".pypowerwall.site"
+    auth_before = auth_file.read_bytes()
+    site_before = site_file.read_bytes()
+    _cloud_state(edge_env, "cloud-auth-restore-fail")
+    from pypowerwall import tesla_auth
+    from pypowerwall.cloud.pypowerwall_cloud import PyPowerwallCloud
+
+    monkeypatch.setattr(
+        tesla_auth, "_exchange_code", lambda *args, **kwargs: _cloud_token()
+    )
+    monkeypatch.setattr(PyPowerwallCloud, "connect", lambda self: True)
+    monkeypatch.setattr(
+        PyPowerwallCloud,
+        "getsites",
+        lambda self: [{"energy_site_id": 222, "site_name": "Home"}],
+    )
+    original_write = setup_core._write_private_text
+
+    def flaky_write(path, content, newline=True):
+        if Path(path).name == ".pypowerwall.auth":
+            raise OSError("new auth write failed")
+        return original_write(path, content, newline)
+
+    restore_calls = []
+    original_restore = setup_core._write_private_bytes
+
+    def flaky_restore(path, content):
+        name = Path(path).name
+        restore_calls.append(name)
+        if name == ".pypowerwall.auth":
+            raise OSError("auth restore failed")
+        return original_restore(path, content)
+
+    monkeypatch.setattr(setup_core, "_write_private_text", flaky_write)
+    monkeypatch.setattr(setup_core, "_write_private_bytes", flaky_restore)
+    with pytest.raises(OSError, match="new auth write failed"):
+        setup_core.cloud_auth_complete(
+            SetupCloudAuthCompleteRequest(
+                callback_url=("https://x/access?code=abc&state=cloud-auth-restore-fail")
+            )
+        )
+    assert restore_calls == [".pypowerwall.auth", ".pypowerwall.site"]
+    assert auth_file.read_bytes() == auth_before
+    assert site_file.read_bytes() == site_before
+
+
+def test_cloud_auth_complete_restores_auth_when_site_restore_fails(
+    edge_env, monkeypatch
+):
+    _old_cloud_auth(edge_env)
+    auth_file = edge_env / ".pypowerwall.auth"
+    site_file = edge_env / ".pypowerwall.site"
+    auth_before = auth_file.read_bytes()
+    _cloud_state(edge_env, "cloud-site-restore-fail")
+    from pypowerwall import tesla_auth
+    from pypowerwall.cloud.pypowerwall_cloud import PyPowerwallCloud
+
+    monkeypatch.setattr(
+        tesla_auth, "_exchange_code", lambda *args, **kwargs: _cloud_token()
+    )
+    monkeypatch.setattr(PyPowerwallCloud, "connect", lambda self: True)
+    monkeypatch.setattr(
+        PyPowerwallCloud,
+        "getsites",
+        lambda self: [{"energy_site_id": 222, "site_name": "Home"}],
+    )
+    original_write = setup_core._write_private_text
+
+    def flaky_write(path, content, newline=True):
+        if Path(path).name == ".pypowerwall.auth":
+            raise OSError("new auth write failed")
+        return original_write(path, content, newline)
+
+    restore_calls = []
+    original_restore = setup_core._write_private_bytes
+
+    def flaky_restore(path, content):
+        name = Path(path).name
+        restore_calls.append(name)
+        if name == ".pypowerwall.site":
+            raise OSError("site restore failed")
+        return original_restore(path, content)
+
+    monkeypatch.setattr(setup_core, "_write_private_text", flaky_write)
+    monkeypatch.setattr(setup_core, "_write_private_bytes", flaky_restore)
+    with pytest.raises(OSError, match="new auth write failed"):
+        setup_core.cloud_auth_complete(
+            SetupCloudAuthCompleteRequest(
+                callback_url=("https://x/access?code=abc&state=cloud-site-restore-fail")
+            )
+        )
+    assert restore_calls == [".pypowerwall.auth", ".pypowerwall.site"]
+    assert auth_file.read_bytes() == auth_before

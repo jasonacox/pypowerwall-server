@@ -3011,13 +3011,16 @@ def _commit_auth_and_site(
                 auth_path.unlink(missing_ok=True)
             else:
                 _write_private_bytes(auth_path, old_auth)
+        except Exception:
+            logger.exception("Failed to restore the previous Cloud auth file")
+        try:
             if update_site:
                 if old_site is None:
                     site_path.unlink(missing_ok=True)
                 else:
                     _write_private_bytes(site_path, old_site)
         except Exception:
-            logger.exception("Failed to restore the previous Cloud auth state")
+            logger.exception("Failed to restore the previous Cloud site file")
         raise
 
 
