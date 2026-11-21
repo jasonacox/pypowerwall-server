@@ -3028,6 +3028,25 @@ def _commit_auth_and_site(
         raise
 
 
+def _import_site_selection(
+    siteid: Optional[str],
+    imported_email: str,
+    existing_accounts: Dict[str, Any],
+    site_file: Path,
+) -> Tuple[Optional[str], bool]:
+    """Return the site text and whether the shared site file must be updated."""
+    if siteid:
+        return siteid, True
+    if not site_file.is_file():
+        return None, False
+    # The shared .pypowerwall.site can only be attributed to the imported
+    # account without a fresh Cloud lookup when that account was the only
+    # account in the auth cache before the import.
+    if len(existing_accounts) == 1 and imported_email in existing_accounts:
+        return None, False
+    return None, True
+
+
 def _merge_auth_file(path: Path, incoming: Dict[str, Any]) -> Dict[str, Any]:
     """Merge imported Tesla accounts into an existing auth cache."""
     existing: Dict[str, Any] = {}
@@ -3095,12 +3114,15 @@ def import_auth_tokens(request: SetupAuthTokensRequest) -> SetupAuthTokensResult
         merged_accounts = dict(existing_accounts)
         merged_accounts.update(validated_accounts)
         auth_text = json.dumps(merged_accounts, indent=2)
+    site_text, update_site = _import_site_selection(
+        siteid, email, existing_accounts, site_file
+    )
     _commit_auth_and_site(
         auth_file,
         auth_text,
         site_file,
-        siteid,
-        update_site=bool(siteid),
+        site_text,
+        update_site=update_site,
     )
     return SetupAuthTokensResult(
         saved=True,
@@ -3157,12 +3179,15 @@ def import_auth_file(request: SetupAuthFileRequest) -> SetupAuthFileResult:
         existing_accounts = _read_auth_accounts(auth_file)
         merged_accounts = dict(existing_accounts)
         merged_accounts.update(data)
+        site_text, update_site = _import_site_selection(
+            siteid, account_email, existing_accounts, site_file
+        )
         _commit_auth_and_site(
             auth_file,
             json.dumps(merged_accounts, indent=2),
             site_file,
-            siteid,
-            update_site=bool(siteid),
+            site_text,
+            update_site=update_site,
         )
         files = {"auth": str(auth_file)}
         if siteid:

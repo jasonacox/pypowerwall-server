@@ -955,6 +955,223 @@ def test_import_auth_file_validation(edge_env):
         )
 
 
+def test_import_auth_tokens_clears_site_when_account_changes(edge_env):
+    _write_auth(edge_env)
+    site_file = edge_env / ".pypowerwall.site"
+    site_file.write_text("111", encoding="utf-8")
+
+    result = setup_core.import_auth_tokens(
+        SetupAuthTokensRequest(
+            email="new@example.com",
+            authpath=str(edge_env),
+            refresh_token="new-refresh",
+            access_token="new-access",
+        )
+    )
+
+    assert result.email == "new@example.com"
+    assert result.siteid is None
+    assert not site_file.exists()
+    accounts = json.loads((edge_env / ".pypowerwall.auth").read_text(encoding="utf-8"))
+    assert accounts["new@example.com"]["sso"]["refresh_token"] == "new-refresh"
+    assert accounts["owner@example.com"]["sso"]["refresh_token"] == "owner-refresh"
+
+
+def test_import_auth_tokens_keeps_site_for_same_single_account(edge_env):
+    _write_auth(edge_env)
+    site_file = edge_env / ".pypowerwall.site"
+    site_file.write_text("111", encoding="utf-8")
+
+    result = setup_core.import_auth_tokens(
+        SetupAuthTokensRequest(
+            email="owner@example.com",
+            authpath=str(edge_env),
+            refresh_token="new-refresh",
+            access_token="new-access",
+        )
+    )
+
+    assert result.siteid is None
+    assert site_file.read_text(encoding="utf-8") == "111"
+
+
+def test_import_auth_tokens_writes_explicit_site_for_changed_account(edge_env):
+    _write_auth(edge_env)
+    site_file = edge_env / ".pypowerwall.site"
+    site_file.write_text("111", encoding="utf-8")
+
+    result = setup_core.import_auth_tokens(
+        SetupAuthTokensRequest(
+            email="new@example.com",
+            authpath=str(edge_env),
+            refresh_token="new-refresh",
+            access_token="new-access",
+            siteid="222",
+        )
+    )
+
+    assert result.siteid == "222"
+    assert site_file.read_text(encoding="utf-8") == "222"
+
+
+def test_import_auth_file_keeps_site_for_known_account_in_multi_account_file(
+    edge_env,
+):
+    _write_auth(edge_env)
+    site_file = edge_env / ".pypowerwall.site"
+    site_file.write_text("111", encoding="utf-8")
+    content = json.dumps(
+        {
+            "owner@example.com": {
+                "sso": {"access_token": "new-at", "refresh_token": "new-rt"}
+            },
+            "other@example.com": {
+                "sso": {"access_token": "other-at", "refresh_token": "other-rt"}
+            },
+        }
+    )
+
+    result = setup_core.import_auth_file(
+        SetupAuthFileRequest(mode="cloud", authpath=str(edge_env), content=content)
+    )
+
+    assert result.email == "owner@example.com"
+    assert result.siteid is None
+    assert site_file.read_text(encoding="utf-8") == "111"
+    accounts = json.loads((edge_env / ".pypowerwall.auth").read_text(encoding="utf-8"))
+    assert set(accounts) == {"owner@example.com", "other@example.com"}
+
+
+def test_import_auth_file_clears_site_for_new_active_account(edge_env):
+    _write_auth(edge_env)
+    site_file = edge_env / ".pypowerwall.site"
+    site_file.write_text("111", encoding="utf-8")
+    content = json.dumps(
+        {
+            "new@example.com": {
+                "sso": {"access_token": "new-at", "refresh_token": "new-rt"}
+            },
+            "other@example.com": {
+                "sso": {"access_token": "other-at", "refresh_token": "other-rt"}
+            },
+        }
+    )
+
+    result = setup_core.import_auth_file(
+        SetupAuthFileRequest(mode="cloud", authpath=str(edge_env), content=content)
+    )
+
+    assert result.email == "new@example.com"
+    assert result.siteid is None
+    assert not site_file.exists()
+    accounts = json.loads((edge_env / ".pypowerwall.auth").read_text(encoding="utf-8"))
+    assert set(accounts) == {
+        "owner@example.com",
+        "new@example.com",
+        "other@example.com",
+    }
+
+
+def test_import_auth_tokens_restores_auth_and_site_when_write_fails(
+    edge_env, monkeypatch
+):
+    _write_auth(edge_env)
+    auth_file = edge_env / ".pypowerwall.auth"
+    site_file = edge_env / ".pypowerwall.site"
+    site_file.write_text("111", encoding="utf-8")
+    auth_before = auth_file.read_bytes()
+    site_before = site_file.read_bytes()
+    original_write = setup_core._write_private_text
+
+    def fail_auth_write(path, content, newline=True):
+        if Path(path).name == ".pypowerwall.auth":
+            raise OSError("disk full")
+        return original_write(path, content, newline)
+
+    monkeypatch.setattr(setup_core, "_write_private_text", fail_auth_write)
+    with pytest.raises(OSError, match="disk full"):
+        setup_core.import_auth_tokens(
+            SetupAuthTokensRequest(
+                email="new@example.com",
+                authpath=str(edge_env),
+                refresh_token="new-refresh",
+                access_token="new-access",
+            )
+        )
+
+    assert auth_file.read_bytes() == auth_before
+    assert site_file.read_bytes() == site_before
+
+
+def test_import_auth_file_restores_auth_and_site_when_write_fails(
+    edge_env, monkeypatch
+):
+    _write_auth(edge_env)
+    auth_file = edge_env / ".pypowerwall.auth"
+    site_file = edge_env / ".pypowerwall.site"
+    site_file.write_text("111", encoding="utf-8")
+    auth_before = auth_file.read_bytes()
+    site_before = site_file.read_bytes()
+    content = json.dumps(
+        {
+            "new@example.com": {
+                "sso": {"access_token": "new-at", "refresh_token": "new-rt"}
+            }
+        }
+    )
+    original_write = setup_core._write_private_text
+
+    def fail_auth_write(path, content, newline=True):
+        if Path(path).name == ".pypowerwall.auth":
+            raise OSError("disk full")
+        return original_write(path, content, newline)
+
+    monkeypatch.setattr(setup_core, "_write_private_text", fail_auth_write)
+    with pytest.raises(OSError, match="disk full"):
+        setup_core.import_auth_file(
+            SetupAuthFileRequest(mode="cloud", authpath=str(edge_env), content=content)
+        )
+
+    assert auth_file.read_bytes() == auth_before
+    assert site_file.read_bytes() == site_before
+
+
+def test_imported_account_can_select_site_with_existing_workflow(edge_env, monkeypatch):
+    _write_auth(edge_env)
+    site_file = edge_env / ".pypowerwall.site"
+    site_file.write_text("111", encoding="utf-8")
+    setup_core.import_auth_tokens(
+        SetupAuthTokensRequest(
+            email="new@example.com",
+            authpath=str(edge_env),
+            refresh_token="new-refresh",
+            access_token="new-access",
+        )
+    )
+    assert not site_file.exists()
+
+    from pypowerwall.cloud.pypowerwall_cloud import PyPowerwallCloud
+
+    monkeypatch.setattr(PyPowerwallCloud, "connect", lambda self: True)
+    monkeypatch.setattr(
+        PyPowerwallCloud,
+        "getsites",
+        lambda self: [
+            {"energy_site_id": 222, "site_name": "Home"},
+            {"energy_site_id": 333, "site_name": "Cabin"},
+        ],
+    )
+    use = setup_core.cloud_auth_use(
+        SetupCloudAuthUseRequest(authpath=str(edge_env), email="new@example.com")
+    )
+    assert use.needs_site is True
+    assert use.siteid is None
+
+    selected = setup_core.cloud_auth_site("new@example.com", str(edge_env), "333")
+    assert selected.siteid == "333"
+    assert site_file.read_text(encoding="utf-8") == "333"
+
+
 def test_merge_auth_file_handles_malformed_existing(edge_env):
     path = edge_env / ".pypowerwall.auth"
     path.write_text("not-json", encoding="utf-8")
