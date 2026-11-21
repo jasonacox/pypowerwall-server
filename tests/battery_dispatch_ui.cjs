@@ -177,7 +177,7 @@ for (const [direction, watts] of [['discharge', 5000], ['charge', -5000]]) {
         await f.fire('form', 'submit');
         assert.deepEqual(f.requests, [{ route: 'dispatch', body: { power_watts: watts, duration_seconds: 30 }, auth: 'test-token' }]);
         assert.equal(f.remembered, 'test-token');
-        assert.match(f.message, new RegExp(`^${direction === 'charge' ? 'Charge' : 'Discharge'} at 5,000 W accepted, until about `));
+        assert.match(f.message, new RegExp(`^${direction === 'charge' ? 'Charge' : 'Discharge'} at 5[.,]000 W accepted, until about `));
         assert.match(f.message, /actual battery power/);
         assert.equal(f.confirmations.length, 1);
     });
@@ -202,7 +202,7 @@ test('discharge confirmation warns about export and backup reserve; cancelling s
     await f.fire('form', 'submit');
     assert.equal(f.confirmations.length, 1);
     const dialog = f.confirmations[0];
-    assert.match(dialog.body, /5,000 W for 30 seconds/);
+    assert.match(dialog.body, /5[.,]000 W for 30 seconds/);
     assert.match(dialog.body, /export electricity to the grid/);
     assert.match(dialog.body, /Solar or Never/);
     assert.match(dialog.body, /below your Backup Reserve/);
@@ -340,7 +340,7 @@ test('charge confirmation warns about grid draw and Grid Charging; cancelling se
     await f.fire('form', 'submit');
     const dialog = f.confirmations[0];
     assert.equal(dialog.title, 'Start battery charge?');
-    assert.match(dialog.body, /5,000 W for 30 seconds/);
+    assert.match(dialog.body, /5[.,]000 W for 30 seconds/);
     assert.match(dialog.body, /draw power from the grid/);
     assert.match(dialog.body, /Grid Charging/);
     assert.match(dialog.body, /Use at your own risk/);

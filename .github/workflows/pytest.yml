@@ -67,3 +67,10 @@ jobs:
                       failed = True
           sys.exit(1 if failed else 0)
           EOF
+      - name: Check external JS syntax
+        run: |
+          set -e
+          for f in app/static/js/*.js; do
+            echo "Checking $f"
+            node --check "$f"
+          done

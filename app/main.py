@@ -61,6 +61,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response, Header
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -70,8 +72,9 @@ from typing import Optional
 from app.api.auth import verify_control_token
 
 from app.config import settings, SERVER_VERSION
-from app.api import legacy, gateways, aggregates, websockets, timeseries
+from app.api import legacy, gateways, aggregates, websockets, timeseries, setup
 from app.core.gateway_manager import gateway_manager
+from app.core.setup import initialize_setup_auth
 from app.utils.transform import get_static
 from app.utils.stats_tracker import stats_tracker
 
@@ -151,6 +154,7 @@ async def lifespan(app: FastAPI):
     if _proxy_base:
         logger.info(f"Reverse proxy base path (PROXY_BASE_URL): {_proxy_base}")
     _log_battery_dispatch_opt_in()
+    initialize_setup_auth()
 
     # Initialize gateway manager
     await gateway_manager.initialize(
@@ -221,6 +225,23 @@ app = FastAPI(
     openapi_url=f"{_proxy_base}/openapi.json" if _proxy_base else "/openapi.json",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def _sanitize_setup_validation(request: Request, exc: RequestValidationError):
+    """Do not echo request bodies (which can contain secrets) for setup errors."""
+    if request.url.path.startswith("/api/setup"):
+        safe = [
+            {
+                "loc": list(error.get("loc", [])),
+                "msg": error.get("msg", "invalid value"),
+                "type": error.get("type", "value_error"),
+            }
+            for error in exc.errors()
+        ]
+        return JSONResponse(status_code=422, content={"detail": safe})
+    return await request_validation_exception_handler(request, exc)
+
 
 # Configure CORS.
 # The CORS spec forbids allow_credentials=True combined with allow_origins=["*"]
@@ -410,6 +431,7 @@ static_path = Path(__file__).parent / "static"
 app.include_router(gateways.router, prefix="/api/gateways", tags=["Gateways"])
 app.include_router(aggregates.router, prefix="/api/aggregate", tags=["Aggregates"])
 app.include_router(timeseries.router, prefix="/api/timeseries", tags=["TimeSeries"])
+app.include_router(setup.router, prefix="/api/setup", tags=["Setup"])
 app.include_router(websockets.router, prefix="/ws", tags=["WebSockets"])
 
 app.include_router(legacy.router, tags=["Legacy Proxy Compatibility"])
@@ -603,7 +625,7 @@ async def console():
     """Serve the management console UI."""
     index_path = Path(__file__).parent / "static" / "index.html"
     if index_path.exists():
-        content = index_path.read_text()
+        content = index_path.read_text(encoding="utf-8")
         # When running under a proxy sub-path (PROXY_BASE_URL), inject a fetch
         # monkey-patch so all root-relative API calls get the prefix prepended
         # automatically, without modifying every call site in index.html.
@@ -657,6 +679,32 @@ async def console():
     )
 
 
+@app.get("/setup", response_class=HTMLResponse, tags=["UI"])
+async def setup_page():
+    """Serve the first-run setup and reconfiguration wizard."""
+    setup_path = Path(__file__).parent / "static" / "setup.html"
+    if not setup_path.exists():
+        raise HTTPException(status_code=404, detail="Setup UI not found")
+    content = setup_path.read_text(encoding="utf-8")
+    content = content.replace("{PROXY_BASE_SCRIPT}", _proxy_base_script())
+    content = content.replace("{PROXY_BASE}", _proxy_base)
+    content = content.replace("{SERVER_VERSION}", SERVER_VERSION)
+    return HTMLResponse(
+        content=content,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": (
+                "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                "connect-src 'self' ws: wss:; frame-ancestors 'none'"
+            ),
+        },
+    )
+
+
 @app.get("/history", response_class=HTMLResponse, tags=["UI"])
 async def history():
     """Serve the historical data lookup page.
@@ -667,7 +715,7 @@ async def history():
     page_path = Path(__file__).parent / "static" / "history.html"
     if not page_path.exists():
         return HTMLResponse(content="History page not installed", status_code=404)
-    content = page_path.read_text()
+    content = page_path.read_text(encoding="utf-8")
     content = content.replace("{PROXY_BASE_SCRIPT}", _proxy_base_script())
     content = content.replace("{PROXY_BASE}", _proxy_base)
     content = content.replace("{SERVER_VERSION}", SERVER_VERSION)
@@ -680,7 +728,7 @@ async def example():
     """Serve the Power Flow iFrame example page."""
     example_path = Path(__file__).parent / "static" / "example.html"
     if example_path.exists():
-        content = example_path.read_text()
+        content = example_path.read_text(encoding="utf-8")
         content = content.replace("{PROXY_BASE}", _proxy_base)
         return HTMLResponse(content=content)
     return HTMLResponse(

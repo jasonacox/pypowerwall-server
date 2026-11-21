@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PyPowerwall Server Setup</title>
+    {PROXY_BASE_SCRIPT}
+    <link rel="stylesheet" href="{PROXY_BASE}/static/css/page.css?v={SERVER_VERSION}">
+    <link rel="stylesheet" href="{PROXY_BASE}/static/css/setup.css?v={SERVER_VERSION}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <span class="logo-icon">&#9889;</span>
+                <h1>PyPowerwall Server</h1>
+                <span class="version-badge">v{SERVER_VERSION}</span>
+            </div>
+            <nav class="header-links" aria-label="Pages">
+                <a href="{PROXY_BASE}/console">Console</a>
+                <a href="{PROXY_BASE}/history">History</a>
+                <a href="{PROXY_BASE}/setup" aria-current="page">Setup</a>
+                <a href="{PROXY_BASE}/docs">API Docs</a>
+                <a href="{PROXY_BASE}/api/gateways">Gateways API</a>
+                <a href="https://github.com/jasonacox/pypowerwall-server" target="_blank" rel="noopener">GitHub</a>
+                <a href="{PROXY_BASE}/console" title="Open Console cards">Cards</a>
+                <a href="{PROXY_BASE}/console?kiosk=1" title="Open Console in kiosk mode">Kiosk</a>
+            </nav>
+        </header>
+
+        <main class="setup-shell">
+        <section class="setup-intro" id="setup-intro" aria-labelledby="setup-title">
+            <div>
+                <h1 id="setup-title">Set up PyPowerwall Server</h1>
+                <p class="lede">New installations can be configured from the browser at <code>/setup</code>. The wizard guides you through gateway access, integrations, and server settings, then saves a persistent configuration. All supported gateway modes, multi-gateway and hybrid setups are available; existing YAML and environment-variable setups remain supported.</p>
+            </div>
+            <div class="setup-security-note">
+                <strong>Setup API access</strong>
+                <span>The setup API uses <code>PW_CONTROL_SECRET</code> as its admin token. If <code>PW_CONTROL_SECRET</code> is not set, use the temporary setup token printed in the server startup log. Search for <code>Setup wizard access token</code>. The token is only valid until the server restarts.</span>
+            </div>
+        </section>
+
+        <ol class="stepper" id="stepper" aria-label="Setup progress">
+            <li data-step="1" class="active"><span>1</span><div><strong>Access</strong><small>Token and state</small></div></li>
+            <li data-step="2"><span>2</span><div><strong>Gateways</strong><small>Connection and test</small></div></li>
+            <li data-step="3"><span>3</span><div><strong>Settings</strong><small>Server and integrations</small></div></li>
+            <li data-step="4"><span>4</span><div><strong>Review</strong><small>Validate and confirm</small></div></li>
+            <li data-step="5"><span>5</span><div><strong>Activate</strong><small>Save and restart</small></div></li>
+        </ol>
+
+        <div class="setup-alert" id="global-message" role="status" aria-live="polite" hidden></div>
+
+        <section class="wizard-step active" data-step-panel="1" aria-labelledby="step-access-title">
+            <div class="panel-grid">
+                <article class="setup-card">
+                    <h2 id="step-access-title">Setup API access</h2>
+                    <p>Enter the <code>PW_CONTROL_SECRET</code> value. If no control secret is configured, use the temporary setup token from the server startup log.</p>
+                    <form id="token-form" class="setup-form" autocomplete="off" data-info-field>
+                        <label for="setup-token">Control or setup token</label>
+                        <div class="field-row">
+                            <input id="setup-token" name="setup-token" type="password" autocomplete="current-password" spellcheck="false" data-secret-label="token" required>
+                            <button type="submit" class="btn btn-primary">Connect</button>
+                        </div>
+                        <label class="control-remember"><input type="checkbox" id="setup-remember"> Remember my token on this device</label>
+                        <p class="hint">Docker: <code>docker logs pypowerwall-server</code> and look for “Setup wizard access token”.</p>
+                    </form>
+                </article>
+
+                <article class="setup-card" id="status-card" hidden>
+                    <div class="card-heading">
+                        <h2>Configuration</h2>
+                        <span class="status-pill" id="status-pill">Unknown</span>
+                    </div>
+                    <dl class="status-list">
+                        <div><dt>Configuration source</dt><dd id="status-source">—</dd></div>
+                        <div><dt>Path</dt><dd id="status-path">—</dd></div>
+                        <div><dt>Gateways</dt><dd id="status-gateways">—</dd></div>
+                        <div><dt>Write access</dt><dd id="status-writable">—</dd></div>
+                    </dl>
+                    <div class="notice warning" id="status-warnings" hidden></div>
+                        <div class="button-row">
+                        <button type="button" class="btn btn-secondary" id="refresh-status">Refresh</button>
+                        <button type="button" class="btn btn-primary" id="continue-to-gateways">Continue</button>
+                        <button type="button" class="btn btn-danger" id="delete-config" hidden>Delete configuration file</button>
+                    </div>
+                    <section class="migration-section" aria-labelledby="migration-title">
+                        <h3 id="migration-title">Environment configuration migration</h3>
+                        <p class="hint">For installations currently configured through <code>PW_GATEWAYS</code>, legacy <code>PW_*</code> gateway variables, or other environment settings. Preview the effective configuration, then write it to the managed YAML file. Environment values still take precedence until they are removed.</p>
+                        <div class="button-row migration-actions">
+                            <button type="button" class="btn btn-secondary" id="preview-env">Preview environment configuration</button>
+                            <button type="button" class="btn btn-secondary" id="activate-env" hidden>Write environment configuration to YAML</button>
+                        </div>
+                        <div id="env-import-help" class="hint migration-help" hidden></div>
+                        <div id="env-import-status" class="hint migration-status" aria-live="polite"></div>
+                        <pre id="env-preview" class="review-json" hidden></pre>
+                    </section>
+                </article>
+            </div>
+        </section>
+
+        <section class="wizard-step" data-step-panel="2" aria-labelledby="step-gateways-title">
+            <div class="section-heading">
+                <div>
+                    <h2 id="step-gateways-title">Gateways</h2>
+                </div>
+                <button type="button" class="btn btn-secondary" id="add-gateway">Add gateway</button>
+            </div>
+            <div class="scan-section collapsed" id="scan-output">
+                <button type="button" class="scan-toggle" id="scan-output-toggle" aria-expanded="false" aria-controls="scan-output-body">
+                    <span class="scan-chevron" aria-hidden="true">&#9654;</span>
+                    Network scan
+                </button>
+                <div class="scan-output-body" id="scan-output-body">
+                    <div class="scan-field">
+                        <div class="scan-bar">
+                            <input id="scan-cidr" type="text" placeholder="Private CIDR (optional), e.g. 192.168.1.0/24">
+                            <button type="button" class="btn btn-secondary" id="scan-gateways">Scan network</button>
+                        </div>
+                        <p class="hint">In Docker bridge mode, enter your LAN CIDR. Auto-detect only sees the container network.</p>
+                        <span class="hint" id="scan-status" aria-live="polite"></span>
+                        <div class="scan-results" id="scan-results" aria-live="polite"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="notice" id="gateway-source-warning" hidden></div>
+            <div id="gateway-list" class="gateway-list"></div>
+            <template id="gateway-template">
+                <article class="setup-card gateway-card">
+                    <div class="card-heading">
+                        <div>
+                            <span class="gateway-index"></span>
+                            <h3 class="gateway-title">Gateway</h3>
+                        </div>
+                        <button type="button" class="btn btn-danger btn-small remove-gateway">Remove</button>
+                    </div>
+                    <div class="form-grid">
+                        <div class="field">
+                            <label>Gateway ID</label>
+                            <input data-field="id" type="text" maxlength="64" placeholder="home" required>
+                            <span class="hint">Unique ID used in <code>/api/gateways/{gateway_id}</code> and MQTT topics.</span>
+                        </div>
+                        <div class="field">
+                            <label>Display name <span class="optional">(optional)</span></label>
+                            <input data-field="name" type="text" placeholder="Home System">
+                            <span class="hint">Display name. Defaults to the gateway ID when omitted.</span>
+                        </div>
+                        <div class="field">
+                            <label>Connection mode</label>
+                            <select data-field="mode">
+                                <option value="tedapi">TEDAPI</option>
+                                <option value="tedapi_v1r">TEDAPI v1r</option>
+                                <option value="local">Local</option>
+                                <option value="basic_lan">Basic LAN</option>
+                                <option value="hybrid_tedapi">Hybrid TEDAPI</option>
+                                <option value="cloud">Cloud</option>
+                                <option value="fleetapi">FleetAPI</option>
+                                <option value="hybrid">Hybrid</option>
+                                <option value="hybrid_fleetapi">Hybrid FleetAPI</option>
+                            </select>
+                            <span class="hint" data-mode-description></span>
+                        </div>
+                        <div class="field">
+                            <label>Device type</label>
+                            <select data-field="type">
+                                <option value="powerwall">Powerwall</option>
+                                <option value="inverter">Inverter (solar-only)</option>
+                            </select>
+                            <span class="hint"><code>powerwall</code>, or <code>inverter</code> for a solar-only gateway (the Console hides battery panels).</span>
+                        </div>
+                        <div class="field">
+                            <label>Host</label>
+                            <input data-field="host" type="text" placeholder="192.168.91.1" autocomplete="off">
+                            <span class="hint">Gateway or Powerwall IP for local modes.</span>
+                        </div>
+                        <div class="field">
+                            <label>Port <span class="optional">(optional)</span></label>
+                            <input data-field="port" type="number" min="1" max="65535" placeholder="443">
+                            <span class="hint">Non-standard HTTPS port (1-65535), e.g. a travel router forwarding to <code>192.168.91.1:443</code>.</span>
+                        </div>
+                        <div class="field">
+                            <label>Time zone</label>
+                            <input data-field="timezone" type="text" value="America/Los_Angeles" placeholder="Search or select a time zone" list="timezone-options" autocomplete="off" spellcheck="false">
+                            <span class="hint">Gateway time zone; daily energy totals reset at its midnight.</span>
+                        </div>
+                        <div class="field">
+                            <label>Site ID <span class="optional">(optional)</span></label>
+                            <input data-field="siteid" type="text" inputmode="numeric" placeholder="123456789">
+                            <span class="hint">Tesla site ID for the Cloud/FleetAPI/v1r sign-in panels; the selected site is saved to <code>.pypowerwall.site</code>.</span>
+                        </div>
+                        <div class="field" data-mode-field="gw_pwd">
+                            <label>Gateway WiFi password</label>
+                            <input data-field="gw_pwd" type="password" autocomplete="new-password" placeholder="Leave blank">
+                            <span class="hint">Gateway WiFi password (TEDAPI, v1r).</span>
+                        </div>
+                        <div class="field" data-mode-field="password">
+                            <label>Customer password</label>
+                            <input data-field="password" type="password" autocomplete="new-password" placeholder="last 5 characters of the gateway password">
+                            <span class="hint">Customer password for Basic LAN or PW2 local mode. Usually the last 5 characters of the gateway password.</span>
+                        </div>
+                        <div class="field" data-mode-field="rsa_key_path">
+                            <label>RSA key path</label>
+                            <input data-field="rsa_key_path" type="text" placeholder="/keys/tedapi_rsa_private.pem">
+                            <span class="hint">RSA-4096 private key PEM for TEDAPI v1r.</span>
+                        </div>
+                        <div class="field" data-mode-field="wifi_host">
+                            <label>WiFi host <span class="optional">(optional)</span></label>
+                            <input data-field="wifi_host" type="text" placeholder="192.168.91.1">
+                            <span class="hint">Gateway WiFi address for v1r follower Powerwalls and LAN fallback.</span>
+                        </div>
+                        <div class="field" data-mode-field="email">
+                            <label>Tesla account email</label>
+                            <input data-field="email" type="email" placeholder="user@example.com">
+                            <span class="hint">Tesla account email. Required for Cloud, Hybrid and Hybrid FleetAPI; optional for FleetAPI (its auth file).</span>
+                        </div>
+                        <div class="field" data-mode-field="authpath">
+                            <label>Auth path</label>
+                            <input data-field="authpath" type="text" placeholder="/auth">
+                            <span class="hint">Directory holding the <code>.pypowerwall.auth</code> and <code>.pypowerwall.site</code> files. FleetAPI uses <code>.pypowerwall.fleetapi</code>. Required for Cloud/FleetAPI and hybrid cloud control.</span>
+                        </div>
+                    </div>
+                    <div class="button-row">
+                        <button type="button" class="btn btn-secondary test-gateway">Test connection</button>
+                        <button type="button" class="btn btn-secondary generate-key" hidden>Generate v1r key</button>
+                        <button type="button" class="btn btn-secondary check-auth" hidden>Check auth files</button>
+                    </div>
+                    <div class="auth-help hint" data-mode-help hidden></div>
+                    <div class="v1r-registration" data-v1r-registration hidden>
+                        <div class="v1r-registration-head">
+                            <div>
+                                <div class="v1r-registration-title">Tesla key registration</div>
+                                <p class="hint">Generate the RSA key locally, register the public key with the Tesla Owner API, then give the physical proof on the Powerwall within about 10 minutes.</p>
+                            </div>
+                            <span class="status-pill" data-v1r-phase>Not started</span>
+                        </div>
+
+                        <section class="v1r-step">
+                            <div class="v1r-step-title"><span>1</span>Sign in to Tesla</div>
+                            <p class="hint">Use the same Tesla Owner API login (no developer app is required). Use the account that owns this Powerwall.</p>
+                            <span class="v1r-field-label">Tesla account email</span>
+                            <div class="field-row">
+                                <input class="v1r-email" type="email" placeholder="user@example.com" autocomplete="email">
+                                <button type="button" class="btn btn-secondary v1r-login">Start Tesla login</button>
+                            </div>
+                            <div class="v1r-login-result" hidden>
+                                <p class="v1r-login-help">After authorizing, Tesla redirects to a <code>tesla://</code> URL. The page may show a 404 error; this is expected. Copy the full URL from your browser's address bar and paste it below.</p>
+                                <a class="btn btn-primary v1r-login-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Open Tesla login</a>
+                                <span class="v1r-field-label">Callback URL</span>
+                                <div class="field-row">
+                                    <input class="v1r-callback" type="text" placeholder="Paste the full tesla://auth/callback URL">
+                                    <button type="button" class="btn btn-primary v1r-complete">Complete Tesla login</button>
+                                </div>
+                            </div>
+                            <div class="v1r-existing-auth">
+                                <div class="v1r-subtitle">Or use an existing Tesla login</div>
+                                <p class="hint">If you already have a <code>.pypowerwall.auth</code> file, choose it here. It is saved to the Auth path from the gateway form above; if it is already there, skip to step 2.</p>
+                                <input class="v1r-auth-file" type="file" accept=".auth,.json,application/json" hidden>
+                                <div class="v1r-auth-file-row">
+                                    <button type="button" class="btn btn-secondary v1r-auth-file-button">Choose .pypowerwall.auth</button>
+                                    <span class="v1r-auth-file-name" data-v1r-file-name>No file selected</span>
+                                </div>
+                                <div class="button-row">
+                                    <button type="button" class="btn btn-primary v1r-auth-upload" disabled>Upload auth file</button>
+                                </div>
+                            </div>
+                            <div class="v1r-auth-status" aria-live="polite"></div>
+                        </section>
+
+                        <section class="v1r-step">
+                            <div class="v1r-step-title"><span>2</span>Select site and register key</div>
+                            <p class="hint">If the account has several energy sites, choose the one for this gateway. Register with the Owner API login from step 1, or with the saved FleetAPI configuration from the Fleet API setup panel.</p>
+                            <div class="v1r-sites" aria-live="polite"></div>
+                            <div class="v1r-register-status" aria-live="polite"></div>
+                            <div class="button-row">
+                                <button type="button" class="btn btn-primary v1r-register">Register with Owner API</button>
+                                <button type="button" class="btn btn-secondary v1r-register-fleet">Register with FleetAPI</button>
+                            </div>
+                        </section>
+
+                        <section class="v1r-step">
+                            <div class="v1r-step-title"><span>3</span>Confirm on the Powerwall</div>
+                            <p class="hint">After registration, the physical proof instructions appear here. The key is ready only when the gateway reports VERIFIED.</p>
+                            <div class="v1r-status" aria-live="polite"></div>
+                            <div class="notice warning v1r-proof" hidden></div>
+                            <div class="button-row">
+                                <button type="button" class="btn btn-secondary v1r-check" hidden>Check verification</button>
+                            </div>
+                        </section>
+                    </div>
+                    <div class="v1r-registration" data-fleet-registration hidden>
+                        <div class="v1r-registration-head">
+                            <div>
+                                <div class="v1r-registration-title">Fleet API setup</div>
+                                <p class="hint">Uses the official Tesla Fleet API. You need an approved Tesla developer app and its public key hosted at <code>https://{DOMAIN}/.well-known/appspecific/com.tesla.3p.public-key.pem</code>.</p>
+                            </div>
+                            <span class="status-pill" data-fleet-phase>Not started</span>
+                        </div>
+                        <section class="v1r-step">
+                            <div class="v1r-step-title"><span>1</span>Register app and public key</div>
+                            <p class="hint">Create the app and PEM key with the pypowerwall tools, upload the public key, then enter the approved app credentials here. The server verifies the public-key URL and registers the partner account before Tesla login.</p>
+                            <div class="fleet-fields">
+                                <div><span class="v1r-field-label">Client ID</span><input class="fleet-client-id" type="text" autocomplete="off" placeholder="Tesla developer Client ID"></div>
+                                <div><span class="v1r-field-label">Client Secret</span><input class="fleet-client-secret" type="password" autocomplete="new-password" placeholder="Tesla developer Client Secret"></div>
+                                <div><span class="v1r-field-label">Domain</span><input class="fleet-domain" type="text" autocomplete="off" placeholder="example.com"></div>
+                                <div><span class="v1r-field-label">Redirect URI</span><input class="fleet-redirect" type="text" autocomplete="off" placeholder="https://example.com/access"></div>
+                                <div><span class="v1r-field-label">Region</span>
+                                    <select class="fleet-region">
+                                        <option value="na">North America, Asia-Pacific</option>
+                                        <option value="eu">Europe, Middle East, Africa</option>
+                                        <option value="cn">China</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="button-row">
+                                <button type="button" class="btn btn-secondary fleet-key">Generate PEM key</button>
+                                <button type="button" class="btn btn-primary fleet-start">Verify and start setup</button>
+                            </div>
+                            <div class="fleet-key-result" hidden>
+                                <span class="v1r-field-label">Public key to host</span>
+                                <pre class="fleet-public-key" data-fleet-public-key></pre>
+                                <div class="button-row">
+                                    <button type="button" class="btn btn-secondary fleet-copy-key">Copy public key</button>
+                                </div>
+                            </div>
+                            <div class="v1r-existing-auth">
+                                <div class="v1r-subtitle">Or import an existing FleetAPI configuration</div>
+                                <p class="hint">Choose a <code>.pypowerwall.fleetapi</code> file from this computer. It is saved to the Auth path from the gateway form above.</p>
+                                <input class="fleet-auth-file" type="file" accept=".fleetapi,.json,application/json" hidden>
+                                <div class="v1r-auth-file-row">
+                                    <button type="button" class="btn btn-secondary fleet-auth-file-button">Choose .pypowerwall.fleetapi</button>
+                                    <span class="v1r-auth-file-name" data-fleet-file-name>No file selected</span>
+                                </div>
+                                <div class="button-row">
+                                    <button type="button" class="btn btn-primary fleet-auth-upload" disabled>Import FleetAPI config</button>
+                                </div>
+                            </div>
+                            <div class="v1r-auth-status fleet-auth-status" aria-live="polite"></div>
+                        </section>
+                        <section class="v1r-step">
+                            <div class="v1r-step-title"><span>2</span>Sign in to Tesla</div>
+                            <p class="hint">Use the Tesla account that owns this Powerwall.</p>
+                            <div class="fleet-login-result" hidden>
+                                <p class="v1r-login-help">After authorizing, Tesla redirects to your Redirect URI. Copy the full URL from the browser's address bar; the page may show a 404 error.</p>
+                                <a class="btn btn-primary fleet-login-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Open Tesla login</a>
+                                <span class="v1r-field-label">Callback URL</span>
+                                <div class="field-row">
+                                    <input class="fleet-callback" type="text" placeholder="Paste the full callback URL">
+                                    <button type="button" class="btn btn-primary fleet-complete">Complete login</button>
+                                </div>
+                            </div>
+                            <div class="v1r-auth-status fleet-complete-status" aria-live="polite"></div>
+                        </section>
+                        <section class="v1r-step">
+                            <div class="v1r-step-title"><span>3</span>Select the energy site</div>
+                            <p class="hint">If the account has several energy sites, choose the one for this gateway. Then use Test connection above to verify live access.</p>
+                            <div class="v1r-sites fleet-sites" aria-live="polite"></div>
+                            <div class="v1r-register-status fleet-status" aria-live="polite"></div>
+                        </section>
+                    </div>
+                    <div class="cloud-auth" data-cloud-auth hidden>
+                        <div class="field-row">
+                            <select class="cloud-region" aria-label="Tesla auth region">
+                                <option value="us">United States / Global</option>
+                                <option value="cn">China</option>
+                            </select>
+                            <button type="button" class="btn btn-secondary cloud-start">Start Tesla login</button>
+                        </div>
+                        <div class="button-row">
+                            <button type="button" class="btn btn-secondary cloud-use-existing">Use existing Cloud auth</button>
+                        </div>
+                        <div class="cloud-link hint" aria-live="polite"></div>
+                        <div class="field-row">
+                            <input class="cloud-callback" type="text" placeholder="Paste the tesla://auth/callback URL">
+                            <button type="button" class="btn btn-secondary cloud-complete">Complete login</button>
+                        </div>
+                        <div class="cloud-sites" aria-live="polite"></div>
+                        <div class="v1r-existing-auth">
+                            <div class="v1r-subtitle">Or import an existing Cloud auth file</div>
+                            <p class="hint">Choose a <code>.pypowerwall.auth</code> file from this computer. If a Site ID is set above, it is saved as <code>.pypowerwall.site</code>.</p>
+                            <input class="cloud-auth-file" type="file" accept=".auth,.json,application/json" hidden>
+                            <div class="v1r-auth-file-row">
+                                <button type="button" class="btn btn-secondary cloud-auth-file-button">Choose .pypowerwall.auth</button>
+                                <span class="v1r-auth-file-name" data-cloud-file-name>No file selected</span>
+                            </div>
+                            <div class="button-row">
+                                <button type="button" class="btn btn-primary cloud-auth-upload" disabled>Import Cloud auth file</button>
+                            </div>
+                            <div class="v1r-auth-status cloud-import-status" aria-live="polite"></div>
+                            <div class="v1r-subtitle">Or paste tokens from a headless login</div>
+                            <p class="hint">On a computer with a browser, run <code>python -m pypowerwall authtoken</code> and copy both tokens. This uses the Email from the gateway form above and saves <code>.pypowerwall.auth</code>.</p>
+                            <div class="field-row">
+                                <input class="cloud-refresh-token" type="password" placeholder="Refresh Token (RT)" aria-label="Refresh Token (RT)" autocomplete="off">
+                                <input class="cloud-access-token" type="password" placeholder="Access Token (AT, optional)" aria-label="Access Token (AT, optional)" autocomplete="off">
+                            </div>
+                            <div class="button-row">
+                                <button type="button" class="btn btn-secondary cloud-token-import">Save pasted tokens</button>
+                            </div>
+                            <div class="v1r-auth-status cloud-token-status" aria-live="polite"></div>
+                        </div>
+                    </div>
+                    <div class="diagnostics" aria-live="polite"></div>
+                </article>
+            </template>
+            <div class="button-row step-actions">
+                <button type="button" class="btn btn-secondary" data-back="1">Back</button>
+                <button type="button" class="btn btn-primary" id="continue-to-settings">Continue</button>
+            </div>
+        </section>
+
+        <section class="wizard-step" data-step-panel="3" aria-labelledby="step-settings-title">
+            <div class="section-heading settings-heading">
+                <div>
+                    <h2 id="step-settings-title">Settings</h2>
+                </div>
+                <p class="hint">Only changed values are written. Existing environment values stay in effect unless you override them here.</p>
+            </div>
+            <div id="settings-groups" class="settings-groups"></div>
+            <div class="button-row step-actions">
+                <button type="button" class="btn btn-secondary" data-back="2">Back</button>
+                <button type="button" class="btn btn-primary" id="continue-to-review">Review</button>
+            </div>
+        </section>
+
+        <section class="wizard-step" data-step-panel="4" aria-labelledby="step-review-title">
+            <div class="section-heading">
+                <div>
+                    <h2 id="step-review-title">Review configuration</h2>
+                </div>
+            </div>
+            <div id="validation-summary" class="notice" aria-live="polite"></div>
+            <pre id="review-json" class="review-json" aria-label="Configuration preview"></pre>
+            <div class="button-row step-actions review-actions">
+                <button type="button" class="btn btn-secondary" data-back="3">Back</button>
+                <button type="button" class="btn btn-primary" id="validate-config">Validate</button>
+                <button type="button" class="btn btn-primary" id="save-config" disabled>Save configuration</button>
+            </div>
+        </section>
+
+        <section class="wizard-step" data-step-panel="5" aria-labelledby="step-activate-title">
+            <article class="setup-card">
+                <div class="card-heading">
+                    <h2 id="step-activate-title">Configuration saved</h2>
+                    <span class="status-pill ok" id="save-status">Ready</span>
+                </div>
+                <div id="save-result" class="notice" aria-live="polite"></div>
+                <p>Restart the container/process to activate it. Until then, the running process keeps its current settings.</p>
+                <pre class="command">docker compose restart pypowerwall-server</pre>
+                <div class="button-row">
+                    <a class="btn btn-primary" href="{PROXY_BASE}/console">Open Console</a>
+                    <a class="btn btn-secondary" href="{PROXY_BASE}/history">Open History</a>
+                </div>
+            </article>
+        </section>
+
+        <footer class="setup-footer">
+            <span>PyPowerwall Server &middot; Restart the container/process to activate the new configuration.</span>
+        </footer>
+        </main>
+    </div>
+    <datalist id="timezone-options"></datalist>
+    <dialog class="confirm-dialog" id="setup-info-dialog" aria-labelledby="setup-info-title">
+        <div class="confirm-dialog-header">
+            <span class="confirm-dialog-icon" id="setup-info-icon"></span>
+            <div class="confirm-dialog-title" id="setup-info-title"></div>
+        </div>
+        <div class="confirm-dialog-body" id="setup-info-body"></div>
+        <div class="confirm-dialog-actions">
+            <button type="button" class="control-btn" id="setup-info-cancel">Cancel</button>
+            <button type="button" class="control-btn confirm-proceed" id="setup-info-ok">Got it</button>
+        </div>
+    </dialog>
+    <script src="{PROXY_BASE}/static/js/setup.js?v={SERVER_VERSION}"></script>
+</body>
+</html>

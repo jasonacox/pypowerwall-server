@@ -273,6 +273,7 @@ sequenceDiagram
 | `app/main.py` | FastAPI app, lifespan, CLI | `app`, `cli()` |
 | `app/config.py` | Configuration via env vars | `settings`, `Settings`, `GatewayConfig` |
 | `app/core/gateway_manager.py` | Connection pooling, polling, TEDAPI probe/recovery | `gateway_manager` (singleton) |
+| `app/core/setup.py` | Setup status, validation, diagnostics, atomic config persistence and setup-token auth | `get_setup_status`, `apply_setup_request`, `verify_setup_token` |
 
 ### API Routers
 
@@ -282,6 +283,7 @@ sequenceDiagram
 | `app/api/gateways.py` | `/api/gateways` | Multi-gateway management |
 | `app/api/aggregates.py` | `/api/aggregate` | Combined data from all gateways |
 | `app/api/websockets.py` | `/ws` | Real-time streaming |
+| `app/api/setup.py` | `/api/setup` | Setup status, validation, diagnostics and atomic configuration |
 
 ### Models
 

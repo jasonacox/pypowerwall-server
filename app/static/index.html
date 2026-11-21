@@ -1726,6 +1726,7 @@
             <nav class="header-links" aria-label="Pages">
                 <a href="{PROXY_BASE}/console" aria-current="page">Console</a>
                 <a href="{PROXY_BASE}/history">History</a>
+                <a href="{PROXY_BASE}/setup">Setup</a>
                 <a href="{PROXY_BASE}/docs">API Docs</a>
                 <a href="{PROXY_BASE}/api/gateways">Gateways API</a>
                 <a href="https://github.com/jasonacox/pypowerwall-server" target="_blank" rel="noopener">GitHub</a>
@@ -2290,6 +2291,7 @@
     <footer>
         <p>
             <span id="footer-versions">Server: v-- | PyPowerwall: v--</span>
+            | <a href="{PROXY_BASE}/setup">Setup</a>
             | <a href="{PROXY_BASE}/docs">API Documentation</a> 
             | <a href="https://github.com/jasonacox/pypowerwall-server" target="_blank">GitHub</a>
         </p>
@@ -3744,7 +3746,7 @@
                 const container = document.getElementById('gateway-list');
                 
                 if (!gateways || Object.keys(gateways).length === 0) {
-                    container.innerHTML = `<div class="no-strings">No gateways configured</div>`;
+                    container.innerHTML = `<div class="no-strings">No gateways configured. <a href="{PROXY_BASE}/setup">Open setup</a></div>`;
                     return;
                 }
 

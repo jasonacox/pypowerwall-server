@@ -80,6 +80,6 @@ Route Conflict Detection:
         2. Routers with prefixes don't overlap (e.g., /api/x and /api/x/y is OK)
         3. Direct @app routes in main.py don't conflict with router paths
 """
-from . import legacy, gateways, aggregates, websockets
+from . import legacy, gateways, aggregates, websockets, setup
 
-__all__ = ["legacy", "gateways", "aggregates", "websockets"]
+__all__ = ["legacy", "gateways", "aggregates", "websockets", "setup"]
