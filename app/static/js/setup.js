@@ -69,15 +69,15 @@
 
     const MODE_DESCRIPTIONS = {
         tedapi:
-            "Local data over the gateway WiFi (normally 192.168.91.1). Read-only unless hybrid.",
+            "Local data over the gateway WiFi (normally 192.168.91.1). Read-only unless hybrid. Add Tesla email and auth path for hybrid cloud control.",
         tedapi_v1r:
-            "Local data over the wired LAN with a registered RSA key. Can write settings and island locally.",
+            "Local data over the wired LAN with a registered RSA key. Can write settings and island locally. Add Tesla email and auth path for hybrid cloud control.",
         local:
-            "Powerwall 2 local API, like the proxy's local mode. Detected on connect: the gateway answers /api/status.",
+            "Powerwall 2 local API, like the proxy's local mode. Detected on connect: the gateway answers /api/status. Cloud fields are not used; choose Hybrid for cloud control.",
         basic_lan:
-            "Powerwall 3 wired LAN, detected on connect when /api/status isn't served (re-checked after 5 minutes, then doubling up to 6 hours). Core metrics only: aggregates, battery level, grid status.",
+            "Powerwall 3 wired LAN, detected on connect when /api/status isn't served (re-checked after 5 minutes, then doubling up to 6 hours). Core metrics only: aggregates, battery level, grid status. Add Tesla email and auth path for hybrid cloud control.",
         hybrid_tedapi:
-            "Local customer login plus embedded TEDAPI; normally at the gateway WiFi address.",
+            "Local customer login plus embedded TEDAPI; normally at the gateway WiFi address. Add Tesla email and auth path for hybrid cloud control.",
         cloud:
             "Tesla cloud. Use the Tesla login in the setup panel below to create the auth files.",
         fleetapi: "Tesla Fleet API.",
@@ -788,7 +788,6 @@
             email: [
                 "tedapi",
                 "tedapi_v1r",
-                "local",
                 "basic_lan",
                 "hybrid_tedapi",
                 "cloud",
@@ -799,7 +798,6 @@
             authpath: [
                 "tedapi",
                 "tedapi_v1r",
-                "local",
                 "basic_lan",
                 "hybrid_tedapi",
                 "cloud",
@@ -1675,7 +1673,6 @@
             email: [
                 "tedapi",
                 "tedapi_v1r",
-                "local",
                 "basic_lan",
                 "hybrid_tedapi",
                 "cloud",
@@ -1686,7 +1683,6 @@
             authpath: [
                 "tedapi",
                 "tedapi_v1r",
-                "local",
                 "basic_lan",
                 "hybrid_tedapi",
                 "cloud",

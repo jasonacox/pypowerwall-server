@@ -243,6 +243,21 @@ def test_setup_javascript_syntax():
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.skipif(
+    shutil.which("node") is None, reason="Node.js is needed for UI behavior tests"
+)
+def test_setup_mode_ui_behavior():
+    suite = Path(__file__).with_name("setup_mode_ui.cjs")
+    result = subprocess.run(
+        [shutil.which("node"), "--test", str(suite)],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_setup_v1r_fleetapi_registration_button_exists():
     root = Path(__file__).resolve().parent.parent
     html = (root / "app" / "static" / "setup.html").read_text(encoding="utf-8")

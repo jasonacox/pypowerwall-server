@@ -218,6 +218,8 @@ def _derive_mode(config: GatewayConfig, data_mode: Optional[str] = None) -> str:
     if config.cloud_mode:
         return "Cloud"
     if config.rsa_key_path:
+        if config.email and config.authpath and (config.password or config.gw_pwd):
+            return "Hybrid"
         return "TEDAPI v1r"
     if config.gw_pwd and config.password:
         return "Hybrid TEDAPI"
@@ -238,6 +240,8 @@ def _setup_mode(config: GatewayConfig) -> str:
     if config.cloud_mode:
         return "cloud"
     if config.rsa_key_path:
+        if config.email and config.authpath and (config.password or config.gw_pwd):
+            return "hybrid"
         return "tedapi_v1r"
     if config.gw_pwd and config.password:
         return "hybrid_tedapi"
@@ -519,15 +523,13 @@ def _validate_gateway(
                 field="password", message="Customer password is required."
             )
         )
-    if item.mode in {"hybrid", "hybrid_fleetapi"} and not (
-        password or gw_pwd or rsa_key
-    ):
+    if item.mode in {"hybrid", "hybrid_fleetapi"} and not (password or gw_pwd):
         issues.append(
             SetupValidationIssue(
                 field="password",
                 message=(
-                    "A local password, gateway password or RSA key is required "
-                    "for hybrid mode."
+                    "A local password or gateway password is required for hybrid "
+                    "mode; an RSA key alone selects TEDAPI v1r."
                 ),
             )
         )
@@ -650,7 +652,9 @@ def _validate_gateway(
             kwargs["rsa_key_path"] = rsa_key
         if wifi_host:
             kwargs["wifi_host"] = wifi_host
-    elif item.mode in {"local", "basic_lan"}:
+    elif item.mode == "local":
+        kwargs.update(password=password, email=None, authpath=None)
+    elif item.mode == "basic_lan":
         kwargs.update(password=password)
     elif item.mode == "hybrid_tedapi":
         kwargs.update(gw_pwd=gw_pwd, password=password)

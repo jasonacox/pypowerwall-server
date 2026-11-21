@@ -861,12 +861,13 @@ def test_validate_gateway_path_errors(core_env):
             "hybrid",
             {
                 "host": "192.168.91.1",
+                "password": "customer",
                 "rsa_key_path": "KEY",
                 "wifi_host": "192.168.91.2",
                 "email": "owner@example.com",
                 "authpath": "AUTHPATH",
             },
-            "TEDAPI v1r",
+            "Hybrid",
         ),
         (
             "cloud",
@@ -1681,3 +1682,382 @@ def test_status_never_returns_bootstrap_token(core_env, monkeypatch):
     dumped = str(status.model_dump())
     assert "bootstrap-secret" not in dumped
     assert any("per process" in warning for warning in status.warnings)
+
+
+@pytest.mark.parametrize("mode", ["hybrid", "hybrid_fleetapi"])
+def test_hybrid_rsa_key_alone_is_rejected(core_env, mode):
+    key = core_env.authpath / "hybrid-key.pem"
+    key.write_text("fake", encoding="utf-8")
+    item = SetupGatewayInput(
+        id="home",
+        mode=mode,
+        host="192.168.91.1",
+        rsa_key_path=str(key),
+        email="owner@example.com",
+        authpath=str(core_env.authpath),
+    )
+    issues = []
+    assert setup_core._validate_gateway(item, {}, issues) is None
+    assert any(
+        issue.field == "password" and issue.severity == "error" for issue in issues
+    )
+
+
+@pytest.mark.parametrize("mode", ["hybrid", "hybrid_fleetapi"])
+@pytest.mark.parametrize(
+    "credential", [{"password": "customer"}, {"gw_pwd": "gateway"}]
+)
+def test_hybrid_rsa_with_password_is_valid_and_roundtrips(core_env, mode, credential):
+    key = core_env.authpath / "hybrid-key.pem"
+    key.write_text("fake", encoding="utf-8")
+    values = {
+        "id": "home",
+        "mode": mode,
+        "host": "192.168.91.1",
+        "rsa_key_path": str(key),
+        "email": "owner@example.com",
+        "authpath": str(core_env.authpath),
+    }
+    values.update(credential)
+    item = SetupGatewayInput(**values)
+    issues = []
+    config = setup_core._validate_gateway(item, {}, issues)
+    assert config is not None
+    assert not [issue for issue in issues if issue.severity == "error"]
+    assert config.password == credential.get("password")
+    assert config.gw_pwd == credential.get("gw_pwd")
+    assert config.rsa_key_path == str(key)
+    assert setup_core._setup_mode(config) == mode
+
+    reloaded = GatewayConfig(**config.model_dump(exclude_none=True))
+    assert setup_core._setup_mode(reloaded) == mode
+
+
+def test_saved_hybrid_rsa_reopens_and_saves(core_env):
+    key = core_env.authpath / "hybrid-key.pem"
+    key.write_text("fake", encoding="utf-8")
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+    settings._config_error = None
+    settings._config_revision = None
+    settings._config_warnings = []
+    settings._config_partial = False
+    settings.gateways = []
+
+    request = _request(
+        gateways=[
+            {
+                "id": "home",
+                "mode": "hybrid",
+                "host": "192.168.91.1",
+                "password": "customer",
+                "rsa_key_path": str(key),
+                "email": "owner@example.com",
+                "authpath": str(core_env.authpath),
+            }
+        ]
+    )
+    assert setup_core.apply_setup_request(request).saved is True
+    doc = yaml.safe_load(core_env.config_path.read_text(encoding="utf-8"))
+    config = GatewayConfig(**doc["gateways"][0])
+    assert setup_core._setup_mode(config) == "hybrid"
+
+    reopened = {
+        "id": "home",
+        "mode": "hybrid",
+        "host": "192.168.91.1",
+        "rsa_key_path": str(key),
+        "email": "owner@example.com",
+        "authpath": str(core_env.authpath),
+    }
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.apply_setup_request(
+        _request(gateways=[reopened], expected_revision=revision)
+    )
+    assert result.saved is True
+    doc = yaml.safe_load(core_env.config_path.read_text(encoding="utf-8"))
+    config = GatewayConfig(**doc["gateways"][0])
+    assert setup_core._setup_mode(config) == "hybrid"
+    assert config.password == "customer"
+
+
+def test_switch_hybrid_to_local_clears_cloud_fields(core_env):
+    core_env.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "gateways": [
+                    {
+                        "id": "home",
+                        "host": "192.168.91.1",
+                        "password": "old-password",
+                        "email": "owner@example.com",
+                        "authpath": str(core_env.authpath),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+    settings._config_error = None
+    settings._config_revision = setup_core._revision(core_env.config_path.read_bytes())
+    settings._config_warnings = []
+    settings._config_partial = False
+    settings.gateways = []
+
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.apply_setup_request(
+        _request(
+            gateways=[
+                {
+                    "id": "home",
+                    "mode": "local",
+                    "host": "192.168.91.1",
+                    "password": "new-password",
+                    "email": "owner@example.com",
+                    "authpath": str(core_env.authpath),
+                }
+            ],
+            expected_revision=revision,
+        )
+    )
+    assert result.saved is True
+    doc = yaml.safe_load(core_env.config_path.read_text(encoding="utf-8"))
+    gateway = doc["gateways"][0]
+    assert "email" not in gateway
+    assert "authpath" not in gateway
+    assert gateway["password"] == "new-password"
+    config = GatewayConfig(**gateway)
+    assert setup_core._setup_mode(config) == "local"
+
+
+def test_hybrid_config_keeps_cloud_fields(core_env):
+    core_env.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "gateways": [
+                    {
+                        "id": "home",
+                        "host": "192.168.91.1",
+                        "password": "customer",
+                        "email": "owner@example.com",
+                        "authpath": str(core_env.authpath),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+    settings._config_error = None
+    settings._config_revision = setup_core._revision(core_env.config_path.read_bytes())
+    settings._config_warnings = []
+    settings._config_partial = False
+    settings.gateways = []
+
+    revision = setup_core._revision(core_env.config_path.read_bytes())
+    result = setup_core.apply_setup_request(
+        _request(
+            gateways=[
+                {
+                    "id": "home",
+                    "mode": "hybrid",
+                    "host": "192.168.91.1",
+                    "password": "customer",
+                    "email": "owner@example.com",
+                    "authpath": str(core_env.authpath),
+                }
+            ],
+            expected_revision=revision,
+        )
+    )
+    assert result.saved is True
+    doc = yaml.safe_load(core_env.config_path.read_text(encoding="utf-8"))
+    gateway = doc["gateways"][0]
+    assert gateway["email"] == "owner@example.com"
+    assert gateway["authpath"] == str(core_env.authpath)
+    config = GatewayConfig(**gateway)
+    assert setup_core._setup_mode(config) == "hybrid"
+
+
+@pytest.mark.parametrize(
+    "gateway,expected_setup,expected_derive,expected_cloud",
+    [
+        (
+            {
+                "mode": "local",
+                "host": "192.168.91.1",
+                "password": "customer",
+                "email": "owner@example.com",
+                "authpath": "AUTHPATH",
+            },
+            "local",
+            "Local/Basic LAN",
+            False,
+        ),
+        (
+            {
+                "mode": "basic_lan",
+                "host": "192.168.91.1",
+                "password": "customer",
+            },
+            "local",
+            "Local/Basic LAN",
+            False,
+        ),
+        (
+            {
+                "mode": "basic_lan",
+                "host": "192.168.91.1",
+                "password": "customer",
+                "email": "owner@example.com",
+                "authpath": "AUTHPATH",
+            },
+            "hybrid",
+            "Hybrid",
+            True,
+        ),
+        (
+            {
+                "mode": "tedapi",
+                "host": "192.168.91.1",
+                "gw_pwd": "gateway",
+            },
+            "tedapi",
+            "TEDAPI",
+            False,
+        ),
+        (
+            {
+                "mode": "tedapi",
+                "host": "192.168.91.1",
+                "gw_pwd": "gateway",
+                "email": "owner@example.com",
+                "authpath": "AUTHPATH",
+            },
+            "hybrid",
+            "Hybrid",
+            True,
+        ),
+        (
+            {
+                "mode": "tedapi_v1r",
+                "host": "192.168.91.1",
+                "password": "customer",
+                "rsa_key_path": "KEY",
+            },
+            "tedapi_v1r",
+            "TEDAPI v1r",
+            False,
+        ),
+        (
+            {
+                "mode": "tedapi_v1r",
+                "host": "192.168.91.1",
+                "password": "customer",
+                "rsa_key_path": "KEY",
+                "email": "owner@example.com",
+                "authpath": "AUTHPATH",
+            },
+            "hybrid",
+            "Hybrid",
+            True,
+        ),
+        (
+            {
+                "mode": "hybrid",
+                "host": "192.168.91.1",
+                "password": "customer",
+                "rsa_key_path": "KEY",
+                "email": "owner@example.com",
+                "authpath": "AUTHPATH",
+            },
+            "hybrid",
+            "Hybrid",
+            True,
+        ),
+        (
+            {
+                "mode": "hybrid",
+                "host": "192.168.91.1",
+                "gw_pwd": "gateway",
+                "rsa_key_path": "KEY",
+                "email": "owner@example.com",
+                "authpath": "AUTHPATH",
+            },
+            "hybrid",
+            "Hybrid",
+            True,
+        ),
+        (
+            {
+                "mode": "hybrid_fleetapi",
+                "host": "192.168.91.1",
+                "password": "customer",
+                "rsa_key_path": "KEY",
+                "email": "owner@example.com",
+                "authpath": "AUTHPATH",
+            },
+            "hybrid_fleetapi",
+            "Hybrid FleetAPI",
+            True,
+        ),
+    ],
+)
+def test_mode_classification_after_yaml_reload(
+    core_env, gateway, expected_setup, expected_derive, expected_cloud
+):
+    key = core_env.authpath / "matrix-key.pem"
+    key.write_text("fake", encoding="utf-8")
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+    settings._config_error = None
+    settings._config_warnings = []
+    settings._config_partial = False
+    settings.gateways = []
+
+    values = {"id": "home"}
+    values.update(gateway)
+    for name, value in list(values.items()):
+        if value == "KEY":
+            values[name] = str(key)
+        elif value == "AUTHPATH":
+            values[name] = str(core_env.authpath)
+    revision = (
+        setup_core._revision(core_env.config_path.read_bytes())
+        if core_env.config_path.exists()
+        else None
+    )
+    result = setup_core.apply_setup_request(
+        _request(gateways=[values], expected_revision=revision)
+    )
+    assert result.saved is True
+    doc = yaml.safe_load(core_env.config_path.read_text(encoding="utf-8"))
+    persisted = GatewayConfig(**doc["gateways"][0])
+    assert setup_core._setup_mode(persisted) == expected_setup
+    assert setup_core._derive_mode(persisted) == expected_derive
+    assert bool(persisted.email and persisted.authpath) is expected_cloud
+
+
+def test_rsa_hybrid_status_modes_are_consistent(core_env):
+    from app.core.gateway_manager import gateway_manager
+
+    gateway_manager.cache.pop("home", None)
+    settings.gateways = [
+        GatewayConfig(
+            id="home",
+            host="192.168.91.1",
+            password="customer",
+            rsa_key_path=str(core_env.authpath / "hybrid-key.pem"),
+            email="owner@example.com",
+            authpath=str(core_env.authpath),
+        )
+    ]
+    settings._config_source = "default_file"
+    settings._config_path = str(core_env.config_path)
+
+    status = setup_core.get_setup_status()
+    assert status.gateway_configs[0]["mode"] == "hybrid"
+    assert status.gateways[0].mode == "Hybrid"
