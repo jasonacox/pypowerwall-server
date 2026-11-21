@@ -96,6 +96,14 @@ def _check_rate(request: Request) -> None:
             for old_key, (old_start, _) in list(_RATE_BUCKETS.items()):
                 if now - old_start >= _RATE_WINDOW:
                     _RATE_BUCKETS.pop(old_key, None)
+            excess = len(_RATE_BUCKETS) - 1024
+            if excess > 0:
+                oldest = sorted(
+                    _RATE_BUCKETS,
+                    key=lambda bucket_key: _RATE_BUCKETS[bucket_key][0],
+                )
+                for old_key in oldest[:excess]:
+                    _RATE_BUCKETS.pop(old_key, None)
     if count > _RATE_LIMIT:
         raise HTTPException(status_code=429, detail="Setup rate limit exceeded")
 

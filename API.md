@@ -398,6 +398,14 @@ token. Send it as `Authorization: Bearer <token>` or
 `X-PW-Setup-Token: <token>`. Setup writes are atomic and require a restart to
 activate.
 
+Cloud and FleetAPI OAuth login state is **process-local** too: the
+`/api/setup/auth/cloud/start` and `/api/setup/fleetapi/start` endpoints store
+pending state in memory, so the matching `/complete` request must reach the same
+process. Multi-worker or multi-instance deployments should use one worker or one
+instance for OAuth logins (or sticky sessions for that flow only); sticky
+sessions are not a general guarantee across instances or worker restarts.
+`PW_CONTROL_SECRET` does not share OAuth state.
+
 Auth files and private keys live under `PW_AUTH_PATH` and the v1r/FleetAPI key
 paths. In Docker, mount those directories if they are outside `/data`; the
 wizard's `/auth` and `/keys` placeholders are examples. The server writes auth

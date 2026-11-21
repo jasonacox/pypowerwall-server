@@ -96,7 +96,7 @@ function makeCard(mode) {
             return [];
         },
     };
-    return { card, fields, modeFields };
+    return { card, fields, modeFields, elements };
 }
 
 test('local hides email/authpath and does not send them', () => {
@@ -114,7 +114,7 @@ test('local hides email/authpath and does not send them', () => {
     assert.equal(data.host, '192.168.91.1');
 });
 
-for (const mode of ['basic_lan', 'tedapi', 'tedapi_v1r']) {
+for (const mode of ['basic_lan', 'tedapi', 'tedapi_v1r', 'hybrid_tedapi']) {
     test(`${mode} keeps email/authpath available for hybrid cloud control`, () => {
         const { card, modeFields } = makeCard(mode);
         updateModeFields(card);
@@ -127,5 +127,26 @@ for (const mode of ['basic_lan', 'tedapi', 'tedapi_v1r']) {
         assert.equal(data.email, 'owner@example.com');
         assert.equal(data.authpath, '/auth');
         assert.equal(data.mode, mode);
+    });
+}
+
+const authControlVisibility = {
+    local: { cloud: false, check: false },
+    basic_lan: { cloud: false, check: false },
+    tedapi: { cloud: false, check: false },
+    tedapi_v1r: { cloud: false, check: false },
+    hybrid_tedapi: { cloud: true, check: true },
+    cloud: { cloud: true, check: true },
+    hybrid: { cloud: true, check: true },
+    fleetapi: { cloud: false, check: true },
+    hybrid_fleetapi: { cloud: false, check: true },
+};
+
+for (const [mode, expected] of Object.entries(authControlVisibility)) {
+    test(`${mode} cloud auth control visibility`, () => {
+        const { card, elements } = makeCard(mode);
+        updateModeFields(card);
+        assert.equal(elements['[data-cloud-auth]'].hidden, !expected.cloud);
+        assert.equal(elements['.check-auth'].hidden, !expected.check);
     });
 }

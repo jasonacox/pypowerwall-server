@@ -1,6 +1,10 @@
 """HTTP contract tests for every graphical setup API route."""
 
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
+
 import pytest
+from fastapi import HTTPException
 
 from app.api import setup as setup_api
 from app.core import setup as setup_core
@@ -330,6 +334,10 @@ def test_setup_api_validate_route(client, setup_api_headers):
     assert response.json()["valid"] is True
 
 
+def _rate_request(key: str):
+    return SimpleNamespace(client=SimpleNamespace(host=key))
+
+
 def test_setup_api_rate_window_resets(client, setup_api_headers, monkeypatch):
     now = setup_core.time.monotonic()
     setup_api._RATE_BUCKETS["testclient"] = (now - 120, 999)
@@ -370,6 +378,81 @@ def test_setup_api_rate_limit_and_pruning(client, setup_api_headers, monkeypatch
     response = client.get("/api/setup/status", headers=setup_api_headers)
     assert response.status_code == 429
     assert not any(key.startswith("old-") for key in setup_api._RATE_BUCKETS)
+
+
+def test_setup_api_rate_limit_caps_active_buckets(setup_api_headers, monkeypatch):
+    now = 1000.0
+    monkeypatch.setattr(setup_api.time, "monotonic", lambda: now)
+    setup_api._RATE_BUCKETS.update(
+        {f"active-{index}": (now - index * 0.01, 1) for index in range(1025)}
+    )
+    setup_api._RATE_BUCKETS["current"] = (now, 50)
+    setup_api._check_rate(_rate_request("current"))
+    assert len(setup_api._RATE_BUCKETS) == 1024
+    assert setup_api._RATE_BUCKETS["current"] == (now, 51)
+    assert "active-0" in setup_api._RATE_BUCKETS
+    assert "active-1023" not in setup_api._RATE_BUCKETS
+    assert "active-1024" not in setup_api._RATE_BUCKETS
+
+
+def test_setup_api_rate_limit_prunes_expired_before_active(
+    setup_api_headers, monkeypatch
+):
+    now = 1000.0
+    monkeypatch.setattr(setup_api.time, "monotonic", lambda: now)
+    expired = {f"expired-{index}": (now - 120, 1) for index in range(600)}
+    active = {f"active-{index}": (now - 1, 1) for index in range(425)}
+    setup_api._RATE_BUCKETS.update(expired)
+    setup_api._RATE_BUCKETS.update(active)
+    setup_api._check_rate(_rate_request("current"))
+    assert len(setup_api._RATE_BUCKETS) == 426
+    assert all(key in setup_api._RATE_BUCKETS for key in active)
+    assert not any(key.startswith("expired-") for key in setup_api._RATE_BUCKETS)
+    assert setup_api._RATE_BUCKETS["current"][1] == 1
+
+
+def test_setup_api_rate_limit_keeps_120_per_60_seconds(setup_api_headers, monkeypatch):
+    now = 1000.0
+    monkeypatch.setattr(setup_api.time, "monotonic", lambda: now)
+    request = _rate_request("limited")
+    for _ in range(120):
+        setup_api._check_rate(request)
+    assert setup_api._RATE_BUCKETS["limited"] == (now, 120)
+    with pytest.raises(HTTPException) as exc:
+        setup_api._check_rate(request)
+    assert exc.value.status_code == 429
+    assert exc.value.detail == "Setup rate limit exceeded"
+    assert setup_api._RATE_BUCKETS["limited"] == (now, 121)
+
+
+def test_setup_api_rate_limit_parallel_distinct_buckets(setup_api_headers):
+    def hit(index):
+        setup_api._check_rate(_rate_request(f"parallel-{index}"))
+
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        list(executor.map(hit, range(1200)))
+
+    assert len(setup_api._RATE_BUCKETS) == 1024
+    assert all(
+        isinstance(value, tuple) and len(value) == 2 and value[1] >= 1
+        for value in setup_api._RATE_BUCKETS.values()
+    )
+
+
+def test_setup_api_rate_limit_parallel_same_bucket(setup_api_headers, monkeypatch):
+    now = 1000.0
+    monkeypatch.setattr(setup_api.time, "monotonic", lambda: now)
+    monkeypatch.setattr(setup_api, "_RATE_LIMIT", 10000)
+
+    def hit(_):
+        setup_api._check_rate(_rate_request("shared"))
+
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        list(executor.map(hit, range(200)))
+
+    start, count = setup_api._RATE_BUCKETS["shared"]
+    assert start == now
+    assert count == 200
 
 
 _ERROR_CASES = [

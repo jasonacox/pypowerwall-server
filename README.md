@@ -225,6 +225,18 @@ When `PW_CONTROL_SECRET` is unset, the bootstrap token is a fresh
 instances, each process has its own token. Set `PW_CONTROL_SECRET` for those
 deployments so every worker accepts the same admin token.
 
+Cloud and FleetAPI OAuth login state is **process-local** as well. The wizard
+keeps pending Cloud and FleetAPI login state in memory, so a login started on
+one uvicorn/Gunicorn worker or server instance cannot be completed on another;
+a completion request that reaches a different process fails because the pending
+state is missing and the login must be restarted. Reliable OAuth logins
+therefore require a single worker or a single server instance. Sticky sessions
+can help only when the load balancer pins the same browser to the same process
+for the entire login; they are not a general guarantee across multiple
+instances or worker restarts. `PW_CONTROL_SECRET` shares the setup/admin token,
+not OAuth state. Existing auth files can still be imported or reused
+independently of this limitation.
+
 Open `http://<server>:8675/setup`, enter the token, test the gateway and save.
 The token stays in the tab by default; **Remember my token on this device**
 stores it in this browser's `localStorage`, like the Console control token. The

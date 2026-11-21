@@ -816,9 +816,9 @@
         host.closest(".field").hidden = cloudOnly;
         port.closest(".field").hidden = cloudOnly;
         const v1rModes = ["tedapi_v1r", "hybrid", "hybrid_fleetapi"];
-        const cloudControlModes = ["cloud", "hybrid"];
+        const cloudControlModes = ["cloud", "hybrid", "hybrid_tedapi"];
         const fleetControlModes = ["fleetapi", "hybrid_fleetapi"];
-        const authModes = ["cloud", "fleetapi", "hybrid", "hybrid_fleetapi"];
+        const authModes = ["cloud", "fleetapi", "hybrid", "hybrid_tedapi", "hybrid_fleetapi"];
         const keyButton = card.querySelector(".generate-key");
         keyButton.hidden = !v1rModes.includes(mode);
         const authButton = card.querySelector(".check-auth");

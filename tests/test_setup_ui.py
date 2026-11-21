@@ -275,9 +275,12 @@ def test_setup_hybrid_fleetapi_mode_and_auth_panels_exist():
     assert '<option value="hybrid_fleetapi">Hybrid FleetAPI</option>' in html
     assert "hybrid_fleetapi:" in js
     assert 'const v1rModes = ["tedapi_v1r", "hybrid", "hybrid_fleetapi"]' in js
-    assert 'const cloudControlModes = ["cloud", "hybrid"]' in js
+    assert 'const cloudControlModes = ["cloud", "hybrid", "hybrid_tedapi"]' in js
     assert 'const fleetControlModes = ["fleetapi", "hybrid_fleetapi"]' in js
-    assert 'const authModes = ["cloud", "fleetapi", "hybrid", "hybrid_fleetapi"]' in js
+    assert (
+        'const authModes = ["cloud", "fleetapi", "hybrid", "hybrid_tedapi", '
+        '"hybrid_fleetapi"]'
+    ) in js
     assert 'gatewayMode === "hybrid_fleetapi"' in js
 
 
